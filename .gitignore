@@ -1,0 +1,61 @@
+# Pliki konfiguracyjne z danymi wrażliwymi
+api_key.md
+
+# Katalogi z pobranymi plikami
+downloads/
+*/downloads/
+archive/
+*/archive/
+scp/
+*/scp/
+temp_parts/
+*/temp_parts/
+
+# Pliki środowiska Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# Środowiska wirtualne
+.venv/
+venv/
+ENV/
+env/
+
+# Katalogi IDE i edytorów
+.idea/
+.vscode/
+.cursor/
+.cursor.sh
+*.sublime-project
+*.sublime-workspace
+
+# Pliki tymczasowe
+*.log
+*.swp
+.DS_Store
+*.tmp
+.~*
+
+# Pliki systemowe Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# Katalogi node.js
+node_modules/
+npm-debug.log
+yarn-debug.log
+yarn-error.log
+
+# Transkrypcje i inne pliki generowane
+*_transcript.txt
+*_transcript.md
+*_summary.md
