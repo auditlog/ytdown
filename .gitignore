@@ -1,4 +1,6 @@
 # Pliki konfiguracyjne z danymi wrażliwymi
+.gitignore
+.env
 api_key.md
 
 # Katalogi z pobranymi plikami
