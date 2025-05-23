@@ -13,6 +13,12 @@ downloads/
 *.flac
 *.wav
 *.webm
+*.mkv
+*.avi
+*.mov
+*.opus
+*.ogg
+*.aac
 
 # Python
 __pycache__/
@@ -23,6 +29,11 @@ __pycache__/
 venv/
 env/
 ENV/
+*.pyc
+build/
+dist/
+*.egg-info/
+.pytest_cache/
 
 # IDE
 .vscode/
@@ -30,6 +41,8 @@ ENV/
 *.swp
 *.swo
 .DS_Store
+.cursor/
+.cursor.sh
 
 # Logi i pliki tymczasowe
 *.log
@@ -52,6 +65,8 @@ tmp/
 # Pliki testowe
 test_downloads/
 *.test
+test_*.mp4
+test_*.mp3
 
 # Kopie zapasowe
 backup/
@@ -60,3 +75,17 @@ backup/
 # System
 Thumbs.db
 .directory
+desktop.ini
+
+# Node (jeśli używasz)
+node_modules/
+package-lock.json
+
+# Pliki konfiguracyjne użytkownika
+user_config.json
+authorized_users.json
+sessions.json
+
+# Pliki archiwum projektu
+archive/
+scp/
