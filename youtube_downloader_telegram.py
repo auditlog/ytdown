@@ -65,15 +65,33 @@ authorized_users = set()
 # Maksymalny rozmiar części MP3 w MB do transkrypcji
 MAX_MP3_PART_SIZE_MB = 25
 
+# Rate limiting - maksymalna liczba requestów per użytkownik
+RATE_LIMIT_REQUESTS = 10  # liczba requestów
+RATE_LIMIT_WINDOW = 60    # okno czasowe w sekundach
+user_requests = defaultdict(list)  # przechowuje timestamp requestów per użytkownik
+
+# Maksymalny rozmiar pliku do pobrania (w MB)
+MAX_FILE_SIZE_MB = 500
+
+# Dozwolone domeny
+ALLOWED_DOMAINS = [
+    'youtube.com',
+    'www.youtube.com',
+    'youtu.be',
+    'm.youtube.com',
+    'music.youtube.com'
+]
+
 def load_config():
     """
-    Wczytuje konfigurację z pliku api_key.md.
-    Plik powinien zawierać linie w formacie KLUCZ=WARTOŚĆ.
+    Wczytuje konfigurację z pliku api_key.md lub ze zmiennych środowiskowych.
+    Priorytet: zmienne środowiskowe > plik konfiguracyjny > wartości domyślne
     
     Zwraca słownik z konfiguracją.
     """
     config = DEFAULT_CONFIG.copy()
     
+    # Najpierw spróbuj wczytać z pliku
     try:
         if os.path.exists(CONFIG_FILE_PATH):
             with open(CONFIG_FILE_PATH, "r") as f:
@@ -84,9 +102,26 @@ def load_config():
                         config[key] = value
             logging.info("Wczytano konfigurację z pliku")
         else:
-            logging.warning(f"Plik konfiguracyjny {CONFIG_FILE_PATH} nie istnieje. Używam domyślnych wartości.")
+            logging.warning(f"Plik konfiguracyjny {CONFIG_FILE_PATH} nie istnieje.")
     except Exception as e:
-        logging.error(f"Błąd podczas wczytywania konfiguracji: {e}")
+        logging.error(f"Błąd podczas wczytywania konfiguracji z pliku: {e}")
+    
+    # Nadpisz wartościami ze zmiennych środowiskowych (jeśli istnieją)
+    env_vars = {
+        "TELEGRAM_BOT_TOKEN": os.environ.get("TELEGRAM_BOT_TOKEN"),
+        "GROQ_API_KEY": os.environ.get("GROQ_API_KEY"),
+        "CLAUDE_API_KEY": os.environ.get("CLAUDE_API_KEY"),
+        "PIN_CODE": os.environ.get("PIN_CODE")
+    }
+    
+    for key, value in env_vars.items():
+        if value:
+            config[key] = value
+            logging.info(f"Użyto zmiennej środowiskowej dla {key}")
+    
+    # Sprawdź czy mamy wszystkie wymagane klucze
+    if not config.get("TELEGRAM_BOT_TOKEN"):
+        logging.error("BŁĄD: Brak TELEGRAM_BOT_TOKEN! Ustaw w api_key.md lub jako zmienną środowiskową.")
     
     return config
 
@@ -96,6 +131,77 @@ CONFIG = load_config()
 # Ustaw stałe z konfiguracji
 BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
 PIN_CODE = CONFIG["PIN_CODE"]
+
+# Funkcje pomocnicze dla rate limiting i walidacji
+def check_rate_limit(user_id):
+    """
+    Sprawdza czy użytkownik nie przekroczył limitu requestów.
+    Zwraca True jeśli można kontynuować, False jeśli przekroczono limit.
+    """
+    current_time = time.time()
+    
+    # Usuń stare requesty spoza okna czasowego
+    user_requests[user_id] = [
+        req_time for req_time in user_requests[user_id] 
+        if current_time - req_time < RATE_LIMIT_WINDOW
+    ]
+    
+    # Sprawdź czy nie przekroczono limitu
+    if len(user_requests[user_id]) >= RATE_LIMIT_REQUESTS:
+        return False
+    
+    # Dodaj nowy request
+    user_requests[user_id].append(current_time)
+    return True
+
+def validate_youtube_url(url):
+    """
+    Waliduje URL YouTube.
+    Zwraca True jeśli URL jest prawidłowy, False w przeciwnym razie.
+    """
+    try:
+        # Tylko HTTPS jest dozwolone (bezpieczne połączenie)
+        if not url.startswith('https://'):
+            return False
+        
+        # Wyciągnij domenę z URL
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        
+        # Usuń 'www.' jeśli istnieje
+        if domain.startswith('www.'):
+            domain = domain[4:]
+        
+        # Sprawdź czy domena jest na liście dozwolonych
+        return domain in ALLOWED_DOMAINS
+    except:
+        return False
+
+def estimate_file_size(info):
+    """
+    Szacuje rozmiar pliku na podstawie informacji z yt-dlp.
+    Zwraca rozmiar w MB lub None jeśli nie można oszacować.
+    """
+    try:
+        # Spróbuj znaleźć format z rozmiarem
+        formats = info.get('formats', [])
+        for fmt in formats:
+            if fmt.get('filesize'):
+                return fmt['filesize'] / (1024 * 1024)  # Konwersja na MB
+        
+        # Jeśli nie ma dokładnego rozmiaru, spróbuj oszacować
+        duration = info.get('duration', 0)
+        if duration:
+            # Zakładamy średni bitrate dla różnych jakości
+            # To bardzo przybliżone szacowanie
+            bitrate_mbps = 5  # 5 Mbps dla średniej jakości video
+            estimated_mb = (duration * bitrate_mbps * 0.125)  # konwersja na MB
+            return estimated_mb
+        
+        return None
+    except:
+        return None
 
 # Funkcje do obsługi transkrypcji
 def get_api_key():
@@ -395,7 +501,10 @@ def download_youtube_video(url, format_id=None, audio_only=False, audio_format='
             'progress_hooks': [progress_hook],
             'quiet': True,  # Wyciszamy wbudowane powiadomienia o postępie
             'no_warnings': False,
-            'ignoreerrors': True,
+            'ignoreerrors': False,
+            'socket_timeout': 30,  # timeout dla połączeń
+            'retries': 3,  # liczba prób
+            'fragment_retries': 3,
         }
         
         # Konfiguracja dla pobierania tylko audio
@@ -907,9 +1016,26 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         context.user_data["awaiting_pin"] = True
         return
     
-    # Sprawdź, czy URL jest prawidłowy
-    if not message_text.startswith(('https://www.youtube.com/', 'https://youtu.be/')):
-        await update.message.reply_text("Nieprawidłowy URL. Podaj link do filmu na YouTube.")
+    # Sprawdź rate limit
+    if not check_rate_limit(user_id):
+        await update.message.reply_text(
+            "⚠️ Przekroczono limit requestów!\n\n"
+            f"Możesz wysłać maksymalnie {RATE_LIMIT_REQUESTS} requestów "
+            f"w ciągu {RATE_LIMIT_WINDOW} sekund.\n"
+            "Spróbuj ponownie za chwilę."
+        )
+        return
+    
+    # Walidacja URL
+    if not validate_youtube_url(message_text):
+        await update.message.reply_text(
+            "❌ Nieprawidłowy URL!\n\n"
+            "Podaj prawidłowy link do YouTube.\n"
+            "Obsługiwane formaty:\n"
+            "• https://www.youtube.com/watch?v=...\n"
+            "• https://youtu.be/...\n"
+            "• https://music.youtube.com/..."
+        )
         return
     
     # Sprawdź, czy użytkownik jest zablokowany
@@ -939,6 +1065,17 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
         return
     
     title = info.get('title', 'Nieznany tytuł')
+    
+    # Sprawdź szacowany rozmiar pliku
+    estimated_size = estimate_file_size(info)
+    if estimated_size and estimated_size > MAX_FILE_SIZE_MB:
+        await progress_message.edit_text(
+            f"❌ Plik jest zbyt duży!\n\n"
+            f"Szacowany rozmiar: {estimated_size:.1f} MB\n"
+            f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
+            f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
+        )
+        return
     
     # Przygotuj opcje
     keyboard = [
@@ -1014,6 +1151,10 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
         'outtmpl': f"{output_path}.%(ext)s",
         'quiet': True,
         'no_warnings': True,
+        'socket_timeout': 30,  # timeout dla połączeń sieciowych
+        'retries': 3,  # liczba prób w przypadku błędu
+        'fragment_retries': 3,  # liczba prób dla fragmentów
+        'ignoreerrors': False,  # nie ignoruj błędów
     }
     
     # Ustaw format audio/video
@@ -1092,6 +1233,7 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                     transcript_text = '\n'.join(transcript_text.split('\n')[2:])
                 
                 # Generuj podsumowanie
+                await query.edit_message_text("Transkrypcja zakończona. Generuję podsumowanie...")
                 summary_text = generate_summary(transcript_text, summary_type)
                 
                 if not summary_text:
@@ -1150,6 +1292,17 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                             text=part,
                             parse_mode='Markdown'
                         )
+                    
+                    # Wyślij również pełną transkrypcję jako plik
+                    await query.edit_message_text("Wysyłanie pliku z pełną transkrypcją...")
+                    
+                    with open(transcript_path, 'rb') as f:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=f,
+                            filename=os.path.basename(transcript_path),
+                            caption=f"📝 Pełna transkrypcja: {title}"
+                        )
             
             else:
                 # Standardowa transkrypcja bez podsumowania
@@ -1164,11 +1317,10 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                         caption=f"📝 Transkrypcja: {title}"
                     )
                 
-                # Usuń pliki po wysłaniu
+                # Usuń pliki tymczasowe
                 try:
                     os.remove(downloaded_file_path)
-                    os.remove(transcript_path)
-                    # Usuń inne pliki transkrypcji części
+                    # Usuń pliki transkrypcji części
                     for f in os.listdir(chat_download_path):
                         if f.startswith(f"{sanitized_title}_part") and f.endswith("_transcript.txt"):
                             os.remove(os.path.join(chat_download_path, f))

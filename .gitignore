@@ -1,0 +1,62 @@
+# Klucze API i dane wrażliwe
+api_key.md
+.env
+*.env
+config.ini
+secrets.json
+
+# Katalog z pobranymi plikami
+downloads/
+*.mp4
+*.mp3
+*.m4a
+*.flac
+*.wav
+*.webm
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.Python
+.venv/
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logi i pliki tymczasowe
+*.log
+logs/
+temp/
+tmp/
+*.tmp
+*.bak
+*.cache
+
+# Bazy danych
+*.db
+*.sqlite
+*.sqlite3
+
+# Transkrypcje i podsumowania (jeśli chcesz je zachować lokalnie)
+# transcripts/
+# summaries/
+
+# Pliki testowe
+test_downloads/
+*.test
+
+# Kopie zapasowe
+backup/
+*.backup
+
+# System
+Thumbs.db
+.directory
