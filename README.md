@@ -189,3 +189,9 @@ Ten projekt jest dostępny na licencji MIT.
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - API Telegram
 - [Groq](https://groq.com/) - transkrypcja audio
 - [Anthropic Claude](https://www.anthropic.com/) - generowanie podsumowań
+
+## 🌐 Language Policy
+
+- **Bot Interface**: Polish - all user interactions and messages
+- **Development**: English - code, comments, documentation, configuration files
+- **Purpose**: Maintains international coding standards while providing localized UX

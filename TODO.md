@@ -133,3 +133,9 @@
 - **Backup**: Regularnie backupuj `api_key.md` (poza repo!)
 - **Testuj na małych plikach**: Zanim pobierzesz 4K film
 - **Monitoruj dysk**: Ustaw alerty gdy <10GB wolnego miejsca
+
+## 🌐 Language Policy Note
+
+- **User-facing content**: All bot messages and interactions in Polish
+- **Technical content**: All code, comments, documentation, and configuration in English
+- **Rationale**: International development standards with localized user experience

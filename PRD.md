@@ -174,3 +174,14 @@ ytdown/
 - Minimalne wymagania systemowe
 - Kompatybilny z Linux/Windows/macOS
 - Może działać na VPS, Raspberry Pi, lub lokalnie
+
+### 16. Language Policy
+
+- **User Communication**: Polish language for all bot interactions with users
+- **Code & Documentation**: English language for:
+  - All code comments and docstrings
+  - Configuration files
+  - Technical documentation (README, PRD, TODO)
+  - Variable names and function names
+  - Git commits and pull requests
+- **Rationale**: Maintains international code standards while providing localized user experience
