@@ -14,6 +14,7 @@ import json
 import tempfile
 import shutil
 from collections import defaultdict
+import threading
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, ContextTypes, CommandHandler, MessageHandler, CallbackQueryHandler, filters
 
@@ -71,7 +72,7 @@ RATE_LIMIT_WINDOW = 60    # okno czasowe w sekundach
 user_requests = defaultdict(list)  # przechowuje timestamp requestów per użytkownik
 
 # Maksymalny rozmiar pliku do pobrania (w MB)
-MAX_FILE_SIZE_MB = 500
+MAX_FILE_SIZE_MB = 1000  # 1GB limit
 
 # Dozwolone domeny
 ALLOWED_DOMAINS = [
@@ -82,14 +83,26 @@ ALLOWED_DOMAINS = [
     'music.youtube.com'
 ]
 
+# Słownik do przechowywania URL-i (klucz: chat_id, wartość: url)
+# Potrzebne bo callback_data ma limit 64 bajtów
+user_urls = {}
+
 def load_config():
     """
     Wczytuje konfigurację z pliku api_key.md lub ze zmiennych środowiskowych.
-    Priorytet: zmienne środowiskowe > plik konfiguracyjny > wartości domyślne
+    Priorytet: zmienne środowiskowe > plik .env > plik api_key.md > wartości domyślne
     
     Zwraca słownik z konfiguracją.
     """
     config = DEFAULT_CONFIG.copy()
+    
+    # Opcjonalne wsparcie dla .env
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        logging.info("Załadowano plik .env (jeśli istnieje)")
+    except ImportError:
+        pass
     
     # Najpierw spróbuj wczytać z pliku
     try:
@@ -123,7 +136,52 @@ def load_config():
     if not config.get("TELEGRAM_BOT_TOKEN"):
         logging.error("BŁĄD: Brak TELEGRAM_BOT_TOKEN! Ustaw w api_key.md lub jako zmienną środowiskową.")
     
+    # Walidacja konfiguracji
+    validate_config(config)
+    
     return config
+
+def validate_config(config):
+    """
+    Waliduje konfigurację i wyświetla ostrzeżenia.
+    """
+    # Sprawdź format PIN
+    pin = config.get("PIN_CODE", "")
+    if not pin:
+        logging.error("BŁĄD: Brak PIN_CODE w konfiguracji!")
+    elif not pin.isdigit() or len(pin) != 8:
+        logging.error(f"BŁĄD: PIN_CODE musi być 8-cyfrowym kodem! Otrzymano: {pin}")
+    elif pin == "12345678":
+        logging.warning("OSTRZEŻENIE: Używasz domyślnego PIN! Zmień go dla bezpieczeństwa.")
+    
+    # Sprawdź token Telegram
+    telegram_token = config.get("TELEGRAM_BOT_TOKEN", "")
+    if telegram_token:
+        # Podstawowa walidacja formatu tokenu Telegram (NNNNNNNNNN:XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX)
+        if not re.match(r'^\d{8,10}:[A-Za-z0-9_-]{35}$', telegram_token):
+            logging.warning("OSTRZEŻENIE: Format TELEGRAM_BOT_TOKEN może być nieprawidłowy!")
+    
+    # Sprawdź klucz Groq
+    groq_key = config.get("GROQ_API_KEY", "")
+    if groq_key and len(groq_key) < 20:
+        logging.warning("OSTRZEŻENIE: GROQ_API_KEY wydaje się zbyt krótki!")
+    
+    # Sprawdź klucz Claude
+    claude_key = config.get("CLAUDE_API_KEY", "")
+    if claude_key and not claude_key.startswith("sk-"):
+        logging.warning("OSTRZEŻENIE: CLAUDE_API_KEY powinien zaczynać się od 'sk-'!")
+    
+    # Sprawdź uprawnienia pliku konfiguracyjnego (tylko na systemach Unix)
+    if os.path.exists(CONFIG_FILE_PATH) and hasattr(os, 'stat'):
+        try:
+            file_stats = os.stat(CONFIG_FILE_PATH)
+            file_mode = oct(file_stats.st_mode)[-3:]
+            if file_mode != '600':
+                logging.warning(f"OSTRZEŻENIE: Plik {CONFIG_FILE_PATH} ma uprawnienia {file_mode}. "
+                              f"Zalecane: 600 (tylko właściciel może czytać/pisać).")
+                logging.warning(f"Uruchom: chmod 600 {CONFIG_FILE_PATH}")
+        except:
+            pass
 
 # Wczytaj konfigurację
 CONFIG = load_config()
@@ -988,8 +1046,83 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3. Poczekaj na pobranie pliku\n\n"
         "Bot obsługuje linki z YouTube w formatach:\n"
         "• https://www.youtube.com/watch?v=...\n"
-        "• https://youtu.be/..."
+        "• https://youtu.be/...\n\n"
+        "Komendy administracyjne:\n"
+        "• /status - sprawdź przestrzeń dyskową\n"
+        "• /cleanup - usuń stare pliki (>24h)"
     )
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Obsługuje komendę /status - pokazuje status przestrzeni dyskowej."""
+    user_id = update.effective_user.id
+    
+    # Sprawdź autoryzację
+    if user_id not in authorized_users:
+        await update.message.reply_text("❌ Brak autoryzacji. Użyj /start aby się zalogować.")
+        return
+    
+    # Pobierz informacje o przestrzeni dyskowej
+    used_gb, free_gb, total_gb, usage_percent = get_disk_usage()
+    
+    # Sprawdź liczbę plików w katalogu downloads
+    file_count = 0
+    total_size_mb = 0
+    
+    try:
+        for root, dirs, files in os.walk(DOWNLOAD_PATH):
+            for file in files:
+                file_count += 1
+                file_path = os.path.join(root, file)
+                total_size_mb += os.path.getsize(file_path) / (1024 * 1024)
+    except:
+        pass
+    
+    status_msg = (
+        f"📊 **Status systemu**\n\n"
+        f"💾 **Przestrzeń dyskowa:**\n"
+        f"• Używane: {used_gb:.1f} GB / {total_gb:.1f} GB ({usage_percent:.1f}%)\n"
+        f"• Wolne: {free_gb:.1f} GB\n\n"
+        f"📁 **Katalog downloads:**\n"
+        f"• Plików: {file_count}\n"
+        f"• Rozmiar: {total_size_mb:.1f} MB\n\n"
+    )
+    
+    if free_gb < 10:
+        status_msg += "⚠️ **Uwaga:** Mało wolnej przestrzeni!\n"
+    
+    if free_gb < 5:
+        status_msg += "🚨 **KRYTYCZNIE mało miejsca!**\n"
+    
+    await update.message.reply_text(status_msg, parse_mode='Markdown')
+
+async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Obsługuje komendę /cleanup - ręcznie uruchamia czyszczenie starych plików."""
+    user_id = update.effective_user.id
+    
+    # Sprawdź autoryzację
+    if user_id not in authorized_users:
+        await update.message.reply_text("❌ Brak autoryzacji. Użyj /start aby się zalogować.")
+        return
+    
+    await update.message.reply_text("🧹 Rozpoczynam czyszczenie starych plików...")
+    
+    # Wykonaj czyszczenie
+    deleted_count = cleanup_old_files(DOWNLOAD_PATH, max_age_hours=24)
+    
+    # Sprawdź przestrzeń po czyszczeniu
+    used_gb, free_gb, total_gb, usage_percent = get_disk_usage()
+    
+    if deleted_count > 0:
+        await update.message.reply_text(
+            f"✅ Czyszczenie zakończone!\n\n"
+            f"• Usunięto plików: {deleted_count}\n"
+            f"• Wolna przestrzeń: {free_gb:.1f} GB"
+        )
+    else:
+        await update.message.reply_text(
+            "✅ Brak plików do usunięcia.\n"
+            "Wszystkie pliki są młodsze niż 24 godziny."
+        )
 
 async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Obsługuje linki do YouTube."""
@@ -1055,6 +1188,10 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Przetwarza link do YouTube po autoryzacji PIN-em."""
+    # Zapisz URL dla tego użytkownika
+    chat_id = update.effective_chat.id
+    user_urls[chat_id] = url
+    
     # Wyślij wiadomość o pobieraniu informacji
     progress_message = await update.message.reply_text("Pobieranie informacji o filmie...")
     
@@ -1068,31 +1205,41 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Sprawdź szacowany rozmiar pliku
     estimated_size = estimate_file_size(info)
-    if estimated_size and estimated_size > MAX_FILE_SIZE_MB:
-        await progress_message.edit_text(
-            f"❌ Plik jest zbyt duży!\n\n"
-            f"Szacowany rozmiar: {estimated_size:.1f} MB\n"
-            f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
-            f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
-        )
-        return
+    size_warning = ""
     
-    # Przygotuj opcje
-    keyboard = [
-        [InlineKeyboardButton("🎬 Najlepsza jakość video", callback_data=f"dl_video_best_{url}")],
-        [InlineKeyboardButton("🎵 Audio (MP3)", callback_data=f"dl_audio_mp3_{url}")],
-        [InlineKeyboardButton("🎵 Audio (M4A)", callback_data=f"dl_audio_m4a_{url}")],
-        [InlineKeyboardButton("🎵 Audio (FLAC)", callback_data=f"dl_audio_flac_{url}")],
-        [InlineKeyboardButton("📝 Transkrypcja audio", callback_data=f"transcribe_{url}")],
-        [InlineKeyboardButton("📝 Transkrypcja + Podsumowanie", callback_data=f"transcribe_summary_{url}")],
-        [InlineKeyboardButton("📋 Lista formatów", callback_data=f"formats_{url}")]
-    ]
+    # Przygotuj opcje z różnymi jakościami dla dużych plików
+    if estimated_size and estimated_size > MAX_FILE_SIZE_MB:
+        size_warning = f"\n⚠️ *Uwaga:* Szacowany rozmiar najlepszej jakości: {estimated_size:.1f} MB (limit: {MAX_FILE_SIZE_MB} MB)\n"
+        
+        # Rozszerzone opcje video z różnymi jakościami
+        keyboard = [
+            [InlineKeyboardButton("🎬 Video 1080p (Full HD)", callback_data="dl_video_1080p")],
+            [InlineKeyboardButton("🎬 Video 720p (HD)", callback_data="dl_video_720p")],
+            [InlineKeyboardButton("🎬 Video 480p (SD)", callback_data="dl_video_480p")],
+            [InlineKeyboardButton("🎬 Video 360p (Niska jakość)", callback_data="dl_video_360p")],
+            [InlineKeyboardButton("🎵 Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("🎵 Audio (M4A)", callback_data="dl_audio_m4a")],
+            [InlineKeyboardButton("📝 Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("📝 Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+            [InlineKeyboardButton("📋 Lista formatów", callback_data="formats")]
+        ]
+    else:
+        # Standardowe opcje dla małych plików
+        keyboard = [
+            [InlineKeyboardButton("🎬 Najlepsza jakość video", callback_data="dl_video_best")],
+            [InlineKeyboardButton("🎵 Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("🎵 Audio (M4A)", callback_data="dl_audio_m4a")],
+            [InlineKeyboardButton("🎵 Audio (FLAC)", callback_data="dl_audio_flac")],
+            [InlineKeyboardButton("📝 Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("📝 Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+            [InlineKeyboardButton("📋 Lista formatów", callback_data="formats")]
+        ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
     # Aktualizuj wiadomość z opcjami
     await progress_message.edit_text(
-        f"🎬 *{title}*\n\nWybierz format do pobrania:",
+        f"🎬 *{title}*\n{size_warning}\nWybierz format do pobrania:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -1103,23 +1250,42 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
     
+    # Pobierz URL ze słownika
+    chat_id = update.effective_chat.id
+    url = user_urls.get(chat_id)
+    
+    if not url:
+        await query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
+        return
+    
     if data.startswith("dl_"):
-        _, type, format, url = data.split('_', 3)
-        await download_file(update, context, type, format, url)
-    elif data.startswith("transcribe_summary_"):
-        _, _, url = data.split('_', 2)
+        parts = data.split('_')
+        type = parts[1]  # video lub audio
+        
+        # Sprawdź czy to specjalny format (dl_audio_format_ID lub dl_video_ID)
+        if type == "audio" and len(parts) >= 4 and parts[2] == "format":
+            # dl_audio_format_ID
+            format_id = parts[3]
+            await download_file(update, context, "audio", format_id, url)
+        elif type == "video" and len(parts) == 3:
+            # dl_video_ID (format ID lub rozdzielczość)
+            format = parts[2]
+            await download_file(update, context, "video", format, url)
+        else:
+            # Standardowe formaty (dl_audio_mp3, dl_video_best, etc.)
+            format = parts[2] if len(parts) > 2 else "best"
+            await download_file(update, context, type, format, url)
+    elif data == "transcribe_summary":
         await show_summary_options(update, context, url)
     elif data.startswith("summary_option_"):
-        _, _, option, url = data.split('_', 3)
+        option = data.split('_')[2]
         await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=int(option))
-    elif data.startswith("transcribe_"):
-        _, url = data.split('_', 1)
+    elif data == "transcribe":
         await download_file(update, context, "audio", "mp3", url, transcribe=True)
-    elif data.startswith("formats_"):
-        _, url = data.split('_', 1)
+    elif data == "formats":
         await handle_formats_list(update, context, url)
-    elif data.startswith("back_"):
-        _, url = data.split('_', 1)
+    elif data == "back":
+        # Powrót do głównego menu
         await back_to_main_menu(update, context, url)
 
 async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type, format, url, transcribe=False, summary=False, summary_type=None):
@@ -1173,11 +1339,49 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
     elif type == "video":
         if format == "best":
             ydl_opts['format'] = 'best'
+        elif format in ["1080p", "720p", "480p", "360p"]:
+            # Dla konkretnych rozdzielczości wybieramy najlepszy format w danej rozdzielczości
+            height = format.replace('p', '')
+            ydl_opts['format'] = f'best[height<={height}]/bestvideo[height<={height}]+bestaudio/best[height<={height}]'
         else:
             ydl_opts['format'] = format
     
     try:
-        # Pobierz plik
+        # Najpierw spróbuj uzyskać informacje o rozmiarze dla wybranego formatu
+        check_opts = ydl_opts.copy()
+        check_opts['simulate'] = True  # Tylko symulacja, bez pobierania
+        
+        with yt_dlp.YoutubeDL(check_opts) as ydl:
+            format_info = ydl.extract_info(url, download=False)
+            
+            # Spróbuj uzyskać rozmiar dla wybranego formatu
+            selected_format = None
+            if 'requested_formats' in format_info:
+                # Dla formatów złożonych (video+audio)
+                total_size = 0
+                for fmt in format_info['requested_formats']:
+                    if fmt.get('filesize'):
+                        total_size += fmt['filesize']
+                if total_size > 0:
+                    selected_format = {'filesize': total_size}
+            elif 'filesize' in format_info:
+                selected_format = format_info
+            
+            # Sprawdź rozmiar pliku
+            if selected_format and selected_format.get('filesize'):
+                size_mb = selected_format['filesize'] / (1024 * 1024)
+                if size_mb > MAX_FILE_SIZE_MB:
+                    await query.edit_message_text(
+                        f"❌ Wybrany format jest zbyt duży!\n\n"
+                        f"Rozmiar: {size_mb:.1f} MB\n"
+                        f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
+                        f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
+                    )
+                    return
+        
+        # Jeśli rozmiar jest OK lub nie można go określić, kontynuuj pobieranie
+        # Wiadomość już została wyświetlona wcześniej, nie edytuj ponownie
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([url])
         
@@ -1230,10 +1434,17 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                 
                 # Usuń nagłówek markdown jeśli istnieje
                 if transcript_text.startswith('# '):
-                    transcript_text = '\n'.join(transcript_text.split('\n')[2:])
+                    lines = transcript_text.split('\n')
+                    # Znajdź pierwszą niepustą linię po nagłówku
+                    for i in range(1, len(lines)):
+                        if lines[i].strip():  # Znaleziono niepustą linię
+                            transcript_text = '\n'.join(lines[i:])
+                            break
+                    else:
+                        # Jeśli nie znaleziono niepustej linii, zachowaj oryginalny tekst
+                        logging.warning("Transkrypcja zawiera tylko nagłówek, używam oryginalnego tekstu")
                 
-                # Generuj podsumowanie
-                await query.edit_message_text("Transkrypcja zakończona. Generuję podsumowanie...")
+                # Generuj podsumowanie (komunikat już wyświetlony)
                 summary_text = generate_summary(transcript_text, summary_type)
                 
                 if not summary_text:
@@ -1303,6 +1514,9 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                             filename=os.path.basename(transcript_path),
                             caption=f"📝 Pełna transkrypcja: {title}"
                         )
+                    
+                    # Zakończenie - edytuj wiadomość na końcu
+                    await query.edit_message_text("✅ Transkrypcja i podsumowanie zostały wysłane!")
             
             else:
                 # Standardowa transkrypcja bez podsumowania
@@ -1327,7 +1541,8 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                 except Exception as e:
                     logging.error(f"Błąd podczas usuwania plików: {e}")
                 
-                await query.edit_message_text("✅ Pliki zostały wysłane!")
+                # Zakończenie - edytuj wiadomość
+                await query.edit_message_text("✅ Transkrypcja została wysłana!")
             
         else:
             # Standardowe pobieranie (bez transkrypcji)
@@ -1396,14 +1611,14 @@ async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE
     
     # Formaty video
     for format in video_formats:
-        keyboard.append([InlineKeyboardButton(f"🎬 {format['desc']}", callback_data=f"dl_video_{format['id']}_{url}")])
+        keyboard.append([InlineKeyboardButton(f"🎬 {format['desc']}", callback_data=f"dl_video_{format['id']}")])
     
     # Formaty audio
     for format in audio_formats:
-        keyboard.append([InlineKeyboardButton(f"🎵 {format['desc']}", callback_data=f"dl_audio_format_{format['id']}_{url}")])
+        keyboard.append([InlineKeyboardButton(f"🎵 {format['desc']}", callback_data=f"dl_audio_format_{format['id']}")])
     
     # Przycisk powrotu
-    keyboard.append([InlineKeyboardButton("⬅️ Powrót", callback_data=f"back_{url}")])
+    keyboard.append([InlineKeyboardButton("⬅️ Powrót", callback_data="back")])
     
     reply_markup = InlineKeyboardMarkup(keyboard)
     
@@ -1426,11 +1641,11 @@ async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYP
     
     # Przygotuj opcje
     keyboard = [
-        [InlineKeyboardButton("1️⃣ Krótkie podsumowanie", callback_data=f"summary_option_1_{url}")],
-        [InlineKeyboardButton("2️⃣ Szczegółowe podsumowanie", callback_data=f"summary_option_2_{url}")],
-        [InlineKeyboardButton("3️⃣ Podsumowanie w punktach", callback_data=f"summary_option_3_{url}")],
-        [InlineKeyboardButton("4️⃣ Podział zadań na osoby", callback_data=f"summary_option_4_{url}")],
-        [InlineKeyboardButton("⬅️ Powrót", callback_data=f"back_{url}")]
+        [InlineKeyboardButton("1️⃣ Krótkie podsumowanie", callback_data="summary_option_1")],
+        [InlineKeyboardButton("2️⃣ Szczegółowe podsumowanie", callback_data="summary_option_2")],
+        [InlineKeyboardButton("3️⃣ Podsumowanie w punktach", callback_data="summary_option_3")],
+        [InlineKeyboardButton("4️⃣ Podział zadań na osoby", callback_data="summary_option_4")],
+        [InlineKeyboardButton("⬅️ Powrót", callback_data="back")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1456,13 +1671,13 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     
     # Przygotuj opcje
     keyboard = [
-        [InlineKeyboardButton("🎬 Najlepsza jakość video", callback_data=f"dl_video_best_{url}")],
-        [InlineKeyboardButton("🎵 Audio (MP3)", callback_data=f"dl_audio_mp3_{url}")],
-        [InlineKeyboardButton("🎵 Audio (M4A)", callback_data=f"dl_audio_m4a_{url}")],
-        [InlineKeyboardButton("🎵 Audio (FLAC)", callback_data=f"dl_audio_flac_{url}")],
-        [InlineKeyboardButton("📝 Transkrypcja audio", callback_data=f"transcribe_{url}")],
-        [InlineKeyboardButton("📝 Transkrypcja + Podsumowanie", callback_data=f"transcribe_summary_{url}")],
-        [InlineKeyboardButton("📋 Lista formatów", callback_data=f"formats_{url}")]
+        [InlineKeyboardButton("🎬 Najlepsza jakość video", callback_data="dl_video_best")],
+        [InlineKeyboardButton("🎵 Audio (MP3)", callback_data="dl_audio_mp3")],
+        [InlineKeyboardButton("🎵 Audio (M4A)", callback_data="dl_audio_m4a")],
+        [InlineKeyboardButton("🎵 Audio (FLAC)", callback_data="dl_audio_flac")],
+        [InlineKeyboardButton("📝 Transkrypcja audio", callback_data="transcribe")],
+        [InlineKeyboardButton("📝 Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        [InlineKeyboardButton("📋 Lista formatów", callback_data="formats")]
     ]
     
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1472,6 +1687,128 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+def cleanup_old_files(directory, max_age_hours=24):
+    """
+    Usuwa pliki starsze niż określona liczba godzin.
+    
+    Args:
+        directory: Katalog do czyszczenia
+        max_age_hours: Maksymalny wiek pliku w godzinach (domyślnie 24)
+    
+    Returns:
+        Liczba usuniętych plików
+    """
+    if not os.path.exists(directory):
+        return 0
+    
+    current_time = time.time()
+    max_age_seconds = max_age_hours * 3600
+    deleted_count = 0
+    freed_space_mb = 0
+    
+    try:
+        # Przejdź przez wszystkie pliki w katalogu i podkatalogach
+        for root, dirs, files in os.walk(directory):
+            for filename in files:
+                file_path = os.path.join(root, filename)
+                
+                try:
+                    # Sprawdź wiek pliku
+                    file_age = current_time - os.path.getmtime(file_path)
+                    
+                    if file_age > max_age_seconds:
+                        # Pobierz rozmiar pliku przed usunięciem
+                        file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+                        
+                        # Usuń plik
+                        os.remove(file_path)
+                        deleted_count += 1
+                        freed_space_mb += file_size_mb
+                        
+                        logging.info(f"Usunięto stary plik: {file_path} ({file_size_mb:.2f} MB)")
+                except Exception as e:
+                    logging.error(f"Błąd podczas usuwania pliku {file_path}: {e}")
+            
+            # Usuń puste katalogi
+            try:
+                if not os.listdir(root):
+                    os.rmdir(root)
+                    logging.info(f"Usunięto pusty katalog: {root}")
+            except:
+                pass
+    
+    except Exception as e:
+        logging.error(f"Błąd podczas czyszczenia katalogu {directory}: {e}")
+    
+    if deleted_count > 0:
+        logging.info(f"Czyszczenie zakończone: usunięto {deleted_count} plików, zwolniono {freed_space_mb:.2f} MB")
+    
+    return deleted_count
+
+def get_disk_usage():
+    """
+    Sprawdza wykorzystanie przestrzeni dyskowej.
+    
+    Returns:
+        Tuple (used_gb, free_gb, total_gb, usage_percent)
+    """
+    try:
+        stat = os.statvfs(DOWNLOAD_PATH)
+        
+        # Oblicz przestrzeń w GB
+        total_gb = (stat.f_blocks * stat.f_frsize) / (1024 ** 3)
+        free_gb = (stat.f_avail * stat.f_frsize) / (1024 ** 3)
+        used_gb = total_gb - free_gb
+        usage_percent = (used_gb / total_gb) * 100 if total_gb > 0 else 0
+        
+        return used_gb, free_gb, total_gb, usage_percent
+    except Exception as e:
+        logging.error(f"Błąd podczas sprawdzania przestrzeni dyskowej: {e}")
+        return 0, 0, 0, 0
+
+def monitor_disk_space():
+    """
+    Monitoruje przestrzeń dyskową i wykonuje czyszczenie jeśli potrzeba.
+    """
+    used_gb, free_gb, total_gb, usage_percent = get_disk_usage()
+    
+    logging.info(f"Przestrzeń dyskowa: {used_gb:.1f}/{total_gb:.1f} GB używane ({usage_percent:.1f}%), {free_gb:.1f} GB wolne")
+    
+    # Ostrzeżenie gdy mało miejsca
+    if free_gb < 10:
+        logging.warning(f"UWAGA: Mało wolnej przestrzeni dyskowej! Tylko {free_gb:.1f} GB pozostało.")
+        
+        # Agresywne czyszczenie gdy bardzo mało miejsca
+        if free_gb < 5:
+            logging.warning("Rozpoczynam agresywne czyszczenie (pliki starsze niż 6 godzin)...")
+            cleanup_old_files(DOWNLOAD_PATH, max_age_hours=6)
+        else:
+            # Normalne czyszczenie
+            cleanup_old_files(DOWNLOAD_PATH, max_age_hours=24)
+
+def periodic_cleanup():
+    """
+    Funkcja uruchamiana okresowo w osobnym wątku.
+    """
+    while True:
+        try:
+            # Czekaj 1 godzinę
+            time.sleep(3600)
+            
+            logging.info("Rozpoczynam okresowe czyszczenie plików...")
+            
+            # Sprawdź przestrzeń dyskową
+            monitor_disk_space()
+            
+            # Wykonaj czyszczenie
+            deleted_count = cleanup_old_files(DOWNLOAD_PATH, max_age_hours=24)
+            
+            if deleted_count > 0:
+                logging.info(f"Okresowe czyszczenie: usunięto {deleted_count} starych plików")
+            
+        except Exception as e:
+            logging.error(f"Błąd podczas okresowego czyszczenia: {e}")
 
 def generate_summary(transcript_text, summary_type):
     """
@@ -1543,12 +1880,22 @@ def generate_summary(transcript_text, summary_type):
         return None
 
 def main():
+    # Uruchom wątek czyszczenia plików
+    cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
+    cleanup_thread.start()
+    logging.info("Uruchomiono wątek automatycznego czyszczenia plików")
+    
+    # Wykonaj początkowe sprawdzenie przestrzeni dyskowej
+    monitor_disk_space()
+    
     # Utwórz aplikację bota
     application = ApplicationBuilder().token(BOT_TOKEN).build()
     
     # Zarejestruj handlery
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
+    application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("cleanup", cleanup_command))
     
     # Handler do obsługi wiadomości tekstowych (w tym PIN i linki)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_youtube_link))

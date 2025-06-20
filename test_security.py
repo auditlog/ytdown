@@ -5,13 +5,28 @@ Skrypt testowy dla funkcji bezpieczeństwa YouTube Downloader
 
 import sys
 import os
+import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from youtube_downloader_telegram import (
-    check_rate_limit, validate_youtube_url, estimate_file_size,
-    RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW, MAX_FILE_SIZE_MB
-)
-import time
+# Import funkcji bezpieczeństwa bezpośrednio
+import importlib.util
+spec = importlib.util.spec_from_file_location("security_functions", "youtube_downloader_telegram.py")
+module = importlib.util.module_from_spec(spec)
+
+# Najpierw zdefiniuj wymagane moduły jako None, aby import nie rzucał błędów
+sys.modules['telegram'] = type(sys)('telegram')
+sys.modules['telegram.ext'] = type(sys)('telegram.ext')
+
+# Teraz załaduj moduł
+spec.loader.exec_module(module)
+
+# Pobierz funkcje i stałe
+check_rate_limit = module.check_rate_limit
+validate_youtube_url = module.validate_youtube_url
+estimate_file_size = module.estimate_file_size
+RATE_LIMIT_REQUESTS = module.RATE_LIMIT_REQUESTS
+RATE_LIMIT_WINDOW = module.RATE_LIMIT_WINDOW
+MAX_FILE_SIZE_MB = module.MAX_FILE_SIZE_MB
 
 def test_rate_limiting():
     """Test funkcji rate limiting"""

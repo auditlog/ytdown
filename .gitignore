@@ -86,6 +86,12 @@ user_config.json
 authorized_users.json
 sessions.json
 
+# Nowe pliki tymczasowe i konfiguracyjne
+config_improvements.md
+test_security_standalone.py
+setup_config.py
+test_transcript.txt
+
 # Pliki archiwum projektu
 archive/
 scp/
