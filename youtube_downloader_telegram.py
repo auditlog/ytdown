@@ -60,8 +60,7 @@ MAX_ATTEMPTS = 3
 # Czas blokady w sekundach (15 minut)
 BLOCK_TIME = 15 * 60
 
-# Słownik do przechowywania stanu autoryzacji użytkowników
-authorized_users = set()
+# Słownik do przechowywania stanu autoryzacji użytkowników (zostanie zainicjalizowany później)
 
 # Maksymalny rozmiar części MP3 w MB do transkrypcji
 MAX_MP3_PART_SIZE_MB = 25
@@ -183,12 +182,66 @@ def validate_config(config):
         except:
             pass
 
+# Ścieżka do pliku z autoryzowanymi użytkownikami
+AUTHORIZED_USERS_FILE = "authorized_users.json"
+
+def load_authorized_users():
+    """
+    Wczytuje listę autoryzowanych użytkowników z pliku JSON.
+    Zwraca set z user_id autoryzowanych użytkowników.
+    """
+    try:
+        if os.path.exists(AUTHORIZED_USERS_FILE):
+            with open(AUTHORIZED_USERS_FILE, 'r') as f:
+                data = json.load(f)
+                # Konwertuj listę z pliku na set z int (user_id)
+                return set(int(user_id) for user_id in data.get('authorized_users', []))
+        else:
+            logging.info(f"Plik {AUTHORIZED_USERS_FILE} nie istnieje. Tworzę nowy.")
+            return set()
+    except (json.JSONDecodeError, ValueError, IOError) as e:
+        logging.warning(f"Błąd podczas wczytywania {AUTHORIZED_USERS_FILE}: {e}")
+        logging.warning("Używam pustej listy autoryzowanych użytkowników.")
+        return set()
+
+def save_authorized_users(authorized_users_set):
+    """
+    Zapisuje listę autoryzowanych użytkowników do pliku JSON.
+    """
+    try:
+        # Konwertuj set na listę stringów dla JSON
+        data = {
+            'authorized_users': [str(user_id) for user_id in authorized_users_set],
+            'last_updated': datetime.now().isoformat(),
+            'version': '1.0'
+        }
+        
+        # Zapisz do pliku tymczasowego, a następnie przenieś (atomic write)
+        temp_file = AUTHORIZED_USERS_FILE + '.tmp'
+        with open(temp_file, 'w') as f:
+            json.dump(data, f, indent=2)
+        
+        # Przenieś plik tymczasowy na docelowy (atomic operation)
+        shutil.move(temp_file, AUTHORIZED_USERS_FILE)
+        
+        # Ustaw bezpieczne uprawnienia (tylko na systemach Unix)
+        if hasattr(os, 'chmod'):
+            os.chmod(AUTHORIZED_USERS_FILE, 0o600)
+        
+        logging.debug(f"Zapisano {len(authorized_users_set)} autoryzowanych użytkowników do {AUTHORIZED_USERS_FILE}")
+        
+    except (IOError, OSError) as e:
+        logging.error(f"Błąd podczas zapisywania {AUTHORIZED_USERS_FILE}: {e}")
+
 # Wczytaj konfigurację
 CONFIG = load_config()
 
 # Ustaw stałe z konfiguracji
 BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
 PIN_CODE = CONFIG["PIN_CODE"]
+
+# Wczytaj autoryzowanych użytkowników z pliku JSON
+authorized_users = load_authorized_users()
 
 # Funkcje pomocnicze dla rate limiting i walidacji
 def check_rate_limit(user_id):
@@ -234,6 +287,47 @@ def validate_youtube_url(url):
         # Sprawdź czy domena jest na liście dozwolonych
         return domain in ALLOWED_DOMAINS
     except:
+        return False
+
+def manage_authorized_user(user_id, action='add'):
+    """
+    Zarządza autoryzowanymi użytkownikami.
+    
+    Args:
+        user_id (int): ID użytkownika
+        action (str): 'add' lub 'remove'
+    
+    Returns:
+        bool: True jeśli operacja się powiodła
+    """
+    global authorized_users
+    
+    try:
+        if action == 'add':
+            if user_id not in authorized_users:
+                authorized_users.add(user_id)
+                save_authorized_users(authorized_users)
+                logging.info(f"Dodano użytkownika {user_id} do autoryzowanych")
+                return True
+            else:
+                logging.info(f"Użytkownik {user_id} już jest autoryzowany")
+                return True
+                
+        elif action == 'remove':
+            if user_id in authorized_users:
+                authorized_users.discard(user_id)
+                save_authorized_users(authorized_users)
+                logging.info(f"Usunięto użytkownika {user_id} z autoryzowanych")
+                return True
+            else:
+                logging.info(f"Użytkownik {user_id} nie był autoryzowany")
+                return True
+        else:
+            logging.error(f"Nieznana akcja: {action}")
+            return False
+            
+    except Exception as e:
+        logging.error(f"Błąd podczas zarządzania użytkownikiem {user_id}: {e}")
         return False
 
 def estimate_file_size(info):
@@ -985,7 +1079,7 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 failed_attempts[user_id] = 0
                 
                 # Dodaj użytkownika do listy autoryzowanych
-                authorized_users.add(user_id)
+                manage_authorized_user(user_id, 'add')
                 
                 # Usuń stan oczekiwania na PIN
                 context.user_data.pop("awaiting_pin", None)
@@ -1123,6 +1217,26 @@ async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "✅ Brak plików do usunięcia.\n"
             "Wszystkie pliki są młodsze niż 24 godziny."
         )
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Obsługuje komendę /users - zarządzanie autoryzowanymi użytkownikami (tylko admin)."""
+    user_id = update.effective_user.id
+    
+    # Sprawdź czy użytkownik jest autoryzowany
+    if user_id not in authorized_users:
+        await update.message.reply_text("❌ Brak autoryzacji. Użyj /start aby się zalogować.")
+        return
+    
+    # Pokaż liczbę autoryzowanych użytkowników i ich IDs (dla debugowania)
+    user_count = len(authorized_users)
+    user_list = ', '.join(str(uid) for uid in sorted(authorized_users))
+    
+    await update.message.reply_text(
+        f"👥 Autoryzowani użytkownicy\n\n"
+        f"• Liczba: {user_count}\n"
+        f"• Lista ID: {user_list if user_count <= 10 else str(user_count) + ' użytkowników'}\n"
+        f"• Twoje ID: {user_id}"
+    )
 
 async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Obsługuje linki do YouTube."""
@@ -1923,7 +2037,8 @@ async def set_bot_commands(application):
         BotCommand("start", "Rozpocznij korzystanie z bota"),
         BotCommand("help", "Pomoc i instrukcje"),
         BotCommand("status", "Sprawdź przestrzeń dyskową"),
-        BotCommand("cleanup", "Usuń stare pliki (>24h)")
+        BotCommand("cleanup", "Usuń stare pliki (>24h)"),
+        BotCommand("users", "Zarządzanie użytkownikami")
     ]
     
     await application.bot.set_my_commands(commands)
@@ -1949,6 +2064,7 @@ def main():
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
     application.add_handler(CommandHandler("cleanup", cleanup_command))
+    application.add_handler(CommandHandler("users", users_command))
     
     # Handler do obsługi wiadomości tekstowych (w tym PIN i linki)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_youtube_link))
