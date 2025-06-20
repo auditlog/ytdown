@@ -84,6 +84,7 @@ package-lock.json
 # Pliki konfiguracyjne użytkownika
 user_config.json
 authorized_users.json
+authorized_users.json.tmp
 sessions.json
 
 # Nowe pliki tymczasowe i konfiguracyjne
@@ -91,6 +92,9 @@ config_improvements.md
 test_security_standalone.py
 setup_config.py
 test_transcript.txt
+test_json_persistence.py
+test_json_simple.py
+CLAUDE.md
 
 # Pliki archiwum projektu
 archive/
