@@ -1753,19 +1753,55 @@ def get_disk_usage():
     Returns:
         Tuple (used_gb, free_gb, total_gb, usage_percent)
     """
+    # Metoda 1: shutil.disk_usage (najnowsza i najbardziej uniwersalna)
     try:
-        stat = os.statvfs(DOWNLOAD_PATH)
-        
-        # Oblicz przestrzeń w GB
-        total_gb = (stat.f_blocks * stat.f_frsize) / (1024 ** 3)
-        free_gb = (stat.f_avail * stat.f_frsize) / (1024 ** 3)
-        used_gb = total_gb - free_gb
-        usage_percent = (used_gb / total_gb) * 100 if total_gb > 0 else 0
+        total, used, free = shutil.disk_usage(DOWNLOAD_PATH)
+        total_gb = total / (1024 ** 3)
+        free_gb = free / (1024 ** 3)
+        used_gb = used / (1024 ** 3)
+        usage_percent = (used / total) * 100 if total > 0 else 0
         
         return used_gb, free_gb, total_gb, usage_percent
     except Exception as e:
-        logging.error(f"Błąd podczas sprawdzania przestrzeni dyskowej: {e}")
-        return 0, 0, 0, 0
+        logging.warning(f"shutil.disk_usage failed: {e}")
+    
+    # Metoda 2: df command (uniwersalna dla systemów Unix)
+    try:
+        result = subprocess.run(['df', '-BG', DOWNLOAD_PATH], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            lines = result.stdout.strip().split('\n')
+            if len(lines) >= 2:
+                fields = lines[1].split()
+                if len(fields) >= 4:
+                    total_gb = float(fields[1].replace('G', ''))
+                    used_gb = float(fields[2].replace('G', ''))
+                    free_gb = float(fields[3].replace('G', ''))
+                    usage_percent = (used_gb / total_gb) * 100 if total_gb > 0 else 0
+                    
+                    logging.info("Użyto df command do sprawdzenia przestrzeni dyskowej")
+                    return used_gb, free_gb, total_gb, usage_percent
+    except Exception as e:
+        logging.warning(f"df command failed: {e}")
+    
+    # Metoda 3: os.statvfs (fallback dla starszych systemów)
+    try:
+        stat = os.statvfs(DOWNLOAD_PATH)
+        
+        # Sprawdź czy wszystkie potrzebne atrybuty istnieją
+        if hasattr(stat, 'f_blocks') and hasattr(stat, 'f_frsize') and hasattr(stat, 'f_avail'):
+            total_gb = (stat.f_blocks * stat.f_frsize) / (1024 ** 3)
+            free_gb = (stat.f_avail * stat.f_frsize) / (1024 ** 3)
+            used_gb = total_gb - free_gb
+            usage_percent = (used_gb / total_gb) * 100 if total_gb > 0 else 0
+            
+            logging.info("Użyto os.statvfs do sprawdzenia przestrzeni dyskowej")
+            return used_gb, free_gb, total_gb, usage_percent
+    except Exception as e:
+        logging.warning(f"os.statvfs failed: {e}")
+    
+    # Jeśli wszystko zawiodło
+    logging.error("Wszystkie metody sprawdzania przestrzeni dyskowej zawiodły")
+    return 0, 0, 0, 0
 
 def monitor_disk_space():
     """
@@ -1879,6 +1915,20 @@ def generate_summary(transcript_text, summary_type):
         logging.error(f"Błąd podczas generowania podsumowania: {e}")
         return None
 
+async def set_bot_commands(application):
+    """Ustawia menu komend w Telegram."""
+    from telegram import BotCommand
+    
+    commands = [
+        BotCommand("start", "Rozpocznij korzystanie z bota"),
+        BotCommand("help", "Pomoc i instrukcje"),
+        BotCommand("status", "Sprawdź przestrzeń dyskową"),
+        BotCommand("cleanup", "Usuń stare pliki (>24h)")
+    ]
+    
+    await application.bot.set_my_commands(commands)
+    logging.info("Ustawiono menu komend w Telegram")
+
 def main():
     # Uruchom wątek czyszczenia plików
     cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
@@ -1890,6 +1940,9 @@ def main():
     
     # Utwórz aplikację bota
     application = ApplicationBuilder().token(BOT_TOKEN).build()
+    
+    # Ustaw menu komend
+    application.job_queue.run_once(lambda context: set_bot_commands(application), when=1)
     
     # Zarejestruj handlery
     application.add_handler(CommandHandler("start", start))
