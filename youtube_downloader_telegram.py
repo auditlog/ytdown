@@ -522,10 +522,16 @@ def transcribe_audio(file_path, api_key):
             response = requests.post(url, headers=headers, files=files, data=data)
             
             if response.status_code == 200:
-                return response.text
+                result = response.text.strip()
+                if result:
+                    logging.debug(f"Transkrypcja otrzymana: {len(result)} znaków")
+                    return result
+                else:
+                    logging.warning("API zwróciło pustą transkrypcję")
+                    return ""
             else:
-                logging.error(f"Błąd: {response.status_code}")
-                logging.error(response.text)
+                logging.error(f"Błąd API Groq: {response.status_code}")
+                logging.error(f"Odpowiedź: {response.text}")
                 return ""
     except Exception as e:
         logging.error(f"Błąd podczas transkrypcji: {e}")
@@ -568,19 +574,51 @@ def transcribe_mp3_file(file_path, output_dir):
     for i, part_path in enumerate(part_files):
         logging.info(f"Transkrybowanie pliku {i+1}/{len(part_files)}: {part_path}")
         transcription = transcribe_audio(part_path, api_key)
-        transcriptions.append(transcription)
+        
+        # Debug: sprawdź długość transkrypcji
+        if transcription:
+            logging.info(f"Część {i+1}: transkrypcja ma {len(transcription)} znaków")
+            transcriptions.append(transcription)
+        else:
+            logging.warning(f"Część {i+1}: transkrypcja jest pusta!")
+            transcriptions.append("[Brak transkrypcji dla tej części]")
         
         # Zapisz pojedynczą transkrypcję jako kopię zapasową
         part_num = get_part_number(os.path.basename(part_path)) or (i + 1)
         transcript_path = os.path.join(output_dir, f"{base_name}_part{part_num}_transcript.txt")
         
         with open(transcript_path, "w", encoding="utf-8") as f:
-            f.write(transcription)
+            f.write(transcription if transcription else "[Błąd transkrypcji]")
             
-        logging.info(f"Zapisano transkrypcję dla części {part_num}")
+        logging.info(f"Zapisano transkrypcję dla części {part_num} ({len(transcription) if transcription else 0} znaków)")
     
-    # Połącz wszystkie transkrypcje
-    combined_text = "\n\n".join(transcriptions)
+    # Połącz wszystkie transkrypcje (filtując puste)
+    valid_transcriptions = [t for t in transcriptions if t and t.strip()]
+    combined_text = "\n\n".join(valid_transcriptions)
+    
+    # Debug: sprawdź końcowy wynik
+    logging.info(f"Połączono transkrypcje: {len(valid_transcriptions)} niepustych z {len(transcriptions)} części")
+    logging.info(f"Końcowa długość tekstu: {len(combined_text)} znaków")
+    
+    # Sprawdź czy mamy jakąkolwiek treść transkrypcji
+    if not combined_text or not combined_text.strip():
+        logging.error("BŁĄD: Brak treści transkrypcji do zapisania!")
+        logging.error(f"Wszystkie transkrypcje części: {transcriptions}")
+        
+        # Zapisz plik z informacją o błędzie dla użytkownika
+        transcript_md_path = os.path.join(output_dir, f"{base_name}_transcript.md")
+        with open(transcript_md_path, "w", encoding="utf-8") as f:
+            f.write(f"# {base_name} Transcript\n\n")
+            f.write("❌ **Błąd podczas transkrypcji**\n\n")
+            f.write("Nie udało się wygenerować transkrypcji dla tego pliku audio.\n")
+            f.write("Możliwe przyczyny:\n")
+            f.write("- Plik audio jest uszkodzony lub niezgodny\n")
+            f.write("- Błąd API Groq (Whisper)\n")
+            f.write("- Brak wyraźnej mowy w nagraniu\n\n")
+            f.write("Spróbuj ponownie z innym plikiem lub skontaktuj się z administratorem.")
+        
+        # Zwróć ścieżkę do pliku z błędem
+        return transcript_md_path
     
     # Zapisz połączoną transkrypcję jako markdown
     transcript_md_path = os.path.join(output_dir, f"{base_name}_transcript.md")
