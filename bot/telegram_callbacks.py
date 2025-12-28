@@ -30,6 +30,7 @@ from bot.config import (
 from bot.security import (
     MAX_FILE_SIZE_MB,
     user_urls,
+    user_time_ranges,
 )
 from bot.transcription import (
     transcribe_mp3_file,
@@ -145,6 +146,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await download_file(update, context, "audio", "mp3", url, transcribe=True)
     elif data == "formats":
         await handle_formats_list(update, context, url)
+    elif data == "time_range":
+        await show_time_range_options(update, context, url)
+    elif data == "time_range_clear":
+        user_time_ranges.pop(chat_id, None)
+        await back_to_main_menu(update, context, url)
+    elif data.startswith("time_range_preset_"):
+        # Handle preset time ranges like "first_5min", "last_10min"
+        preset = data.replace("time_range_preset_", "")
+        await apply_time_range_preset(update, context, url, preset)
     elif data == "back":
         await back_to_main_menu(update, context, url)
 
@@ -191,6 +201,16 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
         'buffer_size': 1024 * 16,  # 16KB buffer
         'http_chunk_size': 10485760,  # 10MB chunks
     }
+
+    # Apply time range if set
+    time_range = user_time_ranges.get(chat_id)
+    if time_range:
+        # Use download_sections format: "*start-end"
+        start = time_range.get('start', '0:00')
+        end = time_range.get('end', duration_str)
+        ydl_opts['download_ranges'] = lambda info, ydl: [{'start_time': time_range.get('start_sec', 0), 'end_time': time_range.get('end_sec', duration)}]
+        ydl_opts['force_keyframes_at_cuts'] = True
+        logging.info(f"Applying time range: {start} - {end}")
 
     if type == "audio" or transcribe:
         audio_format_to_use = "mp3" if transcribe else format
@@ -245,7 +265,10 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                     return
 
         # Download file with progress tracking
-        await update_status(f"Rozpoczynam pobieranie...\nCzas trwania: {duration_str}")
+        time_range_info = ""
+        if time_range:
+            time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
+        await update_status(f"Rozpoczynam pobieranie...\nCzas trwania: {duration_str}{time_range_info}")
 
         # Add progress hook
         ydl_opts['progress_hooks'] = [create_progress_hook(chat_id)]
@@ -573,6 +596,7 @@ async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYP
 async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Returns to main menu."""
     query = update.callback_query
+    chat_id = update.effective_chat.id
 
     info = get_video_info(url)
     if not info:
@@ -580,6 +604,8 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return
 
     title = info.get('title', 'Nieznany tytuł')
+    duration = info.get('duration', 0)
+    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
     keyboard = [
         [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
@@ -588,14 +614,113 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         [InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")],
         [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
         [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
         [InlineKeyboardButton("Lista formatów", callback_data="formats")]
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Show time range info if set
+    time_range = user_time_ranges.get(chat_id)
+    time_range_info = ""
+    if time_range:
+        time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
+
     await safe_edit_message(
         query,
-        f"*{title}*\n\nWybierz format do pobrania:",
+        f"*{title}*\nCzas trwania: {duration_str}{time_range_info}\n\nWybierz format do pobrania:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+
+async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    """Shows time range selection options."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    info = get_video_info(url)
+    if not info:
+        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        return
+
+    title = info.get('title', 'Nieznany tytuł')
+    duration = info.get('duration', 0)
+    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
+
+    # Current time range
+    time_range = user_time_ranges.get(chat_id)
+    current_range = ""
+    if time_range:
+        current_range = f"\n\n✂️ Aktualny zakres: {time_range['start']} - {time_range['end']}"
+
+    keyboard = [
+        [InlineKeyboardButton("Pierwsze 5 minut", callback_data="time_range_preset_first_5")],
+        [InlineKeyboardButton("Pierwsze 10 minut", callback_data="time_range_preset_first_10")],
+        [InlineKeyboardButton("Pierwsze 30 minut", callback_data="time_range_preset_first_30")],
+        [InlineKeyboardButton("Ostatnie 5 minut", callback_data="time_range_preset_last_5")],
+        [InlineKeyboardButton("Ostatnie 10 minut", callback_data="time_range_preset_last_10")],
+    ]
+
+    if time_range:
+        keyboard.append([InlineKeyboardButton("❌ Usuń zakres (cały film)", callback_data="time_range_clear")])
+
+    keyboard.append([InlineKeyboardButton("Powrót", callback_data="back")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        f"*{title}*\nCzas trwania: {duration_str}{current_range}\n\n"
+        f"Wybierz zakres czasowy do pobrania:\n\n"
+        f"💡 Możesz też wpisać własny zakres w formacie:\n"
+        f"`0:30-5:45` lub `1:00:00-1:30:00`",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def apply_time_range_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, url, preset):
+    """Applies a preset time range."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    info = get_video_info(url)
+    if not info:
+        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        return
+
+    duration = info.get('duration', 0)
+    if not duration:
+        await query.edit_message_text("Nie można określić czasu trwania filmu.")
+        return
+
+    # Parse preset
+    start_sec = 0
+    end_sec = duration
+
+    if preset == "first_5":
+        end_sec = min(5 * 60, duration)
+    elif preset == "first_10":
+        end_sec = min(10 * 60, duration)
+    elif preset == "first_30":
+        end_sec = min(30 * 60, duration)
+    elif preset == "last_5":
+        start_sec = max(0, duration - 5 * 60)
+    elif preset == "last_10":
+        start_sec = max(0, duration - 10 * 60)
+
+    # Format as MM:SS or HH:MM:SS
+    def format_time(seconds):
+        if seconds >= 3600:
+            return f"{int(seconds // 3600)}:{int((seconds % 3600) // 60):02d}:{int(seconds % 60):02d}"
+        return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+
+    user_time_ranges[chat_id] = {
+        'start': format_time(start_sec),
+        'end': format_time(end_sec),
+        'start_sec': start_sec,
+        'end_sec': end_sec
+    }
+
+    await back_to_main_menu(update, context, url)

@@ -26,6 +26,7 @@ from bot.security import (
     failed_attempts,
     block_until,
     user_urls,
+    user_time_ranges,
     check_rate_limit,
     validate_youtube_url,
     manage_authorized_user,
@@ -317,6 +318,8 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     """Processes YouTube link after PIN authorization."""
     chat_id = update.effective_chat.id
     user_urls[chat_id] = url
+    # Clear any previous time range
+    user_time_ranges.pop(chat_id, None)
 
     progress_message = await update.message.reply_text("Pobieranie informacji o filmie...")
 
@@ -326,6 +329,8 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     title = info.get('title', 'Nieznany tytuł')
+    duration = info.get('duration', 0)
+    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
     estimated_size = estimate_file_size(info)
     size_warning = ""
@@ -342,6 +347,7 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
             [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
             [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+            [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
             [InlineKeyboardButton("Lista formatów", callback_data="formats")]
         ]
     else:
@@ -352,13 +358,20 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")],
             [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
             [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+            [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
             [InlineKeyboardButton("Lista formatów", callback_data="formats")]
         ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Show time range info if set
+    time_range = user_time_ranges.get(chat_id)
+    time_range_info = ""
+    if time_range:
+        time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
+
     await progress_message.edit_text(
-        f"*{title}*\n{size_warning}\nWybierz format do pobrania:",
+        f"*{title}*\nCzas trwania: {duration_str}{size_warning}{time_range_info}\n\nWybierz format do pobrania:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )

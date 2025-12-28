@@ -46,6 +46,9 @@ user_requests = defaultdict(list)
 # Needed because callback_data has 64 byte limit
 user_urls = {}
 
+# Dictionary to store time ranges (key: chat_id, value: {"start": "0:30", "end": "5:45"})
+user_time_ranges = {}
+
 
 def check_rate_limit(user_id):
     """
