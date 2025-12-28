@@ -2034,8 +2034,8 @@ def generate_summary(transcript_text, summary_type):
     
     # Przygotuj dane do żądania
     data = {
-        "model": "claude-3-haiku-20240307",
-        "max_tokens": 4096,
+        "model": "claude-haiku-4-5",
+        "max_tokens": 16384,
         "messages": [
             {
                 "role": "user",
