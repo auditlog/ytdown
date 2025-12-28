@@ -7,6 +7,7 @@ Contains callback query handlers and file download logic.
 import os
 import asyncio
 import logging
+import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -17,6 +18,9 @@ from telegram.error import BadRequest
 
 # Thread pool for running sync functions
 _executor = ThreadPoolExecutor(max_workers=2)
+
+# Global download progress state (per chat_id)
+_download_progress = {}
 
 from bot.config import (
     CONFIG,
@@ -35,6 +39,60 @@ from bot.downloader import (
     get_video_info,
     sanitize_filename,
 )
+
+
+def format_bytes(bytes_value):
+    """Formats bytes to human readable string."""
+    if bytes_value is None:
+        return "?"
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if bytes_value < 1024:
+            return f"{bytes_value:.1f} {unit}"
+        bytes_value /= 1024
+    return f"{bytes_value:.1f} TB"
+
+
+def format_eta(seconds):
+    """Formats seconds to human readable time string."""
+    if seconds is None or seconds < 0:
+        return "?"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+    else:
+        return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m"
+
+
+def create_progress_hook(chat_id):
+    """Creates a progress hook for yt-dlp that updates global progress state."""
+    def hook(d):
+        if d['status'] == 'downloading':
+            _download_progress[chat_id] = {
+                'status': 'downloading',
+                'percent': d.get('_percent_str', '?%').strip(),
+                'downloaded': d.get('downloaded_bytes', 0),
+                'total': d.get('total_bytes') or d.get('total_bytes_estimate', 0),
+                'speed': d.get('speed', 0),
+                'eta': d.get('eta', None),
+                'filename': d.get('filename', ''),
+                'updated': time.time()
+            }
+        elif d['status'] == 'finished':
+            _download_progress[chat_id] = {
+                'status': 'finished',
+                'percent': '100%',
+                'downloaded': d.get('downloaded_bytes', 0),
+                'total': d.get('total_bytes', 0),
+                'filename': d.get('filename', ''),
+                'updated': time.time()
+            }
+        elif d['status'] == 'error':
+            _download_progress[chat_id] = {
+                'status': 'error',
+                'updated': time.time()
+            }
+    return hook
 
 
 async def safe_edit_message(query, text, reply_markup=None, parse_mode=None):
@@ -181,12 +239,53 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                     )
                     return
 
-        # Download file
-        await update_status(f"Pobieranie pliku...\nCzas trwania: {duration_str}\n\nTo może potrwać kilka minut.")
+        # Download file with progress tracking
+        await update_status(f"Rozpoczynam pobieranie...\nCzas trwania: {duration_str}")
 
-        # Run download in thread pool to not block
+        # Add progress hook
+        ydl_opts['progress_hooks'] = [create_progress_hook(chat_id)]
+        _download_progress[chat_id] = {'status': 'starting', 'updated': time.time()}
+
+        # Run download in thread pool with progress updates
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(_executor, lambda: yt_dlp.YoutubeDL(ydl_opts).download([url]))
+
+        async def run_download_with_progress():
+            # Start download in background
+            future = loop.run_in_executor(
+                _executor,
+                lambda: yt_dlp.YoutubeDL(ydl_opts).download([url])
+            )
+
+            # Update status while downloading
+            last_update = ""
+            while not future.done():
+                progress = _download_progress.get(chat_id, {})
+                if progress.get('status') == 'downloading':
+                    percent = progress.get('percent', '?%')
+                    downloaded = format_bytes(progress.get('downloaded', 0))
+                    total = format_bytes(progress.get('total', 0))
+                    speed = format_bytes(progress.get('speed', 0)) + "/s" if progress.get('speed') else "?"
+                    eta = format_eta(progress.get('eta'))
+
+                    status_text = (
+                        f"Pobieranie: {percent}\n\n"
+                        f"Pobrano: {downloaded} / {total}\n"
+                        f"Prędkość: {speed}\n"
+                        f"Pozostało: {eta}\n\n"
+                        f"Czas trwania: {duration_str}"
+                    )
+
+                    if status_text != last_update:
+                        last_update = status_text
+                        await update_status(status_text)
+
+                await asyncio.sleep(1)
+
+            # Clean up progress state
+            _download_progress.pop(chat_id, None)
+            return await future
+
+        await run_download_with_progress()
 
         # Find downloaded file
         downloaded_file_path = None
