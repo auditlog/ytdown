@@ -6,53 +6,50 @@ Skrypt testowy dla funkcji bezpieczeństwa YouTube Downloader
 import sys
 import os
 import time
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Import funkcji bezpieczeństwa bezpośrednio
-import importlib.util
-spec = importlib.util.spec_from_file_location("security_functions", "youtube_downloader_telegram.py")
-module = importlib.util.module_from_spec(spec)
+# Add parent directory to path for imports
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, parent_dir)
 
-# Najpierw zdefiniuj wymagane moduły jako None, aby import nie rzucał błędów
-sys.modules['telegram'] = type(sys)('telegram')
-sys.modules['telegram.ext'] = type(sys)('telegram.ext')
-
-# Teraz załaduj moduł
-spec.loader.exec_module(module)
-
-# Pobierz funkcje i stałe
-check_rate_limit = module.check_rate_limit
-validate_youtube_url = module.validate_youtube_url
-estimate_file_size = module.estimate_file_size
-RATE_LIMIT_REQUESTS = module.RATE_LIMIT_REQUESTS
-RATE_LIMIT_WINDOW = module.RATE_LIMIT_WINDOW
-MAX_FILE_SIZE_MB = module.MAX_FILE_SIZE_MB
+# Import functions from main module
+from youtube_downloader_telegram import (
+    check_rate_limit,
+    validate_youtube_url,
+    estimate_file_size,
+    RATE_LIMIT_REQUESTS,
+    RATE_LIMIT_WINDOW,
+    MAX_FILE_SIZE_MB,
+    user_requests
+)
 
 def test_rate_limiting():
     """Test funkcji rate limiting"""
     print("=== Test Rate Limiting ===")
-    test_user_id = 12345
-    
+    test_user_id = 99999  # Use unique ID to avoid conflicts
+
+    # Clear previous requests for this user
+    user_requests[test_user_id] = []
+
     # Test normalnego użycia
     print(f"Limit: {RATE_LIMIT_REQUESTS} requestów w {RATE_LIMIT_WINDOW} sekund")
-    
+
     # Wykonaj dozwoloną liczbę requestów
     for i in range(RATE_LIMIT_REQUESTS):
         result = check_rate_limit(test_user_id)
         print(f"Request {i+1}: {'✅ Dozwolony' if result else '❌ Zablokowany'}")
         assert result == True, f"Request {i+1} powinien być dozwolony"
-    
+
     # Następny request powinien być zablokowany
     result = check_rate_limit(test_user_id)
     print(f"Request {RATE_LIMIT_REQUESTS + 1}: {'✅ Dozwolony' if result else '❌ Zablokowany'}")
     assert result == False, "Request przekraczający limit powinien być zablokowany"
-    
+
     print("✅ Rate limiting działa poprawnie\n")
 
 def test_url_validation():
     """Test walidacji URL"""
     print("=== Test Walidacji URL ===")
-    
+
     # Prawidłowe URL-e
     valid_urls = [
         "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
@@ -61,7 +58,7 @@ def test_url_validation():
         "https://m.youtube.com/watch?v=test",
         "https://music.youtube.com/watch?v=test"
     ]
-    
+
     # Nieprawidłowe URL-e
     invalid_urls = [
         "https://www.google.com",
@@ -72,25 +69,25 @@ def test_url_validation():
         "https://www.youtube-downloader.com",
         ""
     ]
-    
+
     print("Testowanie prawidłowych URL:")
     for url in valid_urls:
         result = validate_youtube_url(url)
         print(f"  {url[:50]}... {'✅' if result else '❌'}")
         assert result == True, f"URL {url} powinien być prawidłowy"
-    
+
     print("\nTestowanie nieprawidłowych URL:")
     for url in invalid_urls:
         result = validate_youtube_url(url)
         print(f"  {url[:50]}... {'✅' if result else '❌'}")
         assert result == False, f"URL {url} powinien być nieprawidłowy"
-    
+
     print("✅ Walidacja URL działa poprawnie\n")
 
 def test_file_size_estimation():
     """Test szacowania rozmiaru pliku"""
     print("=== Test Szacowania Rozmiaru ===")
-    
+
     # Symulacja info z yt-dlp
     test_cases = [
         {
@@ -121,28 +118,28 @@ def test_file_size_estimation():
             "expected": 600.0
         }
     ]
-    
+
     print(f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n")
-    
+
     for test in test_cases:
         size = estimate_file_size(test["info"])
         print(f"{test['name']}:")
         print(f"  Szacowany rozmiar: {size:.1f} MB" if size else "  Nie można oszacować")
-        
+
         if size and size > MAX_FILE_SIZE_MB:
             print(f"  ⚠️ Przekracza limit!")
         elif size:
             print(f"  ✅ Mieści się w limicie")
-    
+
     print("\n✅ Szacowanie rozmiaru działa\n")
 
 def test_env_variables():
     """Test zmiennych środowiskowych"""
     print("=== Test Zmiennych Środowiskowych ===")
-    
+
     # Sprawdź które zmienne są ustawione
     env_vars = ["TELEGRAM_BOT_TOKEN", "GROQ_API_KEY", "CLAUDE_API_KEY", "PIN_CODE"]
-    
+
     print("Sprawdzanie zmiennych środowiskowych:")
     for var in env_vars:
         value = os.environ.get(var)
@@ -150,22 +147,22 @@ def test_env_variables():
             print(f"  {var}: ✅ Ustawiona (długość: {len(value)})")
         else:
             print(f"  {var}: ❌ Nie ustawiona")
-    
+
     print("\n💡 Wskazówka: Możesz ustawić zmienne środowiskowe zamiast używać pliku api_key.md")
     print("   Przykład: export TELEGRAM_BOT_TOKEN='twój_token'\n")
 
 def main():
     """Uruchom wszystkie testy"""
     print("🔒 Testy Bezpieczeństwa YouTube Downloader\n")
-    
+
     try:
         test_rate_limiting()
         test_url_validation()
         test_file_size_estimation()
         test_env_variables()
-        
+
         print("✅ Wszystkie testy zakończone pomyślnie!")
-        
+
     except AssertionError as e:
         print(f"\n❌ Test nieudany: {e}")
         sys.exit(1)
