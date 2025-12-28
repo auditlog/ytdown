@@ -17,13 +17,14 @@ def test_json_persistence():
     """Test JSON persistence functions."""
 
     # Import functions we want to test
-    from youtube_downloader_telegram import (
+    from bot.config import (
         load_authorized_users,
         save_authorized_users,
-        manage_authorized_user,
         AUTHORIZED_USERS_FILE
     )
-    import youtube_downloader_telegram
+    from bot.security import manage_authorized_user
+    import bot.config as config_module
+    import bot.security as security_module
 
     print("🧪 Testowanie JSON persistence...")
 
@@ -32,11 +33,13 @@ def test_json_persistence():
     test_file = os.path.join(parent_dir, "test_persistence_users.json")
 
     # Override the file path for testing
-    youtube_downloader_telegram.AUTHORIZED_USERS_FILE = test_file
+    config_module.AUTHORIZED_USERS_FILE = test_file
 
-    # Also reset the global authorized_users set
-    original_authorized_users = youtube_downloader_telegram.authorized_users.copy()
-    youtube_downloader_telegram.authorized_users = set()
+    # Also reset the global authorized_users set in both modules
+    original_config_users = config_module.authorized_users.copy()
+    original_security_users = security_module.authorized_users
+    config_module.authorized_users = set()
+    security_module.authorized_users = config_module.authorized_users
 
     try:
         # Test 1: Loading empty file
@@ -80,8 +83,9 @@ def test_json_persistence():
         # Test 5: manage_authorized_user function
         print("\n5. Test funkcji manage_authorized_user...")
 
-        # Set the global authorized_users to match our test state
-        youtube_downloader_telegram.authorized_users = test_users.copy()
+        # Set the global authorized_users to match our test state (both modules)
+        config_module.authorized_users = test_users.copy()
+        security_module.authorized_users = config_module.authorized_users
 
         # Add new user
         result = manage_authorized_user(333444, 'add')
@@ -127,9 +131,10 @@ def test_json_persistence():
         if os.path.exists(test_file + '.tmp'):
             os.remove(test_file + '.tmp')
 
-        # Restore original state
-        youtube_downloader_telegram.AUTHORIZED_USERS_FILE = original_file
-        youtube_downloader_telegram.authorized_users = original_authorized_users
+        # Restore original state in both modules
+        config_module.AUTHORIZED_USERS_FILE = original_file
+        config_module.authorized_users = original_config_users
+        security_module.authorized_users = original_security_users
 
 if __name__ == "__main__":
     success = test_json_persistence()

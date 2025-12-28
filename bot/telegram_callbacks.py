@@ -1,0 +1,497 @@
+"""
+Telegram callbacks module for YouTube Downloader Telegram Bot.
+
+Contains callback query handlers and file download logic.
+"""
+
+import os
+import asyncio
+import logging
+from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor
+
+import yt_dlp
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import ContextTypes
+from telegram.error import BadRequest
+
+# Thread pool for running sync functions
+_executor = ThreadPoolExecutor(max_workers=2)
+
+from bot.config import (
+    CONFIG,
+    CONFIG_FILE_PATH,
+    DOWNLOAD_PATH,
+)
+from bot.security import (
+    MAX_FILE_SIZE_MB,
+    user_urls,
+)
+from bot.transcription import (
+    transcribe_mp3_file,
+    generate_summary,
+)
+from bot.downloader import (
+    get_video_info,
+    sanitize_filename,
+)
+
+
+async def safe_edit_message(query, text, reply_markup=None, parse_mode=None):
+    """
+    Safely edits message, ignoring 'message not modified' error.
+    """
+    try:
+        await query.edit_message_text(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode
+        )
+    except BadRequest as e:
+        if "Message is not modified" not in str(e):
+            raise
+
+
+async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles all callback queries."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    chat_id = update.effective_chat.id
+    url = user_urls.get(chat_id)
+
+    if not url:
+        await query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
+        return
+
+    if data.startswith("dl_"):
+        parts = data.split('_')
+        type = parts[1]
+
+        if type == "audio" and len(parts) >= 4 and parts[2] == "format":
+            format_id = parts[3]
+            await download_file(update, context, "audio", format_id, url)
+        elif type == "video" and len(parts) == 3:
+            format = parts[2]
+            await download_file(update, context, "video", format, url)
+        else:
+            format = parts[2] if len(parts) > 2 else "best"
+            await download_file(update, context, type, format, url)
+    elif data == "transcribe_summary":
+        await show_summary_options(update, context, url)
+    elif data.startswith("summary_option_"):
+        option = data.split('_')[2]
+        await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=int(option))
+    elif data == "transcribe":
+        await download_file(update, context, "audio", "mp3", url, transcribe=True)
+    elif data == "formats":
+        await handle_formats_list(update, context, url)
+    elif data == "back":
+        await back_to_main_menu(update, context, url)
+
+
+async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type, format, url, transcribe=False, summary=False, summary_type=None):
+    """Downloads file and sends it to user with progress updates."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    # Helper for status updates
+    async def update_status(text):
+        await safe_edit_message(query, text)
+
+    await update_status("Pobieranie informacji o filmie...")
+
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    current_date = datetime.now().strftime("%Y-%m-%d")
+
+    info = get_video_info(url)
+    if not info:
+        await update_status("Wystąpił błąd podczas pobierania informacji o filmie.")
+        return
+
+    title = info.get('title', 'Nieznany tytuł')
+    duration = info.get('duration', 0)
+    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
+
+    sanitized_title = sanitize_filename(title)
+    output_path = os.path.join(chat_download_path, f"{current_date} {sanitized_title}")
+
+    ydl_opts = {
+        'outtmpl': f"{output_path}.%(ext)s",
+        'quiet': True,
+        'no_warnings': True,
+        'socket_timeout': 30,
+        'retries': 3,
+        'fragment_retries': 3,
+        'ignoreerrors': False,
+    }
+
+    if type == "audio" or transcribe:
+        audio_format_to_use = "mp3" if transcribe else format
+
+        ydl_opts.update({
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': audio_format_to_use,
+                'preferredquality': '192',
+            }],
+        })
+    elif type == "video":
+        if format == "best":
+            ydl_opts['format'] = 'best'
+        elif format in ["1080p", "720p", "480p", "360p"]:
+            height = format.replace('p', '')
+            ydl_opts['format'] = f'best[height<={height}]/bestvideo[height<={height}]+bestaudio/best[height<={height}]'
+        else:
+            ydl_opts['format'] = format
+
+    try:
+        # Check file size first
+        await update_status(f"Sprawdzanie rozmiaru pliku...\n({duration_str})")
+
+        check_opts = ydl_opts.copy()
+        check_opts['simulate'] = True
+
+        with yt_dlp.YoutubeDL(check_opts) as ydl:
+            format_info = ydl.extract_info(url, download=False)
+
+            selected_format = None
+            if 'requested_formats' in format_info:
+                total_size = 0
+                for fmt in format_info['requested_formats']:
+                    if fmt.get('filesize'):
+                        total_size += fmt['filesize']
+                if total_size > 0:
+                    selected_format = {'filesize': total_size}
+            elif 'filesize' in format_info:
+                selected_format = format_info
+
+            if selected_format and selected_format.get('filesize'):
+                size_mb = selected_format['filesize'] / (1024 * 1024)
+                if size_mb > MAX_FILE_SIZE_MB:
+                    await update_status(
+                        f"Wybrany format jest zbyt duży!\n\n"
+                        f"Rozmiar: {size_mb:.1f} MB\n"
+                        f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
+                        f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
+                    )
+                    return
+
+        # Download file
+        await update_status(f"Pobieranie pliku...\nCzas trwania: {duration_str}\n\nTo może potrwać kilka minut.")
+
+        # Run download in thread pool to not block
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(_executor, lambda: yt_dlp.YoutubeDL(ydl_opts).download([url]))
+
+        # Find downloaded file
+        downloaded_file_path = None
+        for file in os.listdir(chat_download_path):
+            full_path = os.path.join(chat_download_path, file)
+            if sanitized_title in file and full_path.startswith(output_path):
+                downloaded_file_path = full_path
+                break
+
+        if not downloaded_file_path:
+            await update_status("Nie można znaleźć pobranego pliku.")
+            return
+
+        # Get file size
+        file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
+
+        if transcribe:
+            await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nRozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut.")
+
+            if not CONFIG["GROQ_API_KEY"]:
+                await update_status(
+                    "Błąd: Brak klucza API do transkrypcji w pliku konfiguracyjnym.\n"
+                    f"Dodaj klucz GROQ_API_KEY w pliku {CONFIG_FILE_PATH}."
+                )
+                return
+
+            # Create progress callback for transcription
+            current_status = {"text": ""}
+
+            def progress_callback(status_text):
+                current_status["text"] = status_text
+
+            # Run transcription in thread pool with progress updates
+            async def run_transcription_with_progress():
+                loop = asyncio.get_event_loop()
+
+                # Start transcription in background
+                future = loop.run_in_executor(
+                    _executor,
+                    lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, progress_callback)
+                )
+
+                # Update status while transcription is running
+                last_status = ""
+                while not future.done():
+                    if current_status["text"] and current_status["text"] != last_status:
+                        last_status = current_status["text"]
+                        await update_status(f"Transkrypcja w toku...\n\n{last_status}")
+                    await asyncio.sleep(2)
+
+                return await future
+
+            transcript_path = await run_transcription_with_progress()
+
+            if not transcript_path or not os.path.exists(transcript_path):
+                await update_status("Wystąpił błąd podczas transkrypcji.")
+                return
+
+            if summary:
+                if not CONFIG["CLAUDE_API_KEY"]:
+                    await update_status(
+                        "Błąd: Brak klucza API Claude w pliku konfiguracyjnym.\n"
+                        f"Dodaj klucz CLAUDE_API_KEY w pliku {CONFIG_FILE_PATH}."
+                    )
+                    return
+
+                await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
+
+                with open(transcript_path, 'r', encoding='utf-8') as f:
+                    transcript_text = f.read()
+
+                if transcript_text.startswith('# '):
+                    lines = transcript_text.split('\n')
+                    for i in range(1, len(lines)):
+                        if lines[i].strip():
+                            transcript_text = '\n'.join(lines[i:])
+                            break
+                    else:
+                        logging.warning("Transcription contains only header, using original text")
+
+                # Run summary generation in thread pool
+                loop = asyncio.get_event_loop()
+                summary_text = await loop.run_in_executor(
+                    _executor,
+                    lambda: generate_summary(transcript_text, summary_type)
+                )
+
+                if not summary_text:
+                    await update_status("Wystąpił błąd podczas generowania podsumowania.")
+                    return
+
+                await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
+
+                summary_path = os.path.join(chat_download_path, f"{sanitized_title}_summary.md")
+                with open(summary_path, 'w', encoding='utf-8') as f:
+                    summary_types = {
+                        1: "Krótkie podsumowanie",
+                        2: "Szczegółowe podsumowanie",
+                        3: "Podsumowanie w punktach",
+                        4: "Podział zadań na osoby"
+                    }
+                    summary_type_name = summary_types.get(summary_type, "Podsumowanie")
+                    f.write(f"# {title} - {summary_type_name}\n\n")
+                    f.write(summary_text)
+
+                with open(summary_path, 'r', encoding='utf-8') as f:
+                    summary_content = f.read()
+                    if summary_content.startswith('#'):
+                        summary_lines = summary_content.split('\n')
+                        summary_content = '\n'.join(summary_lines[2:]) if len(summary_lines) > 2 else '\n'.join(summary_lines[1:])
+
+                    summary_types = {
+                        1: "Krótkie podsumowanie",
+                        2: "Szczegółowe podsumowanie",
+                        3: "Podsumowanie w punktach",
+                        4: "Podział zadań na osoby"
+                    }
+                    summary_type_name = summary_types.get(summary_type, "Podsumowanie")
+
+                    max_length = 4000
+                    message_parts = []
+                    current_part = f"*{title} - {summary_type_name}*\n\n"
+
+                    for line in summary_content.split('\n'):
+                        if len(current_part) + len(line) + 2 > max_length:
+                            message_parts.append(current_part)
+                            current_part = line + '\n'
+                        else:
+                            current_part += line + '\n'
+
+                    if current_part:
+                        message_parts.append(current_part)
+
+                    for i, part in enumerate(message_parts):
+                        await context.bot.send_message(
+                            chat_id=chat_id,
+                            text=part,
+                            parse_mode='Markdown'
+                        )
+
+                    await update_status("Wysyłanie pliku z pełną transkrypcją...")
+
+                    with open(transcript_path, 'rb') as f:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=f,
+                            filename=os.path.basename(transcript_path),
+                            caption=f"Pełna transkrypcja: {title}"
+                        )
+
+                    await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+
+            else:
+                await update_status("Transkrypcja zakończona.\n\nWysyłanie pliku...")
+
+                with open(transcript_path, 'rb') as f:
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=f,
+                        filename=os.path.basename(transcript_path),
+                        caption=f"Transkrypcja: {title}"
+                    )
+
+                try:
+                    os.remove(downloaded_file_path)
+                    for f in os.listdir(chat_download_path):
+                        if f.startswith(f"{sanitized_title}_part") and f.endswith("_transcript.txt"):
+                            os.remove(os.path.join(chat_download_path, f))
+                except Exception as e:
+                    logging.error(f"Error deleting files: {e}")
+
+                await update_status("Transkrypcja została wysłana!")
+
+        else:
+            await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie pliku do Telegram...")
+
+            with open(downloaded_file_path, 'rb') as f:
+                if type == "audio":
+                    await context.bot.send_audio(
+                        chat_id=chat_id,
+                        audio=f,
+                        title=title,
+                        caption=f"{title}"
+                    )
+                else:
+                    await context.bot.send_video(
+                        chat_id=chat_id,
+                        video=f,
+                        caption=f"{title}"
+                    )
+
+            os.remove(downloaded_file_path)
+
+            await update_status("Plik został wysłany!")
+
+    except Exception as e:
+        await update_status(f"Wystąpił błąd: {str(e)}")
+
+
+async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    """Displays list of available formats."""
+    query = update.callback_query
+
+    info = get_video_info(url)
+    if not info:
+        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        return
+
+    title = info.get('title', 'Nieznany tytuł')
+
+    video_formats = []
+    audio_formats = []
+
+    for format in info.get('formats', []):
+        format_id = format.get('format_id', 'N/A')
+        ext = format.get('ext', 'N/A')
+        resolution = format.get('resolution', 'N/A')
+
+        if format.get('vcodec') == 'none':
+            if len(audio_formats) < 5:
+                audio_formats.append({
+                    'id': format_id,
+                    'desc': f"{format_id}: {ext}, {resolution}"
+                })
+        else:
+            if len(video_formats) < 5:
+                video_formats.append({
+                    'id': format_id,
+                    'desc': f"{format_id}: {ext}, {resolution}"
+                })
+
+    keyboard = []
+
+    for format in video_formats:
+        keyboard.append([InlineKeyboardButton(f"Video {format['desc']}", callback_data=f"dl_video_{format['id']}")])
+
+    for format in audio_formats:
+        keyboard.append([InlineKeyboardButton(f"Audio {format['desc']}", callback_data=f"dl_audio_format_{format['id']}")])
+
+    keyboard.append([InlineKeyboardButton("Powrót", callback_data="back")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        f"Formaty dla: {title}\n\nWybierz format:",
+        reply_markup=reply_markup
+    )
+
+
+async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    """Displays summary options."""
+    query = update.callback_query
+
+    info = get_video_info(url)
+    if not info:
+        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        return
+
+    title = info.get('title', 'Nieznany tytuł')
+
+    keyboard = [
+        [InlineKeyboardButton("1. Krótkie podsumowanie", callback_data="summary_option_1")],
+        [InlineKeyboardButton("2. Szczegółowe podsumowanie", callback_data="summary_option_2")],
+        [InlineKeyboardButton("3. Podsumowanie w punktach", callback_data="summary_option_3")],
+        [InlineKeyboardButton("4. Podział zadań na osoby", callback_data="summary_option_4")],
+        [InlineKeyboardButton("Powrót", callback_data="back")]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        f"*{title}*\n\nWybierz rodzaj podsumowania:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    """Returns to main menu."""
+    query = update.callback_query
+
+    info = get_video_info(url)
+    if not info:
+        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        return
+
+    title = info.get('title', 'Nieznany tytuł')
+
+    keyboard = [
+        [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
+        [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+        [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+        [InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")],
+        [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+        [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        [InlineKeyboardButton("Lista formatów", callback_data="formats")]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        f"*{title}*\n\nWybierz format do pobrania:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )

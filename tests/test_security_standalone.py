@@ -7,10 +7,10 @@ Nie wymaga zainstalowanych bibliotek Telegram
 import time
 from collections import defaultdict
 
-# Stałe z głównego pliku
+# Stałe z głównego pliku (matching bot/security.py)
 RATE_LIMIT_REQUESTS = 10
 RATE_LIMIT_WINDOW = 60
-MAX_FILE_SIZE_MB = 500
+MAX_FILE_SIZE_MB = 1000  # 1GB limit
 
 # Słownik do śledzenia requestów użytkowników
 user_requests = defaultdict(list)

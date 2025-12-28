@@ -11,8 +11,8 @@ import time
 parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, parent_dir)
 
-# Import functions from main module
-from youtube_downloader_telegram import (
+# Import functions from bot package
+from bot.security import (
     check_rate_limit,
     validate_youtube_url,
     estimate_file_size,

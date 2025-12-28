@@ -1,0 +1,198 @@
+"""
+Configuration module for YouTube Downloader Telegram Bot.
+
+Handles loading and validation of configuration from various sources:
+- Environment variables (highest priority)
+- .env file
+- api_key.md file
+- Default values (lowest priority)
+"""
+
+import os
+import re
+import json
+import shutil
+import logging
+from datetime import datetime
+
+# Configuration file path
+CONFIG_FILE_PATH = "api_key.md"
+
+# Default configuration values
+DEFAULT_CONFIG = {
+    "TELEGRAM_BOT_TOKEN": "",
+    "GROQ_API_KEY": "",
+    "PIN_CODE": "12345678",
+    "CLAUDE_API_KEY": ""
+}
+
+# Download directory
+DOWNLOAD_PATH = "./downloads"
+
+# Create download directory if it doesn't exist
+os.makedirs(DOWNLOAD_PATH, exist_ok=True)
+
+# Path to authorized users file
+AUTHORIZED_USERS_FILE = "authorized_users.json"
+
+
+def load_config():
+    """
+    Loads configuration from api_key.md or environment variables.
+    Priority: environment variables > .env file > api_key.md > default values
+
+    Returns:
+        dict: Configuration dictionary
+    """
+    config = DEFAULT_CONFIG.copy()
+
+    # Optional .env support
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+        logging.info("Loaded .env file (if exists)")
+    except ImportError:
+        pass
+
+    # Try to load from file
+    try:
+        if os.path.exists(CONFIG_FILE_PATH):
+            with open(CONFIG_FILE_PATH, "r") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and '=' in line:
+                        key, value = line.split('=', 1)
+                        config[key] = value
+            logging.info("Loaded configuration from file")
+        else:
+            logging.warning(f"Configuration file {CONFIG_FILE_PATH} does not exist.")
+    except Exception as e:
+        logging.error(f"Error loading configuration from file: {e}")
+
+    # Override with environment variables
+    env_vars = {
+        "TELEGRAM_BOT_TOKEN": os.environ.get("TELEGRAM_BOT_TOKEN"),
+        "GROQ_API_KEY": os.environ.get("GROQ_API_KEY"),
+        "CLAUDE_API_KEY": os.environ.get("CLAUDE_API_KEY"),
+        "PIN_CODE": os.environ.get("PIN_CODE")
+    }
+
+    for key, value in env_vars.items():
+        if value:
+            config[key] = value
+            logging.info(f"Using environment variable for {key}")
+
+    # Check for required keys
+    if not config.get("TELEGRAM_BOT_TOKEN"):
+        logging.error("ERROR: Missing TELEGRAM_BOT_TOKEN! Set in api_key.md or as environment variable.")
+
+    # Validate configuration
+    validate_config(config)
+
+    return config
+
+
+def validate_config(config):
+    """
+    Validates configuration and displays warnings.
+
+    Args:
+        config: Configuration dictionary to validate
+    """
+    # Check PIN format
+    pin = config.get("PIN_CODE", "")
+    if not pin:
+        logging.error("ERROR: Missing PIN_CODE in configuration!")
+    elif not pin.isdigit() or len(pin) != 8:
+        logging.error(f"ERROR: PIN_CODE must be an 8-digit code! Received: {pin}")
+    elif pin == "12345678":
+        logging.warning("WARNING: Using default PIN! Change it for security.")
+
+    # Check Telegram token
+    telegram_token = config.get("TELEGRAM_BOT_TOKEN", "")
+    if telegram_token:
+        if not re.match(r'^\d{8,10}:[A-Za-z0-9_-]{35}$', telegram_token):
+            logging.warning("WARNING: TELEGRAM_BOT_TOKEN format may be invalid!")
+
+    # Check Groq key
+    groq_key = config.get("GROQ_API_KEY", "")
+    if groq_key and len(groq_key) < 20:
+        logging.warning("WARNING: GROQ_API_KEY seems too short!")
+
+    # Check Claude key
+    claude_key = config.get("CLAUDE_API_KEY", "")
+    if claude_key and not claude_key.startswith("sk-"):
+        logging.warning("WARNING: CLAUDE_API_KEY should start with 'sk-'!")
+
+    # Check config file permissions (Unix only)
+    if os.path.exists(CONFIG_FILE_PATH) and hasattr(os, 'stat'):
+        try:
+            file_stats = os.stat(CONFIG_FILE_PATH)
+            file_mode = oct(file_stats.st_mode)[-3:]
+            if file_mode != '600':
+                logging.warning(f"WARNING: File {CONFIG_FILE_PATH} has permissions {file_mode}. "
+                              f"Recommended: 600 (owner read/write only).")
+                logging.warning(f"Run: chmod 600 {CONFIG_FILE_PATH}")
+        except:
+            pass
+
+
+def load_authorized_users():
+    """
+    Loads list of authorized users from JSON file.
+
+    Returns:
+        set: Set of user_id for authorized users
+    """
+    try:
+        if os.path.exists(AUTHORIZED_USERS_FILE):
+            with open(AUTHORIZED_USERS_FILE, 'r') as f:
+                data = json.load(f)
+                return set(int(user_id) for user_id in data.get('authorized_users', []))
+        else:
+            logging.info(f"File {AUTHORIZED_USERS_FILE} does not exist. Creating new.")
+            return set()
+    except (json.JSONDecodeError, ValueError, IOError) as e:
+        logging.warning(f"Error loading {AUTHORIZED_USERS_FILE}: {e}")
+        logging.warning("Using empty authorized users list.")
+        return set()
+
+
+def save_authorized_users(authorized_users_set):
+    """
+    Saves list of authorized users to JSON file.
+
+    Args:
+        authorized_users_set: Set of authorized user IDs
+    """
+    try:
+        data = {
+            'authorized_users': [str(user_id) for user_id in authorized_users_set],
+            'last_updated': datetime.now().isoformat(),
+            'version': '1.0'
+        }
+
+        # Write to temp file then move (atomic write)
+        temp_file = AUTHORIZED_USERS_FILE + '.tmp'
+        with open(temp_file, 'w') as f:
+            json.dump(data, f, indent=2)
+
+        shutil.move(temp_file, AUTHORIZED_USERS_FILE)
+
+        # Set secure permissions (Unix only)
+        if hasattr(os, 'chmod'):
+            os.chmod(AUTHORIZED_USERS_FILE, 0o600)
+
+        logging.debug(f"Saved {len(authorized_users_set)} authorized users to {AUTHORIZED_USERS_FILE}")
+
+    except (IOError, OSError) as e:
+        logging.error(f"Error saving {AUTHORIZED_USERS_FILE}: {e}")
+
+
+# Initialize configuration on module load
+CONFIG = load_config()
+BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
+PIN_CODE = CONFIG["PIN_CODE"]
+
+# Load authorized users from JSON file
+authorized_users = load_authorized_users()

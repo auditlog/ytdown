@@ -102,18 +102,21 @@ $env:PIN_CODE="12345678"
 
 ### Bot Telegram
 ```bash
-python youtube_downloader_telegram.py
+python main.py
 ```
 
 ### Tryb CLI (interfejs tekstowy)
 ```bash
-python youtube_downloader_telegram.py --cli --url https://youtube.com/watch?v=...
+python main.py --cli --url https://youtube.com/watch?v=...
 ```
 
 ### Testy
 ```bash
+python -m pytest tests/
+# lub pojedyncze testy:
 python tests/test_security.py
 python tests/test_security_standalone.py
+python tests/test_json_persistence.py
 ```
 
 ## Komendy bota Telegram
@@ -147,14 +150,25 @@ Bot oferuje 4 typy streszczeń AI (Claude Haiku 4.5):
 
 ```
 ytdown/
-├── youtube_downloader_telegram.py  # Główna aplikacja
+├── main.py                         # Entry point aplikacji
+├── bot/                            # Główny pakiet aplikacji
+│   ├── __init__.py                 # Eksporty pakietu
+│   ├── config.py                   # Konfiguracja i zarządzanie użytkownikami
+│   ├── security.py                 # Rate limiting, walidacja URL, bezpieczeństwo
+│   ├── cleanup.py                  # Czyszczenie plików i monitoring dysku
+│   ├── transcription.py            # Transkrypcja (Groq) i podsumowania (Claude)
+│   ├── downloader.py               # Pobieranie z YouTube (yt-dlp)
+│   ├── cli.py                      # Interfejs wiersza poleceń
+│   ├── telegram_commands.py        # Handlery komend Telegram (/start, /help, etc.)
+│   └── telegram_callbacks.py       # Handlery callbacków (przyciski, pobieranie)
 ├── setup_config.py                 # Narzędzie konfiguracyjne
 ├── tests/                          # Testy
-│   ├── test_security.py
-│   ├── test_security_standalone.py
-│   ├── test_json_persistence.py
-│   └── test_json_simple.py
-├── api_key.md                      # Konfiguracja (ignorowany)
+│   ├── test_security.py            # Testy bezpieczeństwa (wymaga importów)
+│   ├── test_security_standalone.py # Testy standalone (bez zależności)
+│   ├── test_json_persistence.py    # Testy persystencji JSON
+│   └── test_json_simple.py         # Proste testy JSON
+├── api_key.md                      # Konfiguracja (ignorowany przez git)
+├── authorized_users.json           # Lista autoryzowanych użytkowników (ignorowany)
 ├── README.md                       # Ten plik
 ├── SECURITY_NOTES.md               # Uwagi bezpieczeństwa
 └── downloads/                      # Pobrane pliki (ignorowany)
