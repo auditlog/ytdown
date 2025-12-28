@@ -27,6 +27,7 @@ from bot.telegram_commands import (
     start,
     help_command,
     status_command,
+    history_command,
     cleanup_command,
     users_command,
     handle_youtube_link,
@@ -46,6 +47,7 @@ async def set_bot_commands(application):
         BotCommand("start", "Rozpocznij korzystanie z bota"),
         BotCommand("help", "Pomoc i instrukcje"),
         BotCommand("status", "Sprawdź przestrzeń dyskową"),
+        BotCommand("history", "Historia pobrań"),
         BotCommand("cleanup", "Usuń stare pliki (>24h)"),
         BotCommand("users", "Zarządzanie użytkownikami")
     ]
@@ -88,6 +90,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
+    application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("cleanup", cleanup_command))
     application.add_handler(CommandHandler("users", users_command))
 

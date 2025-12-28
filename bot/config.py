@@ -189,6 +189,125 @@ def save_authorized_users(authorized_users_set):
         logging.error(f"Error saving {AUTHORIZED_USERS_FILE}: {e}")
 
 
+# Path to download history file
+DOWNLOAD_HISTORY_FILE = "download_history.json"
+
+# Maximum number of history entries to keep
+MAX_HISTORY_ENTRIES = 500
+
+
+def load_download_history():
+    """
+    Loads download history from JSON file.
+
+    Returns:
+        list: List of download records
+    """
+    try:
+        if os.path.exists(DOWNLOAD_HISTORY_FILE):
+            with open(DOWNLOAD_HISTORY_FILE, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+                return data.get('downloads', [])
+        else:
+            return []
+    except (json.JSONDecodeError, ValueError, IOError) as e:
+        logging.warning(f"Error loading {DOWNLOAD_HISTORY_FILE}: {e}")
+        return []
+
+
+def save_download_history(history):
+    """
+    Saves download history to JSON file.
+
+    Args:
+        history: List of download records
+    """
+    try:
+        # Keep only the last MAX_HISTORY_ENTRIES
+        if len(history) > MAX_HISTORY_ENTRIES:
+            history = history[-MAX_HISTORY_ENTRIES:]
+
+        data = {
+            'downloads': history,
+            'last_updated': datetime.now().isoformat(),
+            'version': '1.0'
+        }
+
+        temp_file = DOWNLOAD_HISTORY_FILE + '.tmp'
+        with open(temp_file, 'w', encoding='utf-8') as f:
+            json.dump(data, f, indent=2, ensure_ascii=False)
+
+        shutil.move(temp_file, DOWNLOAD_HISTORY_FILE)
+        logging.debug(f"Saved {len(history)} download records to {DOWNLOAD_HISTORY_FILE}")
+
+    except (IOError, OSError) as e:
+        logging.error(f"Error saving {DOWNLOAD_HISTORY_FILE}: {e}")
+
+
+def add_download_record(user_id, title, url, format_type, file_size_mb=None, time_range=None):
+    """
+    Adds a download record to history.
+
+    Args:
+        user_id: Telegram user ID
+        title: Video/audio title
+        url: YouTube URL
+        format_type: Download format (e.g., "video_best", "audio_mp3")
+        file_size_mb: File size in MB (optional)
+        time_range: Time range dict (optional)
+    """
+    history = load_download_history()
+
+    record = {
+        'timestamp': datetime.now().isoformat(),
+        'user_id': user_id,
+        'title': title,
+        'url': url,
+        'format': format_type,
+    }
+
+    if file_size_mb:
+        record['file_size_mb'] = round(file_size_mb, 2)
+
+    if time_range:
+        record['time_range'] = f"{time_range.get('start', '0:00')}-{time_range.get('end', 'end')}"
+
+    history.append(record)
+    save_download_history(history)
+
+
+def get_download_stats(user_id=None):
+    """
+    Gets download statistics.
+
+    Args:
+        user_id: Optional user ID to filter stats
+
+    Returns:
+        dict: Statistics dictionary
+    """
+    history = load_download_history()
+
+    if user_id:
+        history = [h for h in history if h.get('user_id') == user_id]
+
+    total_downloads = len(history)
+    total_size = sum(h.get('file_size_mb', 0) for h in history)
+
+    # Count by format
+    format_counts = {}
+    for h in history:
+        fmt = h.get('format', 'unknown')
+        format_counts[fmt] = format_counts.get(fmt, 0) + 1
+
+    return {
+        'total_downloads': total_downloads,
+        'total_size_mb': round(total_size, 2),
+        'format_counts': format_counts,
+        'recent': history[-10:][::-1] if history else []  # Last 10, newest first
+    }
+
+
 # Initialize configuration on module load
 CONFIG = load_config()
 BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]

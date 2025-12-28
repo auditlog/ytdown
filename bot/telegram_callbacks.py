@@ -26,6 +26,7 @@ from bot.config import (
     CONFIG,
     CONFIG_FILE_PATH,
     DOWNLOAD_PATH,
+    add_download_record,
 )
 from bot.security import (
     MAX_FILE_SIZE_MB,
@@ -464,6 +465,9 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                             caption=f"Pełna transkrypcja: {title}"
                         )
 
+                    # Record transcription+summary in history
+                    add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range)
+
                     await update_status("Transkrypcja i podsumowanie zostały wysłane!")
 
             else:
@@ -484,6 +488,9 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                             os.remove(os.path.join(chat_download_path, f))
                 except Exception as e:
                     logging.error(f"Error deleting files: {e}")
+
+                # Record transcription in history
+                add_download_record(chat_id, title, url, "transcription", file_size_mb, time_range)
 
                 await update_status("Transkrypcja została wysłana!")
 
@@ -506,6 +513,10 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                     )
 
             os.remove(downloaded_file_path)
+
+            # Record download in history
+            format_type = f"{type}_{format}"
+            add_download_record(chat_id, title, url, format_type, file_size_mb, time_range)
 
             await update_status("Plik został wysłany!")
 

@@ -16,6 +16,7 @@ from bot.config import (
     DOWNLOAD_PATH,
     PIN_CODE,
     authorized_users,
+    get_download_stats,
 )
 from bot.security import (
     MAX_ATTEMPTS,
@@ -207,6 +208,49 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         status_msg += "**KRYTYCZNIE mało miejsca!**\n"
 
     await update.message.reply_text(status_msg, parse_mode='Markdown')
+
+
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /history command - shows download history and statistics."""
+    user_id = update.effective_user.id
+
+    if user_id not in authorized_users:
+        await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
+        return
+
+    # Get stats for this user
+    stats = get_download_stats(user_id)
+
+    if stats['total_downloads'] == 0:
+        await update.message.reply_text("Brak historii pobrań.")
+        return
+
+    # Format message
+    msg = "📊 **Historia pobrań**\n\n"
+    msg += f"**Twoje statystyki:**\n"
+    msg += f"- Łączna liczba pobrań: {stats['total_downloads']}\n"
+    msg += f"- Łączny rozmiar: {stats['total_size_mb']:.1f} MB\n\n"
+
+    # Format counts
+    if stats['format_counts']:
+        msg += "**Formaty:**\n"
+        for fmt, count in sorted(stats['format_counts'].items(), key=lambda x: -x[1]):
+            msg += f"- {fmt}: {count}\n"
+        msg += "\n"
+
+    # Recent downloads
+    if stats['recent']:
+        msg += "**Ostatnie pobrania:**\n"
+        for record in stats['recent'][:5]:
+            title = record.get('title', 'Nieznany')[:40]
+            if len(record.get('title', '')) > 40:
+                title += "..."
+            timestamp = record.get('timestamp', '')[:10]  # Just date
+            fmt = record.get('format', '?')
+            size = record.get('file_size_mb', 0)
+            msg += f"- `{timestamp}` {title} ({fmt}, {size:.1f}MB)\n"
+
+    await update.message.reply_text(msg, parse_mode='Markdown')
 
 
 async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
