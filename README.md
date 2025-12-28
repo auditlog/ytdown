@@ -188,7 +188,7 @@ Szczegóły w pliku [SECURITY_NOTES.md](SECURITY_NOTES.md)
 
 ## Ograniczenia
 
-- Max 25MB dla pojedynczej części transkrypcji (większe pliki są dzielone automatycznie)
+- Max 20MB dla pojedynczej części transkrypcji (większe pliki są dzielone automatycznie)
 - Telegram limit: 50MB dla plików, 4096 znaków dla wiadomości
 - Max 16384 tokenów dla streszczeń Claude
 
