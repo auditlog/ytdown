@@ -185,6 +185,11 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
         'retries': 3,
         'fragment_retries': 3,
         'ignoreerrors': False,
+        # Download speed optimizations
+        'concurrent_fragment_downloads': 4,  # parallel fragment downloads
+        'throttled_rate': '100K',  # switch server if speed drops below 100KB/s
+        'buffer_size': 1024 * 16,  # 16KB buffer
+        'http_chunk_size': 10485760,  # 10MB chunks
     }
 
     if type == "audio" or transcribe:
