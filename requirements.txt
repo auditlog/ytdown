@@ -1,0 +1,15 @@
+# Production dependencies
+yt-dlp>=2024.12.6
+mutagen>=1.47.0
+python-telegram-bot>=21.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+
+# Development dependencies (optional)
+# pytest>=8.0.0
+# pytest-asyncio>=0.23.0
+# pytest-cov>=4.1.0
+# black>=24.0.0
+# ruff>=0.1.0
+# mypy>=1.8.0
+# types-requests>=2.31.0
