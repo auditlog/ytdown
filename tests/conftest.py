@@ -154,6 +154,9 @@ def mock_yt_dlp(monkeypatch, sample_video_info):
 @pytest.fixture
 def mock_groq_api(monkeypatch):
     """Mock Groq API for transcription testing."""
+    # Mock API key so transcription doesn't return early
+    monkeypatch.setattr("bot.transcription.get_api_key", lambda: "test_groq_api_key")
+
     def mock_post(*args, **kwargs):
         response = Mock()
         response.status_code = 200
@@ -169,6 +172,9 @@ def mock_groq_api(monkeypatch):
 @pytest.fixture
 def mock_claude_api(monkeypatch):
     """Mock Claude API for summarization testing."""
+    # Mock API key so summarization doesn't return early
+    monkeypatch.setattr("bot.transcription.get_claude_api_key", lambda: "test_claude_api_key")
+
     def mock_post(*args, **kwargs):
         response = Mock()
         response.status_code = 200

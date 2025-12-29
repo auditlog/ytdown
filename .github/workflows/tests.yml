@@ -35,6 +35,9 @@ jobs:
         pip install pytest pytest-asyncio pytest-cov
 
     - name: Run tests
+      env:
+        GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
+        CLAUDE_API_KEY: ${{ secrets.CLAUDE_API_KEY }}
       run: |
         python -m pytest tests/ -v --tb=short
 
