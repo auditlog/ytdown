@@ -40,6 +40,59 @@ from bot.cleanup import (
 from bot.downloader import get_video_info
 
 
+def parse_time_range(text: str) -> dict | None:
+    """
+    Parses time range input in formats like:
+    - "0:30-5:45" (MM:SS-MM:SS)
+    - "1:00:00-1:30:00" (HH:MM:SS-HH:MM:SS)
+    - "30-5:45" (SS-MM:SS)
+    
+    Returns dict with start, end, start_sec, end_sec or None if invalid.
+    """
+    import re
+    
+    # Match pattern: time-time where time is either SS, MM:SS, or HH:MM:SS
+    time_pattern = r'^(\d{1,2}(?::\d{2}){0,2})\s*-\s*(\d{1,2}(?::\d{2}){0,2})$'
+    match = re.match(time_pattern, text.strip())
+    
+    if not match:
+        return None
+    
+    def time_to_seconds(time_str: str) -> int:
+        """Converts time string to seconds."""
+        parts = time_str.split(':')
+        if len(parts) == 1:
+            return int(parts[0])
+        elif len(parts) == 2:
+            return int(parts[0]) * 60 + int(parts[1])
+        elif len(parts) == 3:
+            return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        return 0
+    
+    def format_time(seconds: int) -> str:
+        """Formats seconds to MM:SS or HH:MM:SS."""
+        if seconds >= 3600:
+            return f"{seconds // 3600}:{(seconds % 3600) // 60:02d}:{seconds % 60:02d}"
+        return f"{seconds // 60}:{seconds % 60:02d}"
+    
+    try:
+        start_sec = time_to_seconds(match.group(1))
+        end_sec = time_to_seconds(match.group(2))
+        
+        # Validate: start must be less than end
+        if start_sec >= end_sec:
+            return None
+        
+        return {
+            'start': format_time(start_sec),
+            'end': format_time(end_sec),
+            'start_sec': start_sec,
+            'end_sec': end_sec
+        }
+    except (ValueError, IndexError):
+        return None
+
+
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /start command."""
     user_id = update.effective_user.id
@@ -300,8 +353,9 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 
 async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handles YouTube links."""
+    """Handles YouTube links and custom time range input."""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     message_text = update.message.text
 
     # First check if message is handled as PIN
@@ -320,6 +374,52 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
 
         context.user_data["awaiting_pin"] = True
         return
+
+    # Check if user has an active URL session and message looks like a time range
+    current_url = user_urls.get(chat_id)
+    if current_url:
+        time_range = parse_time_range(message_text)
+        if time_range:
+            # Get video info to validate time range against duration
+            info = get_video_info(current_url)
+            if info:
+                duration = info.get('duration', 0)
+                title = info.get('title', 'Nieznany tytuł')
+                duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
+                
+                # Validate end time doesn't exceed duration
+                if duration and time_range['end_sec'] > duration:
+                    await update.message.reply_text(
+                        f"❌ Nieprawidłowy zakres!\n\n"
+                        f"Czas końcowy ({time_range['end']}) przekracza czas trwania filmu ({duration_str})."
+                    )
+                    return
+                
+                # Apply the custom time range
+                user_time_ranges[chat_id] = time_range
+                
+                # Send confirmation and show main menu with updated time range
+                keyboard = [
+                    [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
+                    [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+                    [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+                    [InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")],
+                    [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+                    [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+                    [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
+                    [InlineKeyboardButton("Lista formatów", callback_data="formats")]
+                ]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                
+                await update.message.reply_text(
+                    f"✅ Ustawiono zakres: {time_range['start']} - {time_range['end']}\n\n"
+                    f"*{title}*\nCzas trwania: {duration_str}\n"
+                    f"✂️ Zakres: {time_range['start']} - {time_range['end']}\n\n"
+                    f"Wybierz format do pobrania:",
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
+                return
 
     # Check rate limit
     if not check_rate_limit(user_id):
