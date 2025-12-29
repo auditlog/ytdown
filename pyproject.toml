@@ -4,7 +4,6 @@ version = "1.0.0"
 description = "YouTube Downloader Telegram Bot with AI transcription and summarization"
 authors = ["Your Name <your.email@example.com>"]
 readme = "README.md"
-python = "^3.8"
 packages = [{include = "bot"}]
 
 [tool.poetry.dependencies]

@@ -3,6 +3,7 @@ Tests for Poetry configuration and project structure.
 """
 
 import os
+import shutil
 import subprocess
 import tomllib
 import pytest
@@ -43,16 +44,17 @@ class TestPoetryConfiguration:
             config = tomllib.load(f)
 
         poetry_config = config["tool"]["poetry"]
+        dependencies = poetry_config["dependencies"]
 
         # Check required metadata
         assert "name" in poetry_config
         assert poetry_config["name"] == "ytdown"
         assert "version" in poetry_config
         assert "description" in poetry_config
-        assert "python" in poetry_config
+        assert "python" in dependencies
 
         # Check Python version requirement
-        python_req = poetry_config["python"]
+        python_req = dependencies["python"]
         assert python_req.startswith("^3.8") or python_req.startswith(">=3.8")
 
     def test_dependencies_defined(self):

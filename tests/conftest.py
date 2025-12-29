@@ -205,6 +205,21 @@ def mock_ffmpeg(monkeypatch):
         result.returncode = 0
         result.stdout = ""
         result.stderr = "silence_end: 60.5\nsilence_end: 120.3\nsilence_end: 180.7"
+
+        # If this is an ffmpeg command with output file, create the output file
+        cmd = args[0] if args else kwargs.get("args", [])
+        if isinstance(cmd, list) and "ffmpeg" in str(cmd):
+            # Find output file (last argument that's not an option)
+            for i, arg in enumerate(cmd):
+                if arg == "-y" and i + 1 < len(cmd):
+                    continue
+                if not str(arg).startswith("-") and str(arg).endswith(".mp3"):
+                    # Create the output file with mock data
+                    output_path = Path(arg)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(output_path, "wb") as f:
+                        f.write(b"\xFF\xFB\x90\x00" + b"\x00" * (10 * 1024 * 1024))  # 10MB
+
         return result
 
     monkeypatch.setattr("subprocess.run", mock_run)
