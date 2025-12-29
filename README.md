@@ -28,7 +28,7 @@ Bot Telegram do pobierania filmów z YouTube z funkcjami transkrypcji i podsumow
 
 ## Wymagania
 
-- Python 3.8+
+- Python 3.12+
 - ffmpeg (zainstalowany w systemie)
 - Poetry (package manager)
 

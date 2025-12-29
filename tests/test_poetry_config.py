@@ -55,7 +55,7 @@ class TestPoetryConfiguration:
 
         # Check Python version requirement
         python_req = dependencies["python"]
-        assert python_req.startswith("^3.8") or python_req.startswith(">=3.8")
+        assert python_req.startswith("^3.12") or python_req.startswith(">=3.12")
 
     def test_dependencies_defined(self):
         """Test that all required dependencies are defined."""
@@ -137,12 +137,12 @@ class TestPoetryConfiguration:
         # Verify Black configuration
         black_config = tool_config["black"]
         assert black_config["line-length"] == 100
-        assert "py38" in str(black_config["target-version"])
+        assert "py312" in str(black_config["target-version"])
 
         # Verify Ruff configuration
         ruff_config = tool_config["ruff"]
         assert ruff_config["line-length"] == 100
-        assert ruff_config["target-version"] == "py38"
+        assert ruff_config["target-version"] == "py312"
 
     def test_pytest_configuration(self):
         """Test pytest configuration in pyproject.toml."""
