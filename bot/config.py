@@ -13,6 +13,7 @@ import re
 import json
 import shutil
 import logging
+import threading
 from datetime import datetime
 
 # Configuration file path
@@ -195,6 +196,9 @@ DOWNLOAD_HISTORY_FILE = "download_history.json"
 # Maximum number of history entries to keep
 MAX_HISTORY_ENTRIES = 500
 
+# Lock for thread-safe history operations
+_history_lock = threading.Lock()
+
 
 def load_download_history():
     """
@@ -248,6 +252,8 @@ def add_download_record(user_id, title, url, format_type, file_size_mb=None, tim
     """
     Adds a download record to history.
 
+    Thread-safe: uses lock to prevent race conditions during concurrent downloads.
+
     Args:
         user_id: Telegram user ID
         title: Video/audio title
@@ -256,8 +262,6 @@ def add_download_record(user_id, title, url, format_type, file_size_mb=None, tim
         file_size_mb: File size in MB (optional)
         time_range: Time range dict (optional)
     """
-    history = load_download_history()
-
     record = {
         'timestamp': datetime.now().isoformat(),
         'user_id': user_id,
@@ -272,8 +276,10 @@ def add_download_record(user_id, title, url, format_type, file_size_mb=None, tim
     if time_range:
         record['time_range'] = f"{time_range.get('start', '0:00')}-{time_range.get('end', 'end')}"
 
-    history.append(record)
-    save_download_history(history)
+    with _history_lock:
+        history = load_download_history()
+        history.append(record)
+        save_download_history(history)
 
 
 def get_download_stats(user_id=None):

@@ -102,5 +102,10 @@ def setup_config():
     
     return 0
 
-if __name__ == "__main__":
+def main():
+    """Entry point for poetry script."""
     sys.exit(setup_config())
+
+
+if __name__ == "__main__":
+    main()
