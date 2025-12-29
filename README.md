@@ -155,6 +155,7 @@ python tests/test_json_persistence.py
 | `/start` | Rozpocznij korzystanie z bota |
 | `/help` | Pomoc i instrukcje |
 | `/status` | Sprawdź przestrzeń dyskową i statystyki |
+| `/history` | Historia pobrań i statystyki użytkownika |
 | `/cleanup` | Ręczne usunięcie starych plików |
 | `/users` | Zarządzanie autoryzowanymi użytkownikami |
 
