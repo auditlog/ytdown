@@ -28,18 +28,47 @@ Bot Telegram do pobierania filmów z YouTube z funkcjami transkrypcji i podsumow
 
 ## Wymagania
 
-- Python 3.7+
+- Python 3.12+
 - ffmpeg (zainstalowany w systemie)
+- Poetry (package manager)
 
 ## Instalacja
+
+### Opcja 1: Instalacja z Poetry (zalecane)
 
 ```bash
 # Klonuj repozytorium
 git clone https://github.com/auditlog/ytdown.git
 cd ytdown
 
+# Zainstaluj Poetry (jeśli nie masz)
+curl -sSL https://install.python-poetry.org | python3 -
+# lub na Windows: (Invoke-WebRequest -Uri https://install.python-poetry.org -UseBasicParsing).Content | py -
+
+# Zainstaluj zależności projektu
+poetry install
+
+# Aktywuj środowisko wirtualne
+poetry shell
+
+# Lub uruchom bezpośrednio przez Poetry
+poetry run python main.py
+```
+
+### Opcja 2: Instalacja z pip (tradycyjna)
+
+```bash
+# Klonuj repozytorium
+git clone https://github.com/auditlog/ytdown.git
+cd ytdown
+
+# Utwórz środowisko wirtualne
+python -m venv venv
+source venv/bin/activate  # Linux/macOS
+# lub: venv\Scripts\activate  # Windows
+
 # Zainstaluj zależności
-pip install yt-dlp mutagen python-telegram-bot requests
+pip install yt-dlp mutagen python-telegram-bot requests python-dotenv
 ```
 
 ### Instalacja ffmpeg

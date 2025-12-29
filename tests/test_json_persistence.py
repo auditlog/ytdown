@@ -116,13 +116,12 @@ def test_json_persistence():
                 print(f"⚠️  Uprawnienia pliku: {file_mode} (oczekiwano 600 - WSL/Windows może mieć inne)")
 
         print(f"\n🎉 Wszystkie testy przeszły pomyślnie!")
-        return True
 
     except Exception as e:
         print(f"\n❌ Test nieudany: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise
 
     finally:
         # Cleanup
@@ -137,5 +136,4 @@ def test_json_persistence():
         security_module.authorized_users = original_security_users
 
 if __name__ == "__main__":
-    success = test_json_persistence()
-    sys.exit(0 if success else 1)
+    test_json_persistence()

@@ -254,6 +254,8 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None):
     Returns:
         str or None: Path to transcription file or None on error
     """
+    import time as time_module
+
     api_key = get_api_key()
     if not api_key:
         logging.error("Cannot read API key from api_key.md.")
@@ -262,28 +264,53 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None):
     temp_dir = os.path.join(output_dir, "temp_parts")
     os.makedirs(temp_dir, exist_ok=True)
 
+    # Get original file size
+    original_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+
+    if progress_callback:
+        progress_callback(f"Dzielenie pliku ({original_size_mb:.1f} MB) na części...")
+
     part_files = split_mp3(file_path, temp_dir)
     part_files.sort(key=lambda x: get_part_number(os.path.basename(x)))
 
     transcriptions = []
     total_parts = len(part_files)
+    total_characters = 0
+    start_time = time_module.time()
     logging.info(f"Found {total_parts} part files to transcribe.")
 
     base_name = os.path.splitext(os.path.basename(file_path))[0]
 
     for i, part_path in enumerate(part_files):
         part_num = i + 1
+        part_size_mb = os.path.getsize(part_path) / (1024 * 1024)
         logging.info(f"Transcribing file {part_num}/{total_parts}: {part_path}")
 
-        # Report progress via callback
+        # Calculate estimated time remaining
+        elapsed = time_module.time() - start_time
+        if i > 0:
+            avg_time_per_part = elapsed / i
+            remaining_parts = total_parts - i
+            eta_seconds = int(avg_time_per_part * remaining_parts)
+            eta_str = f"{eta_seconds // 60}m {eta_seconds % 60}s" if eta_seconds >= 60 else f"{eta_seconds}s"
+        else:
+            eta_str = "obliczanie..."
+
+        # Report progress via callback with details
         if progress_callback:
-            progress_callback(f"Transkrypcja części {part_num}/{total_parts}...")
+            progress_callback(
+                f"Transkrypcja części {part_num}/{total_parts}\n"
+                f"Rozmiar części: {part_size_mb:.1f} MB\n"
+                f"Przetworzone znaki: {total_characters:,}\n"
+                f"Pozostały czas: ~{eta_str}"
+            )
 
         transcription = transcribe_audio(part_path, api_key)
 
         if transcription:
             logging.info(f"Part {i+1}: transcription has {len(transcription)} characters")
             transcriptions.append(transcription)
+            total_characters += len(transcription)
         else:
             logging.warning(f"Part {i+1}: transcription is empty!")
             transcriptions.append("[No transcription for this part]")
@@ -295,6 +322,17 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None):
             f.write(transcription if transcription else "[Transcription error]")
 
         logging.info(f"Saved transcription for part {part_num} ({len(transcription) if transcription else 0} characters)")
+
+    # Final progress update
+    if progress_callback:
+        elapsed_total = time_module.time() - start_time
+        elapsed_str = f"{int(elapsed_total // 60)}m {int(elapsed_total % 60)}s" if elapsed_total >= 60 else f"{int(elapsed_total)}s"
+        progress_callback(
+            f"Łączenie transkrypcji...\n"
+            f"Części: {total_parts}\n"
+            f"Łącznie znaków: {total_characters:,}\n"
+            f"Czas transkrypcji: {elapsed_str}"
+        )
 
     valid_transcriptions = [t for t in transcriptions if t and t.strip()]
     combined_text = "\n\n".join(valid_transcriptions)

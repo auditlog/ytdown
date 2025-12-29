@@ -7,6 +7,7 @@ Contains callback query handlers and file download logic.
 import os
 import asyncio
 import logging
+import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
@@ -18,14 +19,19 @@ from telegram.error import BadRequest
 # Thread pool for running sync functions
 _executor = ThreadPoolExecutor(max_workers=2)
 
+# Global download progress state (per chat_id)
+_download_progress = {}
+
 from bot.config import (
     CONFIG,
     CONFIG_FILE_PATH,
     DOWNLOAD_PATH,
+    add_download_record,
 )
 from bot.security import (
     MAX_FILE_SIZE_MB,
     user_urls,
+    user_time_ranges,
 )
 from bot.transcription import (
     transcribe_mp3_file,
@@ -35,6 +41,60 @@ from bot.downloader import (
     get_video_info,
     sanitize_filename,
 )
+
+
+def format_bytes(bytes_value):
+    """Formats bytes to human readable string."""
+    if bytes_value is None:
+        return "?"
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if bytes_value < 1024:
+            return f"{bytes_value:.1f} {unit}"
+        bytes_value /= 1024
+    return f"{bytes_value:.1f} TB"
+
+
+def format_eta(seconds):
+    """Formats seconds to human readable time string."""
+    if seconds is None or seconds < 0:
+        return "?"
+    if seconds < 60:
+        return f"{int(seconds)}s"
+    elif seconds < 3600:
+        return f"{int(seconds // 60)}m {int(seconds % 60)}s"
+    else:
+        return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m"
+
+
+def create_progress_hook(chat_id):
+    """Creates a progress hook for yt-dlp that updates global progress state."""
+    def hook(d):
+        if d['status'] == 'downloading':
+            _download_progress[chat_id] = {
+                'status': 'downloading',
+                'percent': d.get('_percent_str', '?%').strip(),
+                'downloaded': d.get('downloaded_bytes', 0),
+                'total': d.get('total_bytes') or d.get('total_bytes_estimate', 0),
+                'speed': d.get('speed', 0),
+                'eta': d.get('eta', None),
+                'filename': d.get('filename', ''),
+                'updated': time.time()
+            }
+        elif d['status'] == 'finished':
+            _download_progress[chat_id] = {
+                'status': 'finished',
+                'percent': '100%',
+                'downloaded': d.get('downloaded_bytes', 0),
+                'total': d.get('total_bytes', 0),
+                'filename': d.get('filename', ''),
+                'updated': time.time()
+            }
+        elif d['status'] == 'error':
+            _download_progress[chat_id] = {
+                'status': 'error',
+                'updated': time.time()
+            }
+    return hook
 
 
 async def safe_edit_message(query, text, reply_markup=None, parse_mode=None):
@@ -87,6 +147,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await download_file(update, context, "audio", "mp3", url, transcribe=True)
     elif data == "formats":
         await handle_formats_list(update, context, url)
+    elif data == "time_range":
+        await show_time_range_options(update, context, url)
+    elif data == "time_range_clear":
+        user_time_ranges.pop(chat_id, None)
+        await back_to_main_menu(update, context, url)
+    elif data.startswith("time_range_preset_"):
+        # Handle preset time ranges like "first_5min", "last_10min"
+        preset = data.replace("time_range_preset_", "")
+        await apply_time_range_preset(update, context, url, preset)
     elif data == "back":
         await back_to_main_menu(update, context, url)
 
@@ -127,7 +196,22 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
         'retries': 3,
         'fragment_retries': 3,
         'ignoreerrors': False,
+        # Download speed optimizations
+        'concurrent_fragment_downloads': 4,  # parallel fragment downloads
+        'throttled_rate': '100K',  # switch server if speed drops below 100KB/s
+        'buffer_size': 1024 * 16,  # 16KB buffer
+        'http_chunk_size': 10485760,  # 10MB chunks
     }
+
+    # Apply time range if set
+    time_range = user_time_ranges.get(chat_id)
+    if time_range:
+        # Use download_sections format: "*start-end"
+        start = time_range.get('start', '0:00')
+        end = time_range.get('end', duration_str)
+        ydl_opts['download_ranges'] = lambda info, ydl: [{'start_time': time_range.get('start_sec', 0), 'end_time': time_range.get('end_sec', duration)}]
+        ydl_opts['force_keyframes_at_cuts'] = True
+        logging.info(f"Applying time range: {start} - {end}")
 
     if type == "audio" or transcribe:
         audio_format_to_use = "mp3" if transcribe else format
@@ -181,12 +265,56 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                     )
                     return
 
-        # Download file
-        await update_status(f"Pobieranie pliku...\nCzas trwania: {duration_str}\n\nTo może potrwać kilka minut.")
+        # Download file with progress tracking
+        time_range_info = ""
+        if time_range:
+            time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
+        await update_status(f"Rozpoczynam pobieranie...\nCzas trwania: {duration_str}{time_range_info}")
 
-        # Run download in thread pool to not block
+        # Add progress hook
+        ydl_opts['progress_hooks'] = [create_progress_hook(chat_id)]
+        _download_progress[chat_id] = {'status': 'starting', 'updated': time.time()}
+
+        # Run download in thread pool with progress updates
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(_executor, lambda: yt_dlp.YoutubeDL(ydl_opts).download([url]))
+
+        async def run_download_with_progress():
+            # Start download in background
+            future = loop.run_in_executor(
+                _executor,
+                lambda: yt_dlp.YoutubeDL(ydl_opts).download([url])
+            )
+
+            # Update status while downloading
+            last_update = ""
+            while not future.done():
+                progress = _download_progress.get(chat_id, {})
+                if progress.get('status') == 'downloading':
+                    percent = progress.get('percent', '?%')
+                    downloaded = format_bytes(progress.get('downloaded', 0))
+                    total = format_bytes(progress.get('total', 0))
+                    speed = format_bytes(progress.get('speed', 0)) + "/s" if progress.get('speed') else "?"
+                    eta = format_eta(progress.get('eta'))
+
+                    status_text = (
+                        f"Pobieranie: {percent}\n\n"
+                        f"Pobrano: {downloaded} / {total}\n"
+                        f"Prędkość: {speed}\n"
+                        f"Pozostało: {eta}\n\n"
+                        f"Czas trwania: {duration_str}"
+                    )
+
+                    if status_text != last_update:
+                        last_update = status_text
+                        await update_status(status_text)
+
+                await asyncio.sleep(1)
+
+            # Clean up progress state
+            _download_progress.pop(chat_id, None)
+            return await future
+
+        await run_download_with_progress()
 
         # Find downloaded file
         downloaded_file_path = None
@@ -337,6 +465,9 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                             caption=f"Pełna transkrypcja: {title}"
                         )
 
+                    # Record transcription+summary in history
+                    add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range)
+
                     await update_status("Transkrypcja i podsumowanie zostały wysłane!")
 
             else:
@@ -357,6 +488,9 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                             os.remove(os.path.join(chat_download_path, f))
                 except Exception as e:
                     logging.error(f"Error deleting files: {e}")
+
+                # Record transcription in history
+                add_download_record(chat_id, title, url, "transcription", file_size_mb, time_range)
 
                 await update_status("Transkrypcja została wysłana!")
 
@@ -379,6 +513,10 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                     )
 
             os.remove(downloaded_file_path)
+
+            # Record download in history
+            format_type = f"{type}_{format}"
+            add_download_record(chat_id, title, url, format_type, file_size_mb, time_range)
 
             await update_status("Plik został wysłany!")
 
@@ -469,6 +607,7 @@ async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYP
 async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Returns to main menu."""
     query = update.callback_query
+    chat_id = update.effective_chat.id
 
     info = get_video_info(url)
     if not info:
@@ -476,6 +615,8 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return
 
     title = info.get('title', 'Nieznany tytuł')
+    duration = info.get('duration', 0)
+    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
     keyboard = [
         [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
@@ -484,14 +625,113 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         [InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")],
         [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
         [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
         [InlineKeyboardButton("Lista formatów", callback_data="formats")]
     ]
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Show time range info if set
+    time_range = user_time_ranges.get(chat_id)
+    time_range_info = ""
+    if time_range:
+        time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
+
     await safe_edit_message(
         query,
-        f"*{title}*\n\nWybierz format do pobrania:",
+        f"*{title}*\nCzas trwania: {duration_str}{time_range_info}\n\nWybierz format do pobrania:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+
+async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    """Shows time range selection options."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    info = get_video_info(url)
+    if not info:
+        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        return
+
+    title = info.get('title', 'Nieznany tytuł')
+    duration = info.get('duration', 0)
+    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
+
+    # Current time range
+    time_range = user_time_ranges.get(chat_id)
+    current_range = ""
+    if time_range:
+        current_range = f"\n\n✂️ Aktualny zakres: {time_range['start']} - {time_range['end']}"
+
+    keyboard = [
+        [InlineKeyboardButton("Pierwsze 5 minut", callback_data="time_range_preset_first_5")],
+        [InlineKeyboardButton("Pierwsze 10 minut", callback_data="time_range_preset_first_10")],
+        [InlineKeyboardButton("Pierwsze 30 minut", callback_data="time_range_preset_first_30")],
+        [InlineKeyboardButton("Ostatnie 5 minut", callback_data="time_range_preset_last_5")],
+        [InlineKeyboardButton("Ostatnie 10 minut", callback_data="time_range_preset_last_10")],
+    ]
+
+    if time_range:
+        keyboard.append([InlineKeyboardButton("❌ Usuń zakres (cały film)", callback_data="time_range_clear")])
+
+    keyboard.append([InlineKeyboardButton("Powrót", callback_data="back")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        f"*{title}*\nCzas trwania: {duration_str}{current_range}\n\n"
+        f"Wybierz zakres czasowy do pobrania:\n\n"
+        f"💡 Możesz też wpisać własny zakres w formacie:\n"
+        f"`0:30-5:45` lub `1:00:00-1:30:00`",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def apply_time_range_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, url, preset):
+    """Applies a preset time range."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    info = get_video_info(url)
+    if not info:
+        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        return
+
+    duration = info.get('duration', 0)
+    if not duration:
+        await query.edit_message_text("Nie można określić czasu trwania filmu.")
+        return
+
+    # Parse preset
+    start_sec = 0
+    end_sec = duration
+
+    if preset == "first_5":
+        end_sec = min(5 * 60, duration)
+    elif preset == "first_10":
+        end_sec = min(10 * 60, duration)
+    elif preset == "first_30":
+        end_sec = min(30 * 60, duration)
+    elif preset == "last_5":
+        start_sec = max(0, duration - 5 * 60)
+    elif preset == "last_10":
+        start_sec = max(0, duration - 10 * 60)
+
+    # Format as MM:SS or HH:MM:SS
+    def format_time(seconds):
+        if seconds >= 3600:
+            return f"{int(seconds // 3600)}:{int((seconds % 3600) // 60):02d}:{int(seconds % 60):02d}"
+        return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+
+    user_time_ranges[chat_id] = {
+        'start': format_time(start_sec),
+        'end': format_time(end_sec),
+        'start_sec': start_sec,
+        'end_sec': end_sec
+    }
+
+    await back_to_main_menu(update, context, url)

@@ -130,19 +130,17 @@ def test_json_persistence():
         
         print(f"\n🎉 Wszystkie testy przeszły pomyślnie!")
         print(f"📁 Plik testowy: {os.path.abspath(AUTHORIZED_USERS_FILE)}")
-        
+
         # Show file content
         print(f"\n📄 Zawartość pliku:")
         with open(AUTHORIZED_USERS_FILE, 'r') as f:
             print(f.read())
-        
-        return True
-        
+
     except Exception as e:
         print(f"\n❌ Test nieudany: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise
         
     finally:
         # Cleanup
@@ -151,5 +149,4 @@ def test_json_persistence():
                 os.remove(f)
 
 if __name__ == "__main__":
-    success = test_json_persistence()
-    exit(0 if success else 1)
+    test_json_persistence()

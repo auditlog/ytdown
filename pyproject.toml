@@ -1,0 +1,109 @@
+[tool.poetry]
+name = "ytdown"
+version = "1.0.0"
+description = "YouTube Downloader Telegram Bot with AI transcription and summarization"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+packages = [{include = "bot"}]
+
+[tool.poetry.dependencies]
+python = "^3.12"
+yt-dlp = "^2024.12.6"
+mutagen = "^1.47.0"
+python-telegram-bot = "^21.0"
+requests = "^2.31.0"
+python-dotenv = "^1.0.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^8.0.0"
+pytest-asyncio = "^0.23.0"
+pytest-cov = "^4.1.0"
+black = "^24.0.0"
+ruff = "^0.1.0"
+mypy = "^1.8.0"
+types-requests = "^2.31.0"
+
+[tool.poetry.scripts]
+ytdown = "main:main"
+ytdown-setup = "setup_config:main"
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
+
+[tool.black]
+line-length = 100
+target-version = ['py312']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.git
+  | \.venv
+  | downloads
+  | __pycache__
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "B",  # flake8-bugbear
+    "C4", # flake8-comprehensions
+    "UP", # pyupgrade
+]
+ignore = [
+    "E501",  # line too long
+    "B008",  # do not perform function calls in argument defaults
+    "W191",  # indentation contains tabs
+]
+exclude = [
+    ".git",
+    ".venv",
+    "__pycache__",
+    "downloads",
+    "*.egg-info",
+]
+target-version = "py312"
+
+[tool.ruff.isort]
+known-first-party = ["bot"]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "downloads/",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-ra -q --strict-markers"
+asyncio_mode = "auto"
+
+[tool.coverage.run]
+source = ["bot"]
+omit = [
+    "*/tests/*",
+    "*/__init__.py",
+    "*/setup_config.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+    "pass",
+    "except ImportError:",
+]

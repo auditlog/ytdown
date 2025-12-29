@@ -1,0 +1,262 @@
+"""
+Pytest configuration and shared fixtures.
+"""
+
+import os
+import sys
+import tempfile
+import shutil
+from pathlib import Path
+from unittest.mock import Mock, MagicMock
+import pytest
+
+# Add parent directory to path for imports
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
+
+@pytest.fixture
+def temp_dir():
+    """Create a temporary directory for testing."""
+    temp_dir = tempfile.mkdtemp()
+    yield temp_dir
+    shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+@pytest.fixture
+def mock_config():
+    """Mock configuration for testing."""
+    return {
+        "TELEGRAM_BOT_TOKEN": "test_bot_token_123456",
+        "GROQ_API_KEY": "test_groq_key",
+        "CLAUDE_API_KEY": "sk-test-claude-key",
+        "PIN_CODE": "12345678"
+    }
+
+
+@pytest.fixture
+def mock_telegram_update():
+    """Mock Telegram Update object."""
+    update = Mock()
+    update.effective_user.id = 123456
+    update.effective_user.first_name = "Test User"
+    update.effective_chat.id = 123456
+    update.message.text = ""
+    update.message.reply_text = Mock(return_value=None)
+    update.message.delete = Mock(return_value=None)
+    return update
+
+
+@pytest.fixture
+def mock_telegram_context():
+    """Mock Telegram Context object."""
+    context = Mock()
+    context.user_data = {}
+    context.bot.send_message = Mock(return_value=None)
+    context.bot.send_document = Mock(return_value=None)
+    context.bot.send_audio = Mock(return_value=None)
+    context.bot.send_video = Mock(return_value=None)
+    return context
+
+
+@pytest.fixture
+def sample_video_info():
+    """Sample video info from yt-dlp."""
+    return {
+        'title': 'Test Video Title',
+        'duration': 300,  # 5 minutes
+        'uploader': 'Test Channel',
+        'view_count': 1000,
+        'like_count': 100,
+        'description': 'Test video description',
+        'thumbnail': 'https://example.com/thumbnail.jpg',
+        'formats': [
+            {
+                'format_id': '22',
+                'ext': 'mp4',
+                'quality': 8,
+                'format_note': '720p',
+                'filesize': 104857600  # 100MB
+            },
+            {
+                'format_id': '18',
+                'ext': 'mp4',
+                'quality': 6,
+                'format_note': '360p',
+                'filesize': 52428800  # 50MB
+            },
+            {
+                'format_id': '140',
+                'ext': 'm4a',
+                'format_note': 'audio only',
+                'filesize': 5242880  # 5MB
+            }
+        ]
+    }
+
+
+@pytest.fixture
+def mock_authorized_users():
+    """Mock authorized users set."""
+    return {123456, 789012, 345678}
+
+
+@pytest.fixture(autouse=True)
+def reset_module_state():
+    """Reset module-level state before each test."""
+    # Reset security module state
+    try:
+        from bot import security
+        security.failed_attempts.clear()
+        security.block_until.clear()
+        security.user_requests.clear()
+        security.user_urls.clear()
+        security.user_time_ranges.clear()
+    except ImportError:
+        pass
+
+    yield
+
+    # Cleanup after test
+    try:
+        from bot import security
+        security.failed_attempts.clear()
+        security.block_until.clear()
+        security.user_requests.clear()
+        security.user_urls.clear()
+        security.user_time_ranges.clear()
+    except ImportError:
+        pass
+
+
+@pytest.fixture
+def mock_yt_dlp(monkeypatch, sample_video_info):
+    """Mock yt-dlp for testing."""
+    mock_ydl = MagicMock()
+    mock_ydl.extract_info.return_value = sample_video_info
+
+    class MockYoutubeDL:
+        def __init__(self, opts):
+            self.opts = opts
+
+        def __enter__(self):
+            return mock_ydl
+
+        def __exit__(self, *args):
+            pass
+
+        def extract_info(self, url, download=False):
+            return sample_video_info
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
+    return mock_ydl
+
+
+@pytest.fixture
+def mock_groq_api(monkeypatch):
+    """Mock Groq API for transcription testing."""
+    # Mock API key so transcription doesn't return early
+    monkeypatch.setattr("bot.transcription.get_api_key", lambda: "test_groq_api_key")
+
+
+@pytest.fixture
+def mock_claude_api(monkeypatch):
+    """Mock Claude API for summarization testing."""
+    # Mock API key so summarization doesn't return early
+    monkeypatch.setattr("bot.transcription.get_claude_api_key", lambda: "test_claude_api_key")
+
+
+@pytest.fixture
+def mock_requests_post(monkeypatch):
+    """Mock requests.post for both Groq and Claude APIs."""
+
+    class MockGroqResponse:
+        status_code = 200
+        text = "This is a test transcription of the audio file."
+
+        def json(self):
+            return {"text": self.text}
+
+    class MockClaudeResponse:
+        status_code = 200
+        text = ""
+
+        def json(self):
+            return {
+                "content": [
+                    {"type": "text", "text": "This is a test summary generated by Claude."}
+                ]
+            }
+
+    def mock_post(url, *args, **kwargs):
+        if "groq.com" in url:
+            return MockGroqResponse()
+        elif "anthropic.com" in url:
+            return MockClaudeResponse()
+        # Default response
+        return MockGroqResponse()
+
+    import bot.transcription
+    monkeypatch.setattr(bot.transcription.requests, "post", mock_post)
+
+
+@pytest.fixture
+def sample_mp3_file(temp_dir):
+    """Create a sample MP3 file for testing."""
+    mp3_path = Path(temp_dir) / "test_audio.mp3"
+    # Create a minimal MP3 file (just for file operations testing)
+    with open(mp3_path, "wb") as f:
+        # MP3 header (minimal valid MP3)
+        f.write(b"\xFF\xFB\x90\x00")  # MP3 sync word and header
+        f.write(b"\x00" * 1000)  # Some data
+    return str(mp3_path)
+
+
+@pytest.fixture
+def mock_ffmpeg(monkeypatch):
+    """Mock ffmpeg subprocess calls."""
+    def mock_run(*args, **kwargs):
+        result = Mock()
+        result.returncode = 0
+        result.stdout = ""
+        result.stderr = "silence_end: 60.5\nsilence_end: 120.3\nsilence_end: 180.7"
+
+        # If this is an ffmpeg command with output file, create the output file
+        cmd = args[0] if args else kwargs.get("args", [])
+        if isinstance(cmd, list) and "ffmpeg" in str(cmd):
+            # Find output file (last argument that's not an option)
+            for i, arg in enumerate(cmd):
+                if arg == "-y" and i + 1 < len(cmd):
+                    continue
+                if not str(arg).startswith("-") and str(arg).endswith(".mp3"):
+                    # Create the output file with mock data
+                    output_path = Path(arg)
+                    output_path.parent.mkdir(parents=True, exist_ok=True)
+                    with open(output_path, "wb") as f:
+                        f.write(b"\xFF\xFB\x90\x00" + b"\x00" * (10 * 1024 * 1024))  # 10MB
+
+        return result
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+
+@pytest.fixture
+def clean_downloads_dir():
+    """Ensure downloads directory is clean for testing."""
+    downloads_path = Path("downloads")
+    if downloads_path.exists():
+        # Backup existing downloads
+        backup_path = Path("downloads_backup")
+        if backup_path.exists():
+            shutil.rmtree(backup_path, ignore_errors=True)
+        shutil.move(str(downloads_path), str(backup_path))
+
+    downloads_path.mkdir(exist_ok=True)
+
+    yield downloads_path
+
+    # Restore backup
+    if downloads_path.exists():
+        shutil.rmtree(downloads_path, ignore_errors=True)
+    backup_path = Path("downloads_backup")
+    if backup_path.exists():
+        shutil.move(str(backup_path), str(downloads_path))
