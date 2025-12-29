@@ -192,7 +192,7 @@ class TestTranscriptionIntegration:
 
     @pytest.mark.requires_api
     async def test_transcription_workflow(
-        self, sample_mp3_file, mock_groq_api, mock_claude_api, temp_dir
+        self, sample_mp3_file, mock_groq_api, mock_claude_api, mock_requests_post, temp_dir
     ):
         """Test complete transcription and summarization workflow."""
         from bot.transcription import transcribe_mp3_file, generate_summary
