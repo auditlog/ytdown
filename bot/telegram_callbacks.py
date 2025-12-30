@@ -256,6 +256,16 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
 
             if selected_format and selected_format.get('filesize'):
                 size_mb = selected_format['filesize'] / (1024 * 1024)
+
+                # Adjust size estimate for time range (proportional to duration)
+                if time_range and duration > 0:
+                    start_sec = time_range.get('start_sec', 0)
+                    end_sec = time_range.get('end_sec', duration)
+                    range_duration = end_sec - start_sec
+                    if range_duration > 0:
+                        size_mb = size_mb * (range_duration / duration)
+                        logging.info(f"Adjusted size estimate for time range: {size_mb:.1f} MB (original: {selected_format['filesize'] / (1024 * 1024):.1f} MB)")
+
                 if size_mb > MAX_FILE_SIZE_MB:
                     await update_status(
                         f"Wybrany format jest zbyt duży!\n\n"
