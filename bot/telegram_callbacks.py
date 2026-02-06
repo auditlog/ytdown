@@ -462,7 +462,9 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                         await context.bot.send_message(
                             chat_id=chat_id,
                             text=part,
-                            parse_mode='Markdown'
+                            parse_mode='Markdown',
+                            read_timeout=60,
+                            write_timeout=60,
                         )
 
                     await update_status("Wysyłanie pliku z pełną transkrypcją...")
@@ -472,7 +474,9 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                             chat_id=chat_id,
                             document=f,
                             filename=os.path.basename(transcript_path),
-                            caption=f"Pełna transkrypcja: {title}"
+                            caption=f"Pełna transkrypcja: {title}",
+                            read_timeout=60,
+                            write_timeout=60,
                         )
 
                     # Record transcription+summary in history
@@ -488,7 +492,9 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                         chat_id=chat_id,
                         document=f,
                         filename=os.path.basename(transcript_path),
-                        caption=f"Transkrypcja: {title}"
+                        caption=f"Transkrypcja: {title}",
+                        read_timeout=60,
+                        write_timeout=60,
                     )
 
                 try:
@@ -513,13 +519,17 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                         chat_id=chat_id,
                         audio=f,
                         title=title,
-                        caption=f"{title}"
+                        caption=f"{title}",
+                        read_timeout=60,
+                        write_timeout=60,
                     )
                 else:
                     await context.bot.send_video(
                         chat_id=chat_id,
                         video=f,
-                        caption=f"{title}"
+                        caption=f"{title}",
+                        read_timeout=60,
+                        write_timeout=60,
                     )
 
             os.remove(downloaded_file_path)

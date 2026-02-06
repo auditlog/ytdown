@@ -81,7 +81,14 @@ def main():
     monitor_disk_space()
 
     # Create bot application
-    application = ApplicationBuilder().token(BOT_TOKEN).build()
+    application = (
+        ApplicationBuilder()
+        .token(BOT_TOKEN)
+        .connect_timeout(30)
+        .read_timeout(60)
+        .write_timeout(60)
+        .build()
+    )
 
     # Set bot commands menu
     application.job_queue.run_once(lambda context: set_bot_commands(application), when=1)

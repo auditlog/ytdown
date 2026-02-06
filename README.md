@@ -10,7 +10,8 @@ Bot Telegram do pobierania filmów z YouTube z funkcjami transkrypcji i podsumow
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
 - Generowanie podsumowań transkrypcji (Claude API - Haiku 4.5)
 - Ochrona dostępu kodem PIN
-- Interfejs konsolowy i bot Telegram
+- Interfejs wiersza poleceń (CLI) z pełnym wsparciem dla wyboru formatu, jakości i audio
+- Bot Telegram z interaktywnym menu
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik
@@ -135,8 +136,37 @@ python main.py
 ```
 
 ### Tryb CLI (interfejs tekstowy)
+
+#### Opcje wiersza poleceń
+
+| Opcja | Opis | Domyślnie |
+|-------|------|-----------|
+| `--cli` | Uruchom w trybie wiersza poleceń (wymagane) | - |
+| `--url <URL>` | URL filmu YouTube | - |
+| `--list-formats` | Wyświetl dostępne formaty bez pobierania | - |
+| `--format <ID>` | Pobierz konkretny format (ID z listy formatów) | najlepsza jakość |
+| `--format auto` | Automatyczny wybór najlepszej jakości | - |
+| `--audio-only` | Pobierz tylko ścieżkę audio | - |
+| `--audio-format <FORMAT>` | Format audio: mp3, m4a, wav, flac, opus, vorbis | mp3 |
+| `--audio-quality <QUALITY>` | Jakość audio (0-9 dla vorbis/opus, 0-330 dla mp3) | 192 |
+
+#### Przykłady użycia
+
 ```bash
-python main.py --cli --url https://youtube.com/watch?v=...
+# Pobierz film w najlepszej jakości
+python main.py --cli --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+# Wyświetl dostępne formaty
+python main.py --cli --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --list-formats
+
+# Pobierz konkretny format (np. 137 = 1080p)
+python main.py --cli --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --format 137
+
+# Pobierz samo audio jako MP3
+python main.py --cli --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --audio-only
+
+# Pobierz audio w formacie FLAC z najwyższą jakością
+python main.py --cli --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --audio-only --audio-format flac --audio-quality 0
 ```
 
 ### Testy
