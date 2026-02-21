@@ -94,7 +94,9 @@ def setup_config():
         else:
             print("⚠️  UWAGA: Brak pliku .gitignore! Utwórz go i dodaj api_key.md")
         
-        print("\n🚀 Możesz teraz uruchomić bota: python3 youtube_downloader_telegram.py")
+        print("\n🚀 Możesz teraz uruchomić bota:")
+        print("   python3 main.py")
+        print("   lub (Poetry): poetry run python main.py")
         
     except Exception as e:
         print(f"\n❌ Błąd podczas zapisywania: {e}")

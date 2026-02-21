@@ -32,7 +32,7 @@ Bot Telegram do pobierania filmów z YouTube z funkcjami transkrypcji i podsumow
 
 - Python 3.12+
 - ffmpeg (zainstalowany w systemie)
-- Poetry (package manager)
+- Poetry (opcjonalnie, zalecane) lub pip
 
 ## Instalacja
 
@@ -70,7 +70,7 @@ source venv/bin/activate  # Linux/macOS
 # lub: venv\Scripts\activate  # Windows
 
 # Zainstaluj zależności
-pip install yt-dlp mutagen python-telegram-bot requests python-dotenv
+pip install -r requirements.txt
 ```
 
 ### Instalacja ffmpeg
@@ -134,6 +134,8 @@ $env:PIN_CODE="12345678"
 ### Bot Telegram
 ```bash
 python main.py
+# lub (Poetry):
+poetry run python main.py
 ```
 
 ### Tryb CLI (interfejs tekstowy)
@@ -178,6 +180,8 @@ python tests/test_security.py
 python tests/test_security_standalone.py
 python tests/test_json_persistence.py
 ```
+
+Jeśli używasz testów asynchronicznych, upewnij się, że masz zainstalowany `pytest-asyncio`.
 
 ## Komendy bota Telegram
 
