@@ -8,6 +8,7 @@ and PIN authentication logic.
 import os
 import time
 import logging
+import subprocess
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -176,6 +177,12 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if pending_url:
                     context.user_data.pop("pending_url", None)
                     await process_youtube_link(update, context, pending_url)
+
+                # Check for pending audio upload
+                pending_audio = context.user_data.get("pending_audio")
+                if pending_audio:
+                    context.user_data.pop("pending_audio", None)
+                    await process_audio_file(update, context, pending_audio)
             else:
                 # Increment failed attempts counter
                 failed_attempts[user_id] += 1
@@ -210,15 +217,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /help command."""
     await update.message.reply_text(
         "Jak korzystać z bota:\n\n"
+        "📹 *Pobieranie z YouTube:*\n"
         "1. Wyślij link do filmu z YouTube\n"
         "2. Wybierz format (video lub audio) i jakość\n"
         "3. Poczekaj na pobranie pliku\n\n"
+        "🎤 *Transkrypcja plików audio:*\n"
+        "1. Wyślij wiadomość głosową lub plik audio\n"
+        "2. Wybierz: transkrypcja lub transkrypcja + podsumowanie\n"
+        "3. Obsługiwane formaty: OGG, MP3, M4A, WAV, FLAC, OPUS\n\n"
         "Bot obsługuje linki z YouTube w formatach:\n"
         "- https://www.youtube.com/watch?v=...\n"
         "- https://youtu.be/...\n\n"
         "Komendy administracyjne:\n"
         "- /status - sprawdź przestrzeń dyskową\n"
-        "- /cleanup - usuń stare pliki (>24h)"
+        "- /cleanup - usuń stare pliki (>24h)",
+        parse_mode='Markdown'
     )
 
 
@@ -519,3 +532,189 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+
+# Telegram Bot API download limit (bots can download files up to 20MB)
+TELEGRAM_DOWNLOAD_LIMIT_MB = 20
+
+
+def _extract_audio_info(message) -> dict | None:
+    """
+    Extracts audio file metadata from a Telegram message.
+
+    Handles voice messages, audio files, and documents with audio MIME types
+    (e.g. WhatsApp forwarded voice notes).
+    """
+    if message.voice:
+        voice = message.voice
+        return {
+            'file_id': voice.file_id,
+            'file_size': voice.file_size,
+            'duration': voice.duration,
+            'mime_type': voice.mime_type or 'audio/ogg',
+            'title': 'Wiadomość głosowa',
+        }
+
+    if message.audio:
+        audio = message.audio
+        return {
+            'file_id': audio.file_id,
+            'file_size': audio.file_size,
+            'duration': audio.duration,
+            'mime_type': audio.mime_type or 'audio/mpeg',
+            'title': audio.title or audio.file_name or 'Plik audio',
+        }
+
+    if message.document:
+        doc = message.document
+        mime = doc.mime_type or ''
+        if mime.startswith('audio/'):
+            return {
+                'file_id': doc.file_id,
+                'file_size': doc.file_size,
+                'duration': None,
+                'mime_type': mime,
+                'title': doc.file_name or 'Dokument audio',
+            }
+
+    return None
+
+
+async def handle_audio_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles voice messages, audio files, and audio documents."""
+    user_id = update.effective_user.id
+    message = update.message
+
+    audio_info = _extract_audio_info(message)
+    if not audio_info:
+        return
+
+    # PIN authentication — same pattern as handle_youtube_link
+    pin_handled = await handle_pin(update, context)
+    if pin_handled:
+        return
+
+    if user_id not in authorized_users:
+        context.user_data["pending_audio"] = audio_info
+        await message.reply_text(
+            "Wymagane uwierzytelnienie!\n\n"
+            "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
+        )
+        context.user_data["awaiting_pin"] = True
+        return
+
+    # Rate limiting
+    if not check_rate_limit(user_id):
+        await message.reply_text(
+            "Przekroczono limit requestów!\n\n"
+            f"Możesz wysłać maksymalnie {RATE_LIMIT_REQUESTS} requestów "
+            f"w ciągu {RATE_LIMIT_WINDOW} sekund.\n"
+            "Spróbuj ponownie za chwilę."
+        )
+        return
+
+    await process_audio_file(update, context, audio_info)
+
+
+async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE, audio_info: dict | None = None):
+    """
+    Downloads an uploaded audio file from Telegram, converts to MP3 if needed,
+    and shows transcription options.
+    """
+    chat_id = update.effective_chat.id
+    message = update.message
+
+    if not audio_info:
+        audio_info = _extract_audio_info(message)
+    if not audio_info:
+        await message.reply_text("Nie rozpoznano pliku audio.")
+        return
+
+    file_size = audio_info.get('file_size') or 0
+    file_size_mb = file_size / (1024 * 1024) if file_size else 0
+
+    if file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB:
+        await message.reply_text(
+            f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
+            f"Rozmiar: {file_size_mb:.1f} MB\n"
+            f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB"
+        )
+        return
+
+    progress_msg = await message.reply_text("Pobieranie pliku audio...")
+
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    try:
+        tg_file = await context.bot.get_file(audio_info['file_id'])
+
+        # Determine extension from MIME type
+        mime_to_ext = {
+            'audio/ogg': '.ogg',
+            'audio/opus': '.opus',
+            'audio/mpeg': '.mp3',
+            'audio/mp4': '.m4a',
+            'audio/x-m4a': '.m4a',
+            'audio/wav': '.wav',
+            'audio/x-wav': '.wav',
+            'audio/flac': '.flac',
+            'audio/webm': '.webm',
+        }
+        ext = mime_to_ext.get(audio_info['mime_type'], '.ogg')
+        title = audio_info['title']
+
+        # Sanitize title for filename
+        safe_title = "".join(c if c.isalnum() or c in ' -_' else '_' for c in title)[:80]
+        from datetime import datetime
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        raw_path = os.path.join(chat_download_path, f"{timestamp}_{safe_title}{ext}")
+
+        await tg_file.download_to_drive(raw_path)
+
+        # Convert to MP3 if not already
+        if ext == '.mp3':
+            mp3_path = raw_path
+        else:
+            mp3_path = os.path.splitext(raw_path)[0] + '.mp3'
+            await progress_msg.edit_text("Konwersja do MP3...")
+            result = subprocess.run(
+                ['ffmpeg', '-i', raw_path, '-vn', '-acodec', 'libmp3lame', '-q:a', '2', mp3_path],
+                capture_output=True, timeout=120
+            )
+            if result.returncode != 0:
+                logging.error(f"ffmpeg conversion failed: {result.stderr.decode()}")
+                await progress_msg.edit_text("Błąd konwersji pliku audio.")
+                return
+            # Remove original after successful conversion
+            os.remove(raw_path)
+
+        mp3_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
+
+        # Store info for callback handlers
+        context.user_data['audio_file_path'] = mp3_path
+        context.user_data['audio_file_title'] = title
+
+        duration_info = ""
+        if audio_info.get('duration'):
+            mins = audio_info['duration'] // 60
+            secs = audio_info['duration'] % 60
+            duration_info = f"\nCzas trwania: {mins}:{secs:02d}"
+
+        keyboard = [
+            [InlineKeyboardButton("Transkrypcja", callback_data="audio_transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="audio_transcribe_summary")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await progress_msg.edit_text(
+            f"*{title}*{duration_info}\n"
+            f"Rozmiar: {mp3_size_mb:.1f} MB\n\n"
+            f"Wybierz opcję:",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+    except Exception as e:
+        logging.error(f"Error processing audio upload: {e}")
+        await progress_msg.edit_text(f"Błąd przetwarzania pliku audio: {str(e)}")

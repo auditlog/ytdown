@@ -9,6 +9,7 @@ Bot Telegram do pobierania filmów z YouTube z funkcjami transkrypcji i podsumow
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
 - Generowanie podsumowań transkrypcji (Claude API - Haiku 4.5)
+- **Transkrypcja przesłanych plików audio** — wiadomości głosowe, pliki audio i dokumenty audio (np. notatki głosowe z WhatsApp)
 - Ochrona dostępu kodem PIN
 - Interfejs wiersza poleceń (CLI) z pełnym wsparciem dla wyboru formatu, jakości i audio
 - Bot Telegram z interaktywnym menu
@@ -191,12 +192,19 @@ python tests/test_json_persistence.py
 
 ## Używanie bota
 
+### Pobieranie z YouTube
 1. Znajdź swojego bota na Telegramie
 2. Wyślij `/start`
 3. Wprowadź 8-cyfrowy kod PIN
 4. Wyślij link do filmu YouTube
 5. Wybierz format i jakość
 6. Opcjonalnie: wybierz transkrypcję lub streszczenie
+
+### Transkrypcja plików audio
+1. Wyślij wiadomość głosową, plik audio lub dokument audio (np. notatkę głosową z WhatsApp)
+2. Wybierz opcję: "Transkrypcja" lub "Transkrypcja + Podsumowanie"
+3. Obsługiwane formaty: OGG, OPUS, MP3, M4A, WAV, FLAC, WebM
+4. Limit rozmiaru: 20 MB (ograniczenie Telegram Bot API)
 
 ## Typy streszczeń
 
@@ -230,7 +238,6 @@ ytdown/
 ├── api_key.md                      # Konfiguracja (ignorowany przez git)
 ├── authorized_users.json           # Lista autoryzowanych użytkowników (ignorowany)
 ├── README.md                       # Ten plik
-├── SECURITY_NOTES.md               # Uwagi bezpieczeństwa
 └── downloads/                      # Pobrane pliki (ignorowany)
     └── [chat_id]/                  # Pliki per użytkownik
 ```
@@ -244,11 +251,10 @@ ytdown/
 - Blokada po złym PIN
 - Autoryzacja zapisywana w JSON
 
-Szczegóły w pliku [SECURITY_NOTES.md](SECURITY_NOTES.md)
-
 ## Ograniczenia
 
 - Max 20MB dla pojedynczej części transkrypcji (większe pliki są dzielone automatycznie)
+- Max 20MB dla przesyłanych plików audio (limit Telegram Bot API dla pobierania plików przez bota)
 - Telegram limit: 50MB dla plików, 4096 znaków dla wiadomości
 - Max 16384 tokenów dla streszczeń Claude
 

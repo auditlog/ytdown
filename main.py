@@ -31,6 +31,7 @@ from bot.telegram_commands import (
     cleanup_command,
     users_command,
     handle_youtube_link,
+    handle_audio_upload,
 )
 from bot.telegram_callbacks import handle_callback
 
@@ -103,6 +104,21 @@ def main():
 
     # Handler for text messages (including PIN and links)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_youtube_link))
+
+    # Handlers for audio uploads (voice messages, audio files, audio documents)
+    application.add_handler(MessageHandler(filters.VOICE, handle_audio_upload))
+    application.add_handler(MessageHandler(filters.AUDIO, handle_audio_upload))
+    audio_doc_filter = (
+        filters.Document.MimeType("audio/ogg")
+        | filters.Document.MimeType("audio/mpeg")
+        | filters.Document.MimeType("audio/mp4")
+        | filters.Document.MimeType("audio/x-m4a")
+        | filters.Document.MimeType("audio/wav")
+        | filters.Document.MimeType("audio/flac")
+        | filters.Document.MimeType("audio/opus")
+        | filters.Document.MimeType("audio/webm")
+    )
+    application.add_handler(MessageHandler(audio_doc_filter, handle_audio_upload))
 
     application.add_handler(CallbackQueryHandler(handle_callback))
 
