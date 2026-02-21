@@ -547,11 +547,12 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                             display_text = '\n'.join(lines[i:])
                             break
 
-                # Send transcript as message(s) in chat
-                await send_long_message(
-                    context.bot, chat_id, display_text,
-                    header=f"*Transkrypcja: {title}*\n\n"
-                )
+                # Send transcript in chat if short enough, otherwise file only
+                if len(display_text) <= 30000:
+                    await send_long_message(
+                        context.bot, chat_id, display_text,
+                        header=f"*Transkrypcja: {title}*\n\n"
+                    )
 
                 # Send file as attachment
                 with open(transcript_path, 'rb') as f:
@@ -559,7 +560,8 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                         chat_id=chat_id,
                         document=f,
                         filename=os.path.basename(transcript_path),
-                        caption=f"Transkrypcja: {title}",
+                        caption=f"Transkrypcja: {title}" if len(display_text) <= 30000
+                            else f"Transkrypcja: {title} ({len(display_text):,} znaków — tylko plik)",
                         read_timeout=60,
                         write_timeout=60,
                     )
@@ -968,11 +970,12 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                     display_text = '\n'.join(lines[i:])
                     break
 
-        # Send transcript as message(s) in chat
-        await send_long_message(
-            context.bot, chat_id, display_text,
-            header=f"*Transkrypcja: {title}*\n\n"
-        )
+        # Send transcript in chat if short enough, otherwise file only
+        if len(display_text) <= 30000:
+            await send_long_message(
+                context.bot, chat_id, display_text,
+                header=f"*Transkrypcja: {title}*\n\n"
+            )
 
         # Send file as attachment
         with open(transcript_path, 'rb') as f:
@@ -980,7 +983,8 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                 chat_id=chat_id,
                 document=f,
                 filename=os.path.basename(transcript_path),
-                caption=f"Transkrypcja: {title}",
+                caption=f"Transkrypcja: {title}" if len(display_text) <= 30000
+                    else f"Transkrypcja: {title} ({len(display_text):,} znaków — tylko plik)",
                 read_timeout=60,
                 write_timeout=60,
             )
