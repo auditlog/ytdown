@@ -164,13 +164,15 @@ def split_mp3(file_path, output_dir, max_size_mb=MAX_MP3_PART_SIZE_MB):
     return output_files
 
 
-def transcribe_audio(file_path, api_key):
+def transcribe_audio(file_path, api_key, language=None, prompt=None):
     """
     Transcribes audio file using Groq API.
 
     Args:
         file_path: Path to audio file
         api_key: Groq API key
+        language: ISO 639-1 language code (e.g. "pl", "en") for better accuracy
+        prompt: Context text to guide Whisper (e.g. tail of previous chunk)
 
     Returns:
         str: Transcription text or empty string on error
@@ -203,9 +205,14 @@ def transcribe_audio(file_path, api_key):
                 "file": (filename, audio_file.read(), "audio/mpeg")
             }
             data = {
-                "model": "whisper-large-v3",
+                "model": "whisper-large-v3-turbo",
                 "response_format": "text"
             }
+
+            if language:
+                data["language"] = language
+            if prompt:
+                data["prompt"] = prompt
 
             response = requests.post(url, headers=headers, files=files, data=data, timeout=300)
 
@@ -242,14 +249,16 @@ def get_part_number(filename):
     return 0
 
 
-def transcribe_mp3_file(file_path, output_dir, progress_callback=None):
+def transcribe_mp3_file(file_path, output_dir, progress_callback=None, language=None):
     """
     Transcribes MP3 file, splitting into smaller parts if necessary.
+    Uses cross-chunk context (prompt) and optional Claude post-processing.
 
     Args:
         file_path: Path to MP3 file
         output_dir: Output directory for transcription
-        progress_callback: Optional async callback function(status_text) for progress updates
+        progress_callback: Optional callback function(status_text) for progress updates
+        language: ISO 639-1 language code ("pl", "en") or None for auto-detect
 
     Returns:
         str or None: Path to transcription file or None on error
@@ -277,6 +286,7 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None):
     total_parts = len(part_files)
     total_characters = 0
     start_time = time_module.time()
+    previous_text = ""
     logging.info(f"Found {total_parts} part files to transcribe.")
 
     base_name = os.path.splitext(os.path.basename(file_path))[0]
@@ -305,12 +315,16 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None):
                 f"Pozostały czas: ~{eta_str}"
             )
 
-        transcription = transcribe_audio(part_path, api_key)
+        # Pass tail of previous chunk as prompt for cross-chunk context
+        chunk_prompt = previous_text[-500:] if previous_text else None
+
+        transcription = transcribe_audio(part_path, api_key, language=language, prompt=chunk_prompt)
 
         if transcription:
             logging.info(f"Part {i+1}: transcription has {len(transcription)} characters")
             transcriptions.append(transcription)
             total_characters += len(transcription)
+            previous_text = transcription
         else:
             logging.warning(f"Part {i+1}: transcription is empty!")
             transcriptions.append("[No transcription for this part]")
@@ -357,6 +371,17 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None):
 
         return transcript_md_path
 
+    # Post-process transcript with Claude to fix typos and incomplete words
+    if get_claude_api_key():
+        if progress_callback:
+            progress_callback("Korekta transkrypcji przez AI...")
+        corrected = post_process_transcript(combined_text)
+        if corrected:
+            combined_text = corrected
+            logging.info(f"Post-processed transcript: {len(combined_text)} characters")
+    else:
+        logging.info("Skipping post-processing: no Claude API key configured")
+
     transcript_md_path = os.path.join(output_dir, f"{base_name}_transcript.md")
     with open(transcript_md_path, "w", encoding="utf-8") as f:
         f.write(f"# {base_name} Transcript\n\n")
@@ -370,6 +395,75 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None):
         logging.error(f"Error removing temporary directory: {e}")
 
     return transcript_md_path
+
+
+def post_process_transcript(text):
+    """
+    Cleans up raw Whisper transcription using Claude API.
+
+    Fixes typos, incomplete words, and punctuation errors while
+    preserving the original meaning and structure of the text.
+
+    Args:
+        text: Raw transcription text
+
+    Returns:
+        str or None: Corrected text, or None on error
+    """
+    api_key = get_claude_api_key()
+    if not api_key:
+        return None
+
+    url = "https://api.anthropic.com/v1/messages"
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": "2023-06-01",
+        "content-type": "application/json"
+    }
+
+    data = {
+        "model": "claude-haiku-4-5",
+        "max_tokens": 32768,
+        "messages": [
+            {
+                "role": "user",
+                "content": (
+                    "You are a transcription proofreader. Fix the following audio transcript:\n"
+                    "- Fix typos and spelling errors\n"
+                    "- Complete truncated or incomplete words\n"
+                    "- Fix punctuation\n"
+                    "- Do NOT change the meaning or structure\n"
+                    "- Do NOT add new content or commentary\n"
+                    "- Do NOT add any headers, labels or prefixes\n"
+                    "- Preserve the original language of the text\n"
+                    "- Return ONLY the corrected text, nothing else\n\n"
+                    f"{text}"
+                )
+            }
+        ]
+    }
+
+    try:
+        response = requests.post(url, headers=headers, json=data, timeout=180)
+
+        if response.status_code == 200:
+            result = response.json()
+            corrected = ""
+            if "content" in result:
+                for item in result["content"]:
+                    if item.get("type") == "text":
+                        corrected += item.get("text", "")
+            if corrected.strip():
+                return corrected.strip()
+            logging.warning("Post-processing returned empty result, using original text")
+            return None
+        else:
+            logging.error(f"Claude API error during post-processing: {response.status_code}")
+            logging.error(response.text)
+            return None
+    except Exception as e:
+        logging.error(f"Error during transcript post-processing: {e}")
+        return None
 
 
 def generate_summary(transcript_text, summary_type):

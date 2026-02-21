@@ -112,6 +112,52 @@ async def safe_edit_message(query, text, reply_markup=None, parse_mode=None):
             raise
 
 
+async def send_long_message(bot, chat_id, text, header="", parse_mode='Markdown'):
+    """
+    Splits long text into multiple Telegram messages (max 4000 chars each)
+    and sends them sequentially. Optionally prepends a header to the first chunk.
+
+    Handles lines longer than max_length (e.g. Whisper output without newlines)
+    by splitting at sentence boundaries, commas, or spaces.
+    """
+    max_length = 4000
+    parts = []
+    current = header
+
+    for line in text.split('\n'):
+        # Split oversized lines at natural break points
+        while len(line) > max_length:
+            split_at = max_length
+            for sep in ['. ', '! ', '? ', ', ', ' ']:
+                idx = line.rfind(sep, 0, max_length)
+                if idx > max_length // 2:
+                    split_at = idx + len(sep)
+                    break
+            if current.strip():
+                parts.append(current)
+                current = ""
+            parts.append(line[:split_at])
+            line = line[split_at:]
+
+        if len(current) + len(line) + 2 > max_length:
+            parts.append(current)
+            current = line + '\n'
+        else:
+            current += line + '\n'
+
+    if current.strip():
+        parts.append(current)
+
+    for part in parts:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=part,
+            parse_mode=parse_mode,
+            read_timeout=60,
+            write_timeout=60,
+        )
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all callback queries."""
     query = update.callback_query
@@ -119,6 +165,40 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     data = query.data
 
     chat_id = update.effective_chat.id
+
+    # Language selection callbacks — dispatched before URL check because
+    # audio uploads don't have a YouTube URL in session
+    if data.startswith("lang_"):
+        # e.g. "lang_pl_transcribe", "lang_en_audio_transcribe_summary"
+        _, lang, *action_parts = data.split("_")
+        action = "_".join(action_parts)
+        context.user_data['transcription_language'] = lang
+        url = user_urls.get(chat_id)
+
+        if action == "transcribe" and url:
+            await download_file(update, context, "audio", "mp3", url, transcribe=True)
+        elif action == "transcribe_summary" and url:
+            await show_summary_options(update, context, url)
+        elif action == "audio_transcribe":
+            await transcribe_audio_file(update, context)
+        elif action == "audio_transcribe_summary":
+            await show_audio_summary_options(update, context)
+        else:
+            await query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
+        return
+
+    # Audio upload callbacks — no YouTube URL required
+    if data == "audio_transcribe":
+        await show_language_selection(update, context, "audio_transcribe")
+        return
+    elif data == "audio_transcribe_summary":
+        await show_language_selection(update, context, "audio_transcribe_summary")
+        return
+    elif data.startswith("audio_summary_option_"):
+        option = int(data.split('_')[-1])
+        await transcribe_audio_file(update, context, summary=True, summary_type=option)
+        return
+
     url = user_urls.get(chat_id)
 
     if not url:
@@ -139,12 +219,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             format = parts[2] if len(parts) > 2 else "best"
             await download_file(update, context, type, format, url)
     elif data == "transcribe_summary":
-        await show_summary_options(update, context, url)
+        await show_language_selection(update, context, "transcribe_summary")
     elif data.startswith("summary_option_"):
         option = data.split('_')[2]
         await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=int(option))
     elif data == "transcribe":
-        await download_file(update, context, "audio", "mp3", url, transcribe=True)
+        await show_language_selection(update, context, "transcribe")
     elif data == "formats":
         await handle_formats_list(update, context, url)
     elif data == "time_range":
@@ -364,7 +444,7 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                 # Start transcription in background
                 future = loop.run_in_executor(
                     _executor,
-                    lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, progress_callback)
+                    lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, progress_callback, language=context.user_data.get('transcription_language'))
                 )
 
                 # Update status while transcription is running
@@ -430,69 +510,58 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                     f.write(f"# {title} - {summary_type_name}\n\n")
                     f.write(summary_text)
 
-                with open(summary_path, 'r', encoding='utf-8') as f:
-                    summary_content = f.read()
-                    if summary_content.startswith('#'):
-                        summary_lines = summary_content.split('\n')
-                        summary_content = '\n'.join(summary_lines[2:]) if len(summary_lines) > 2 else '\n'.join(summary_lines[1:])
+                await send_long_message(
+                    context.bot, chat_id, summary_text,
+                    header=f"*{title} - {summary_type_name}*\n\n"
+                )
 
-                    summary_types = {
-                        1: "Krótkie podsumowanie",
-                        2: "Szczegółowe podsumowanie",
-                        3: "Podsumowanie w punktach",
-                        4: "Podział zadań na osoby"
-                    }
-                    summary_type_name = summary_types.get(summary_type, "Podsumowanie")
-
-                    max_length = 4000
-                    message_parts = []
-                    current_part = f"*{title} - {summary_type_name}*\n\n"
-
-                    for line in summary_content.split('\n'):
-                        if len(current_part) + len(line) + 2 > max_length:
-                            message_parts.append(current_part)
-                            current_part = line + '\n'
-                        else:
-                            current_part += line + '\n'
-
-                    if current_part:
-                        message_parts.append(current_part)
-
-                    for i, part in enumerate(message_parts):
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text=part,
-                            parse_mode='Markdown',
-                            read_timeout=60,
-                            write_timeout=60,
-                        )
-
-                    await update_status("Wysyłanie pliku z pełną transkrypcją...")
-
-                    with open(transcript_path, 'rb') as f:
-                        await context.bot.send_document(
-                            chat_id=chat_id,
-                            document=f,
-                            filename=os.path.basename(transcript_path),
-                            caption=f"Pełna transkrypcja: {title}",
-                            read_timeout=60,
-                            write_timeout=60,
-                        )
-
-                    # Record transcription+summary in history
-                    add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range)
-
-                    await update_status("Transkrypcja i podsumowanie zostały wysłane!")
-
-            else:
-                await update_status("Transkrypcja zakończona.\n\nWysyłanie pliku...")
+                await update_status("Wysyłanie pliku z pełną transkrypcją...")
 
                 with open(transcript_path, 'rb') as f:
                     await context.bot.send_document(
                         chat_id=chat_id,
                         document=f,
                         filename=os.path.basename(transcript_path),
-                        caption=f"Transkrypcja: {title}",
+                        caption=f"Pełna transkrypcja: {title}",
+                        read_timeout=60,
+                        write_timeout=60,
+                    )
+
+                # Record transcription+summary in history
+                add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range)
+
+                await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+
+            else:
+                await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
+
+                with open(transcript_path, 'r', encoding='utf-8') as f:
+                    transcript_text = f.read()
+
+                # Strip markdown header if present
+                display_text = transcript_text
+                if display_text.startswith('# '):
+                    lines = display_text.split('\n')
+                    for i in range(1, len(lines)):
+                        if lines[i].strip():
+                            display_text = '\n'.join(lines[i:])
+                            break
+
+                # Send transcript in chat if short enough, otherwise file only
+                if len(display_text) <= 30000:
+                    await send_long_message(
+                        context.bot, chat_id, display_text,
+                        header=f"*Transkrypcja: {title}*\n\n"
+                    )
+
+                # Send file as attachment
+                with open(transcript_path, 'rb') as f:
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=f,
+                        filename=os.path.basename(transcript_path),
+                        caption=f"Transkrypcja: {title}" if len(display_text) <= 30000
+                            else f"Transkrypcja: {title} ({len(display_text):,} znaków — tylko plik)",
                         read_timeout=60,
                         write_timeout=60,
                     )
@@ -755,3 +824,226 @@ async def apply_time_range_preset(update: Update, context: ContextTypes.DEFAULT_
     }
 
     await back_to_main_menu(update, context, url)
+
+
+async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE, summary=False, summary_type=None):
+    """
+    Transcribes an uploaded audio file (MP3 path stored in user_data).
+
+    Reuses the existing transcription pipeline from transcribe_mp3_file().
+    """
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    mp3_path = context.user_data.get('audio_file_path')
+    title = context.user_data.get('audio_file_title', 'Plik audio')
+
+    if not mp3_path or not os.path.exists(mp3_path):
+        await query.edit_message_text("Plik audio nie został znaleziony. Wyślij go ponownie.")
+        return
+
+    async def update_status(text):
+        await safe_edit_message(query, text)
+
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    file_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
+
+    await update_status("Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut.")
+
+    if not CONFIG["GROQ_API_KEY"]:
+        await update_status(
+            "Błąd: Brak klucza API do transkrypcji w pliku konfiguracyjnym.\n"
+            f"Dodaj klucz GROQ_API_KEY w pliku {CONFIG_FILE_PATH}."
+        )
+        return
+
+    # Progress callback for transcription status updates
+    current_status = {"text": ""}
+
+    def progress_callback(status_text):
+        current_status["text"] = status_text
+
+    async def run_transcription_with_progress():
+        loop = asyncio.get_event_loop()
+        future = loop.run_in_executor(
+            _executor,
+            lambda: transcribe_mp3_file(mp3_path, chat_download_path, progress_callback, language=context.user_data.get('transcription_language'))
+        )
+
+        last_status = ""
+        while not future.done():
+            if current_status["text"] and current_status["text"] != last_status:
+                last_status = current_status["text"]
+                await update_status(f"Transkrypcja w toku...\n\n{last_status}")
+            await asyncio.sleep(2)
+
+        return await future
+
+    transcript_path = await run_transcription_with_progress()
+
+    if not transcript_path or not os.path.exists(transcript_path):
+        await update_status("Wystąpił błąd podczas transkrypcji.")
+        return
+
+    if summary:
+        if not CONFIG["CLAUDE_API_KEY"]:
+            await update_status(
+                "Błąd: Brak klucza API Claude w pliku konfiguracyjnym.\n"
+                f"Dodaj klucz CLAUDE_API_KEY w pliku {CONFIG_FILE_PATH}."
+            )
+            return
+
+        await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
+
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            transcript_text = f.read()
+
+        # Strip markdown header if present
+        if transcript_text.startswith('# '):
+            lines = transcript_text.split('\n')
+            for i in range(1, len(lines)):
+                if lines[i].strip():
+                    transcript_text = '\n'.join(lines[i:])
+                    break
+            else:
+                logging.warning("Transcription contains only header, using original text")
+
+        loop = asyncio.get_event_loop()
+        summary_text = await loop.run_in_executor(
+            _executor,
+            lambda: generate_summary(transcript_text, summary_type)
+        )
+
+        if not summary_text:
+            await update_status("Wystąpił błąd podczas generowania podsumowania.")
+            return
+
+        await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
+
+        # Save summary file
+        safe_title = "".join(c if c.isalnum() or c in ' -_' else '_' for c in title)[:80]
+        summary_path = os.path.join(chat_download_path, f"{safe_title}_summary.md")
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            summary_types = {
+                1: "Krótkie podsumowanie",
+                2: "Szczegółowe podsumowanie",
+                3: "Podsumowanie w punktach",
+                4: "Podział zadań na osoby"
+            }
+            summary_type_name = summary_types.get(summary_type, "Podsumowanie")
+            f.write(f"# {title} - {summary_type_name}\n\n")
+            f.write(summary_text)
+
+        # Send summary as message(s)
+        await send_long_message(
+            context.bot, chat_id, summary_text,
+            header=f"*{title} - {summary_type_name}*\n\n"
+        )
+
+        await update_status("Wysyłanie pliku z pełną transkrypcją...")
+
+        with open(transcript_path, 'rb') as f:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=f,
+                filename=os.path.basename(transcript_path),
+                caption=f"Pełna transkrypcja: {title}",
+                read_timeout=60,
+                write_timeout=60,
+            )
+
+        add_download_record(chat_id, title, "audio_upload", f"audio_upload_transcription_summary_{summary_type}", file_size_mb, None)
+        await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+
+    else:
+        await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
+
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            transcript_text = f.read()
+
+        # Strip markdown header if present
+        display_text = transcript_text
+        if display_text.startswith('# '):
+            lines = display_text.split('\n')
+            for i in range(1, len(lines)):
+                if lines[i].strip():
+                    display_text = '\n'.join(lines[i:])
+                    break
+
+        # Send transcript in chat if short enough, otherwise file only
+        if len(display_text) <= 30000:
+            await send_long_message(
+                context.bot, chat_id, display_text,
+                header=f"*Transkrypcja: {title}*\n\n"
+            )
+
+        # Send file as attachment
+        with open(transcript_path, 'rb') as f:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=f,
+                filename=os.path.basename(transcript_path),
+                caption=f"Transkrypcja: {title}" if len(display_text) <= 30000
+                    else f"Transkrypcja: {title} ({len(display_text):,} znaków — tylko plik)",
+                read_timeout=60,
+                write_timeout=60,
+            )
+
+        # Clean up source MP3 and chunk transcripts
+        try:
+            os.remove(mp3_path)
+            for fname in os.listdir(chat_download_path):
+                if fname.endswith("_transcript.txt") and "_part" in fname:
+                    os.remove(os.path.join(chat_download_path, fname))
+        except Exception as e:
+            logging.error(f"Error deleting audio files: {e}")
+
+        add_download_record(chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
+        await update_status("Transkrypcja została wysłana!")
+
+
+async def show_audio_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays summary type selection for uploaded audio files."""
+    query = update.callback_query
+    title = context.user_data.get('audio_file_title', 'Plik audio')
+
+    keyboard = [
+        [InlineKeyboardButton("1. Krótkie podsumowanie", callback_data="audio_summary_option_1")],
+        [InlineKeyboardButton("2. Szczegółowe podsumowanie", callback_data="audio_summary_option_2")],
+        [InlineKeyboardButton("3. Podsumowanie w punktach", callback_data="audio_summary_option_3")],
+        [InlineKeyboardButton("4. Podział zadań na osoby", callback_data="audio_summary_option_4")],
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        f"*{title}*\n\nWybierz rodzaj podsumowania:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def show_language_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
+    """
+    Displays language selection buttons before transcription.
+
+    Args:
+        action: callback suffix to append after language, e.g. "transcribe",
+                "transcribe_summary", "audio_transcribe", "audio_transcribe_summary"
+    """
+    query = update.callback_query
+
+    keyboard = [
+        [
+            InlineKeyboardButton("PL Polski", callback_data=f"lang_pl_{action}"),
+            InlineKeyboardButton("EN English", callback_data=f"lang_en_{action}"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        "Wybierz język transkrypcji:",
+        reply_markup=reply_markup,
+    )

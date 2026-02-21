@@ -62,6 +62,7 @@ try:
         handle_youtube_link,
         handle_pin,
         process_youtube_link,
+        handle_audio_upload,
     )
 except ImportError:
     start = None
@@ -72,6 +73,7 @@ except ImportError:
     handle_youtube_link = None
     handle_pin = None
     process_youtube_link = None
+    handle_audio_upload = None
 
 try:
     from bot.telegram_callbacks import (
@@ -80,6 +82,9 @@ try:
         handle_formats_list,
         show_summary_options,
         back_to_main_menu,
+        transcribe_audio_file,
+        show_audio_summary_options,
+        show_language_selection,
     )
 except ImportError:
     handle_callback = None
@@ -87,6 +92,9 @@ except ImportError:
     handle_formats_list = None
     show_summary_options = None
     back_to_main_menu = None
+    transcribe_audio_file = None
+    show_audio_summary_options = None
+    show_language_selection = None
 
 __all__ = [
     # Config
@@ -125,10 +133,14 @@ __all__ = [
     'handle_youtube_link',
     'handle_pin',
     'process_youtube_link',
+    'handle_audio_upload',
     # Telegram callbacks
     'handle_callback',
     'download_file',
     'handle_formats_list',
     'show_summary_options',
     'back_to_main_menu',
+    'transcribe_audio_file',
+    'show_audio_summary_options',
+    'show_language_selection',
 ]
