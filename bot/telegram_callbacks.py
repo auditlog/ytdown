@@ -112,6 +112,35 @@ async def safe_edit_message(query, text, reply_markup=None, parse_mode=None):
             raise
 
 
+async def send_long_message(bot, chat_id, text, header="", parse_mode='Markdown'):
+    """
+    Splits long text into multiple Telegram messages (max 4000 chars each)
+    and sends them sequentially. Optionally prepends a header to the first chunk.
+    """
+    max_length = 4000
+    parts = []
+    current = header
+
+    for line in text.split('\n'):
+        if len(current) + len(line) + 2 > max_length:
+            parts.append(current)
+            current = line + '\n'
+        else:
+            current += line + '\n'
+
+    if current.strip():
+        parts.append(current)
+
+    for part in parts:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=part,
+            parse_mode=parse_mode,
+            read_timeout=60,
+            write_timeout=60,
+        )
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all callback queries."""
     query = update.callback_query
@@ -444,63 +473,50 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                     f.write(f"# {title} - {summary_type_name}\n\n")
                     f.write(summary_text)
 
-                with open(summary_path, 'r', encoding='utf-8') as f:
-                    summary_content = f.read()
-                    if summary_content.startswith('#'):
-                        summary_lines = summary_content.split('\n')
-                        summary_content = '\n'.join(summary_lines[2:]) if len(summary_lines) > 2 else '\n'.join(summary_lines[1:])
+                await send_long_message(
+                    context.bot, chat_id, summary_text,
+                    header=f"*{title} - {summary_type_name}*\n\n"
+                )
 
-                    summary_types = {
-                        1: "Krótkie podsumowanie",
-                        2: "Szczegółowe podsumowanie",
-                        3: "Podsumowanie w punktach",
-                        4: "Podział zadań na osoby"
-                    }
-                    summary_type_name = summary_types.get(summary_type, "Podsumowanie")
+                await update_status("Wysyłanie pliku z pełną transkrypcją...")
 
-                    max_length = 4000
-                    message_parts = []
-                    current_part = f"*{title} - {summary_type_name}*\n\n"
+                with open(transcript_path, 'rb') as f:
+                    await context.bot.send_document(
+                        chat_id=chat_id,
+                        document=f,
+                        filename=os.path.basename(transcript_path),
+                        caption=f"Pełna transkrypcja: {title}",
+                        read_timeout=60,
+                        write_timeout=60,
+                    )
 
-                    for line in summary_content.split('\n'):
-                        if len(current_part) + len(line) + 2 > max_length:
-                            message_parts.append(current_part)
-                            current_part = line + '\n'
-                        else:
-                            current_part += line + '\n'
+                # Record transcription+summary in history
+                add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range)
 
-                    if current_part:
-                        message_parts.append(current_part)
-
-                    for i, part in enumerate(message_parts):
-                        await context.bot.send_message(
-                            chat_id=chat_id,
-                            text=part,
-                            parse_mode='Markdown',
-                            read_timeout=60,
-                            write_timeout=60,
-                        )
-
-                    await update_status("Wysyłanie pliku z pełną transkrypcją...")
-
-                    with open(transcript_path, 'rb') as f:
-                        await context.bot.send_document(
-                            chat_id=chat_id,
-                            document=f,
-                            filename=os.path.basename(transcript_path),
-                            caption=f"Pełna transkrypcja: {title}",
-                            read_timeout=60,
-                            write_timeout=60,
-                        )
-
-                    # Record transcription+summary in history
-                    add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range)
-
-                    await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+                await update_status("Transkrypcja i podsumowanie zostały wysłane!")
 
             else:
-                await update_status("Transkrypcja zakończona.\n\nWysyłanie pliku...")
+                await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
 
+                with open(transcript_path, 'r', encoding='utf-8') as f:
+                    transcript_text = f.read()
+
+                # Strip markdown header if present
+                display_text = transcript_text
+                if display_text.startswith('# '):
+                    lines = display_text.split('\n')
+                    for i in range(1, len(lines)):
+                        if lines[i].strip():
+                            display_text = '\n'.join(lines[i:])
+                            break
+
+                # Send transcript as message(s) in chat
+                await send_long_message(
+                    context.bot, chat_id, display_text,
+                    header=f"*Transkrypcja: {title}*\n\n"
+                )
+
+                # Send file as attachment
                 with open(transcript_path, 'rb') as f:
                     await context.bot.send_document(
                         chat_id=chat_id,
@@ -880,61 +896,48 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             f.write(summary_text)
 
         # Send summary as message(s)
-        with open(summary_path, 'r', encoding='utf-8') as f:
-            summary_content = f.read()
-            if summary_content.startswith('#'):
-                summary_lines = summary_content.split('\n')
-                summary_content = '\n'.join(summary_lines[2:]) if len(summary_lines) > 2 else '\n'.join(summary_lines[1:])
+        await send_long_message(
+            context.bot, chat_id, summary_text,
+            header=f"*{title} - {summary_type_name}*\n\n"
+        )
 
-            summary_types = {
-                1: "Krótkie podsumowanie",
-                2: "Szczegółowe podsumowanie",
-                3: "Podsumowanie w punktach",
-                4: "Podział zadań na osoby"
-            }
-            summary_type_name = summary_types.get(summary_type, "Podsumowanie")
+        await update_status("Wysyłanie pliku z pełną transkrypcją...")
 
-            max_length = 4000
-            message_parts = []
-            current_part = f"*{title} - {summary_type_name}*\n\n"
+        with open(transcript_path, 'rb') as f:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=f,
+                filename=os.path.basename(transcript_path),
+                caption=f"Pełna transkrypcja: {title}",
+                read_timeout=60,
+                write_timeout=60,
+            )
 
-            for line in summary_content.split('\n'):
-                if len(current_part) + len(line) + 2 > max_length:
-                    message_parts.append(current_part)
-                    current_part = line + '\n'
-                else:
-                    current_part += line + '\n'
-
-            if current_part:
-                message_parts.append(current_part)
-
-            for part in message_parts:
-                await context.bot.send_message(
-                    chat_id=chat_id,
-                    text=part,
-                    parse_mode='Markdown',
-                    read_timeout=60,
-                    write_timeout=60,
-                )
-
-            await update_status("Wysyłanie pliku z pełną transkrypcją...")
-
-            with open(transcript_path, 'rb') as f:
-                await context.bot.send_document(
-                    chat_id=chat_id,
-                    document=f,
-                    filename=os.path.basename(transcript_path),
-                    caption=f"Pełna transkrypcja: {title}",
-                    read_timeout=60,
-                    write_timeout=60,
-                )
-
-            add_download_record(chat_id, title, "audio_upload", f"audio_upload_transcription_summary_{summary_type}", file_size_mb, None)
-            await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+        add_download_record(chat_id, title, "audio_upload", f"audio_upload_transcription_summary_{summary_type}", file_size_mb, None)
+        await update_status("Transkrypcja i podsumowanie zostały wysłane!")
 
     else:
-        await update_status("Transkrypcja zakończona.\n\nWysyłanie pliku...")
+        await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
 
+        with open(transcript_path, 'r', encoding='utf-8') as f:
+            transcript_text = f.read()
+
+        # Strip markdown header if present
+        display_text = transcript_text
+        if display_text.startswith('# '):
+            lines = display_text.split('\n')
+            for i in range(1, len(lines)):
+                if lines[i].strip():
+                    display_text = '\n'.join(lines[i:])
+                    break
+
+        # Send transcript as message(s) in chat
+        await send_long_message(
+            context.bot, chat_id, display_text,
+            header=f"*Transkrypcja: {title}*\n\n"
+        )
+
+        # Send file as attachment
         with open(transcript_path, 'rb') as f:
             await context.bot.send_document(
                 chat_id=chat_id,
