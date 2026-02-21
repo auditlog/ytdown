@@ -116,12 +116,29 @@ async def send_long_message(bot, chat_id, text, header="", parse_mode='Markdown'
     """
     Splits long text into multiple Telegram messages (max 4000 chars each)
     and sends them sequentially. Optionally prepends a header to the first chunk.
+
+    Handles lines longer than max_length (e.g. Whisper output without newlines)
+    by splitting at sentence boundaries, commas, or spaces.
     """
     max_length = 4000
     parts = []
     current = header
 
     for line in text.split('\n'):
+        # Split oversized lines at natural break points
+        while len(line) > max_length:
+            split_at = max_length
+            for sep in ['. ', '! ', '? ', ', ', ' ']:
+                idx = line.rfind(sep, 0, max_length)
+                if idx > max_length // 2:
+                    split_at = idx + len(sep)
+                    break
+            if current.strip():
+                parts.append(current)
+                current = ""
+            parts.append(line[:split_at])
+            line = line[split_at:]
+
         if len(current) + len(line) + 2 > max_length:
             parts.append(current)
             current = line + '\n'
