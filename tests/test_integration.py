@@ -42,7 +42,16 @@ class TestConfigIntegration:
         monkeypatch.setattr("bot.config.CONFIG_FILE_PATH", str(config_file))
 
         # Load config
-        config = load_config()
+        config = load_config(
+            str(config_file),
+            env={
+                "TELEGRAM_BOT_TOKEN": "env_token",
+                "GROQ_API_KEY": "",
+                "CLAUDE_API_KEY": "",
+                "PIN_CODE": "",
+            },
+            load_env_file=False,
+        )
 
         # Environment should win
         assert config["TELEGRAM_BOT_TOKEN"] == "env_token"
@@ -191,7 +200,7 @@ class TestTranscriptionIntegration:
     """Integration tests for transcription workflow."""
 
     @pytest.mark.requires_api
-    async def test_transcription_workflow(
+    def test_transcription_workflow(
         self, sample_mp3_file, mock_groq_api, mock_claude_api, mock_requests_post, temp_dir
     ):
         """Test complete transcription and summarization workflow."""

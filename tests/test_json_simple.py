@@ -6,7 +6,12 @@ Simple test for JSON persistence logic (without importing main module).
 import os
 import json
 import shutil
+import pytest
 from datetime import datetime
+
+pytestmark = pytest.mark.skip(
+    reason="Legacy standalone script; consolidated into bot.config tests."
+)
 
 # Test implementation of the JSON functions
 AUTHORIZED_USERS_FILE = "test_authorized_users.json"

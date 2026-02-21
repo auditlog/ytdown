@@ -6,7 +6,6 @@ and PIN authentication logic.
 """
 
 import os
-import time
 import logging
 import subprocess
 
@@ -33,6 +32,10 @@ from bot.security import (
     validate_youtube_url,
     manage_authorized_user,
     estimate_file_size,
+    is_user_blocked,
+    get_block_remaining_seconds,
+    clear_failed_attempts,
+    register_pin_failure,
 )
 from bot.cleanup import (
     cleanup_old_files,
@@ -100,8 +103,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = update.effective_user.first_name
 
     # Check if user is blocked
-    if time.time() < block_until[user_id]:
-        remaining_time = int(block_until[user_id] - time.time())
+    if is_user_blocked(user_id, block_map=block_until):
+        remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)
         minutes = remaining_time // 60
         seconds = remaining_time % 60
 
@@ -136,8 +139,8 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message_text = update.message.text
 
     # Check if user is blocked
-    if time.time() < block_until[user_id]:
-        remaining_time = int(block_until[user_id] - time.time())
+    if is_user_blocked(user_id, block_map=block_until):
+        remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)
         minutes = remaining_time // 60
         seconds = remaining_time % 60
 
@@ -159,7 +162,7 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if message_text.isdigit() and len(message_text) == 8:
             if message_text == PIN_CODE:
                 # Reset failed attempts counter
-                failed_attempts[user_id] = 0
+                clear_failed_attempts(user_id, attempts=failed_attempts)
 
                 # Add user to authorized list
                 manage_authorized_user(user_id, 'add')
@@ -185,18 +188,21 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await process_audio_file(update, context, pending_audio)
             else:
                 # Increment failed attempts counter
-                failed_attempts[user_id] += 1
+                remaining_attempts = register_pin_failure(
+                    user_id,
+                    attempts=failed_attempts,
+                    block_map=block_until,
+                    max_attempts=MAX_ATTEMPTS,
+                    block_time=BLOCK_TIME,
+                )
 
-                if failed_attempts[user_id] >= MAX_ATTEMPTS:
-                    block_until[user_id] = time.time() + BLOCK_TIME
-
+                if remaining_attempts == 0:
                     await update.message.reply_text(
                         "Niepoprawny PIN!\n\n"
                         f"Przekroczono maksymalną liczbę prób ({MAX_ATTEMPTS}).\n"
                         f"Dostęp zablokowany na {BLOCK_TIME // 60} minut."
                     )
                 else:
-                    remaining_attempts = MAX_ATTEMPTS - failed_attempts[user_id]
                     await update.message.reply_text(
                         "Niepoprawny PIN!\n\n"
                         f"Pozostało prób: {remaining_attempts}"
@@ -457,8 +463,8 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # Check if user is blocked
-    if time.time() < block_until[user_id]:
-        remaining_time = int(block_until[user_id] - time.time())
+    if is_user_blocked(user_id, block_map=block_until):
+        remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)
         minutes = remaining_time // 60
         seconds = remaining_time % 60
 

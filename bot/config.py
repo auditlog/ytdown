@@ -15,6 +15,7 @@ import shutil
 import logging
 import threading
 from datetime import datetime
+from collections.abc import Mapping
 
 # Configuration file path
 CONFIG_FILE_PATH = "api_key.md"
@@ -30,17 +31,42 @@ DEFAULT_CONFIG = {
 # Download directory
 DOWNLOAD_PATH = "./downloads"
 
-# Create download directory if it doesn't exist
-os.makedirs(DOWNLOAD_PATH, exist_ok=True)
-
 # Path to authorized users file
 AUTHORIZED_USERS_FILE = "authorized_users.json"
 
+def _read_config_file(file_path: str) -> dict:
+    """Reads key/value pairs from api_key.md-like config file."""
 
-def load_config():
+    data: dict[str, str] = {}
+    with open(file_path, "r", encoding="utf-8") as file:
+        for line_no, line in enumerate(file, start=1):
+            raw_line = line.strip()
+            if not raw_line or raw_line.startswith("#"):
+                continue
+            if "=" not in raw_line:
+                logging.warning(
+                    "Invalid config line in %s:%s: %s",
+                    file_path,
+                    line_no,
+                    raw_line,
+                )
+                continue
+
+            key, value = raw_line.split("=", 1)
+            data[key.strip()] = value.strip()
+    return data
+
+
+def load_config(
+    config_file_path: str = CONFIG_FILE_PATH,
+    *,
+    env: Mapping[str, str | None] | None = None,
+    load_env_file: bool = True,
+    ensure_downloads_dir: bool = False,
+) -> dict:
     """
     Loads configuration from api_key.md or environment variables.
-    Priority: environment variables > .env file > api_key.md > default values
+    Priority: environment variables > .env file > config file > defaults.
 
     Returns:
         dict: Configuration dictionary
@@ -48,37 +74,38 @@ def load_config():
     config = DEFAULT_CONFIG.copy()
 
     # Optional .env support
-    try:
-        from dotenv import load_dotenv
-        load_dotenv()
-        logging.info("Loaded .env file (if exists)")
-    except ImportError:
-        pass
+    if load_env_file:
+        try:
+            from dotenv import load_dotenv
+            load_dotenv()
+            logging.info("Loaded .env file (if exists)")
+        except ImportError:
+            logging.debug("python-dotenv not installed; skipping .env loading")
+
+    environment = os.environ if env is None else env
 
     # Try to load from file
     try:
-        if os.path.exists(CONFIG_FILE_PATH):
-            with open(CONFIG_FILE_PATH, "r") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and '=' in line:
-                        key, value = line.split('=', 1)
-                        config[key] = value
+        if os.path.exists(config_file_path):
+            file_values = _read_config_file(config_file_path)
+            config.update(file_values)
             logging.info("Loaded configuration from file")
         else:
-            logging.warning(f"Configuration file {CONFIG_FILE_PATH} does not exist.")
+            logging.warning(
+                "Configuration file %s does not exist.", config_file_path
+            )
     except Exception as e:
-        logging.error(f"Error loading configuration from file: {e}")
+        logging.error("Error loading configuration from file: %s", e)
 
     # Override with environment variables
-    env_vars = {
-        "TELEGRAM_BOT_TOKEN": os.environ.get("TELEGRAM_BOT_TOKEN"),
-        "GROQ_API_KEY": os.environ.get("GROQ_API_KEY"),
-        "CLAUDE_API_KEY": os.environ.get("CLAUDE_API_KEY"),
-        "PIN_CODE": os.environ.get("PIN_CODE")
+    overrides = {
+        "TELEGRAM_BOT_TOKEN": environment.get("TELEGRAM_BOT_TOKEN"),
+        "GROQ_API_KEY": environment.get("GROQ_API_KEY"),
+        "CLAUDE_API_KEY": environment.get("CLAUDE_API_KEY"),
+        "PIN_CODE": environment.get("PIN_CODE"),
     }
 
-    for key, value in env_vars.items():
+    for key, value in overrides.items():
         if value:
             config[key] = value
             logging.info(f"Using environment variable for {key}")
@@ -90,7 +117,17 @@ def load_config():
     # Validate configuration
     validate_config(config)
 
+    if ensure_downloads_dir:
+        ensure_download_path()
+
     return config
+
+
+def ensure_download_path(path: str = DOWNLOAD_PATH) -> str:
+    """Ensure downloads directory exists."""
+
+    os.makedirs(path, exist_ok=True)
+    return path
 
 
 def validate_config(config):
@@ -134,8 +171,8 @@ def validate_config(config):
                 logging.warning(f"WARNING: File {CONFIG_FILE_PATH} has permissions {file_mode}. "
                               f"Recommended: 600 (owner read/write only).")
                 logging.warning(f"Run: chmod 600 {CONFIG_FILE_PATH}")
-        except:
-            pass
+        except Exception:
+            logging.debug("Unable to verify config file permissions for %s", CONFIG_FILE_PATH)
 
 
 def load_authorized_users():
@@ -315,7 +352,7 @@ def get_download_stats(user_id=None):
 
 
 # Initialize configuration on module load
-CONFIG = load_config()
+CONFIG = load_config(ensure_downloads_dir=True)
 BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
 PIN_CODE = CONFIG["PIN_CODE"]
 
