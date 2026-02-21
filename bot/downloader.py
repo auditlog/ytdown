@@ -96,6 +96,48 @@ def normalize_format_id(format_id, *, default="best"):
     return normalized
 
 
+def parse_time_seconds(time_value):
+    """Converts HH:MM:SS, MM:SS, or seconds input into integer seconds."""
+    if time_value is None:
+        return None
+
+    if isinstance(time_value, bool):
+        return None
+    if isinstance(time_value, int):
+        if time_value < 0:
+            return None
+        return time_value
+    if isinstance(time_value, float):
+        if time_value < 0:
+            return None
+        return int(time_value)
+
+    if not isinstance(time_value, str):
+        return None
+
+    time_str = time_value.strip()
+    if not time_str:
+        return None
+
+    parts = time_str.split(':')
+    if len(parts) not in {1, 2, 3}:
+        return None
+
+    try:
+        values = [int(part) for part in parts]
+    except ValueError:
+        return None
+
+    if any(v < 0 for v in values):
+        return None
+
+    if len(parts) == 1:
+        return values[0]
+    if len(parts) == 2:
+        return values[0] * 60 + values[1]
+    return values[0] * 3600 + values[1] * 60 + values[2]
+
+
 def progress_hook(d):
     """
     Progress hook called by yt-dlp to track download progress.
@@ -152,7 +194,15 @@ def get_video_info(url):
         return None
 
 
-def download_youtube_video(url, format_id=None, audio_only=False, audio_format='mp3', audio_quality='192'):
+def download_youtube_video(
+    url,
+    format_id=None,
+    audio_only=False,
+    audio_format='mp3',
+    audio_quality='192',
+    time_range_start=None,
+    time_range_end=None,
+):
     """
     Downloads YouTube video or audio.
 
@@ -162,6 +212,8 @@ def download_youtube_video(url, format_id=None, audio_only=False, audio_format='
         audio_only: If True, download audio only
         audio_format: Audio format (mp3, m4a, wav, flac)
         audio_quality: Audio quality (bitrate)
+        time_range_start: Start time (HH:MM:SS, MM:SS, or seconds)
+        time_range_end: End time (HH:MM:SS, MM:SS, or seconds)
 
     Returns:
         bool: True on success, False on error
@@ -177,6 +229,21 @@ def download_youtube_video(url, format_id=None, audio_only=False, audio_format='
 
         if audio_only and not is_valid_audio_quality(normalized_audio_format, normalized_audio_quality):
             print(f"[ERROR] Unsupported audio quality {normalized_audio_quality} for format {normalized_audio_format}")
+            return False
+
+        normalized_time_range_start = parse_time_seconds(time_range_start)
+        normalized_time_range_end = parse_time_seconds(time_range_end)
+
+        if time_range_start is not None and time_range_end is not None:
+            if normalized_time_range_start is None or normalized_time_range_end is None:
+                print("[ERROR] Invalid time range values.")
+                return False
+            if normalized_time_range_start >= normalized_time_range_end:
+                print("[ERROR] Start time must be earlier than end time.")
+                return False
+
+        if (time_range_start is None) != (time_range_end is None):
+            print("[ERROR] Both --start and --to must be provided.")
             return False
 
         if normalized_format_id is not None and not is_valid_ytdlp_format_id(normalized_format_id):
@@ -211,6 +278,13 @@ def download_youtube_video(url, format_id=None, audio_only=False, audio_format='
             print(f"[DEBUG] Set format: {normalized_format_id}")
         else:
             print("[DEBUG] Using default format (best quality)")
+
+        if normalized_time_range_start is not None:
+            ydl_opts['download_sections'] = [{
+                'start_time': normalized_time_range_start,
+                'end_time': normalized_time_range_end,
+            }]
+            ydl_opts['force_keyframes_at_cuts'] = True
 
         print("[DEBUG] Initializing YoutubeDL...")
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

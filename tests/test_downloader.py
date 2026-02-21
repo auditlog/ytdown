@@ -13,6 +13,7 @@ from bot.downloader import (
     is_valid_audio_quality,
     normalize_format_id,
     validate_url,
+    parse_time_seconds,
 )
 
 
@@ -168,6 +169,24 @@ def test_is_valid_audio_quality():
     assert is_valid_audio_quality("flac", "bad") is False
 
 
+def test_parse_time_seconds():
+    assert parse_time_seconds("5") == 5
+    assert parse_time_seconds("1:30") == 90
+    assert parse_time_seconds("1:02:03") == 3723
+    assert parse_time_seconds(45) == 45
+    assert parse_time_seconds(45.9) == 45
+
+
+def test_parse_time_seconds_rejects_invalid():
+    assert parse_time_seconds(None) is None
+    assert parse_time_seconds(True) is None
+    assert parse_time_seconds("") is None
+    assert parse_time_seconds("1:xx") is None
+    assert parse_time_seconds("1:2:3:4") is None
+    assert parse_time_seconds("bad") is None
+    assert parse_time_seconds(-1) is None
+
+
 def test_normalize_format_id():
     assert normalize_format_id(None) is None
     assert normalize_format_id("auto") == "best"
@@ -209,6 +228,42 @@ def test_download_youtube_video_rejects_invalid_audio_quality(monkeypatch):
         audio_format="mp3",
         audio_quality="500",
     ) is False
+
+
+def test_download_youtube_video_rejects_invalid_time_range(monkeypatch):
+    class MockYoutubeDL:
+        def __init__(self, opts):
+            raise AssertionError("yt-dlp should not be called for invalid time range")
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
+    assert download_youtube_video("https://youtube.com/watch?v=test", time_range_start="1:00", time_range_end="0:59") is False
+    assert download_youtube_video("https://youtube.com/watch?v=test", time_range_start="1:00") is False
+    assert download_youtube_video("https://youtube.com/watch?v=test", time_range_end="2:00") is False
+    assert download_youtube_video("https://youtube.com/watch?v=test", time_range_start="bad", time_range_end="2:00") is False
+
+
+def test_download_youtube_video_sets_download_sections(monkeypatch):
+    captured = {}
+
+    class MockYoutubeDL:
+        def __init__(self, opts):
+            captured["opts"] = opts
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def extract_info(self, url, download):
+            assert download is True
+            return {"title": "sample"}
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
+
+    assert download_youtube_video("https://youtube.com/watch?v=test", time_range_start="0:10", time_range_end="0:20") is True
+    assert captured["opts"]["download_sections"] == [{"start_time": 10, "end_time": 20}]
+    assert captured["opts"]["force_keyframes_at_cuts"] is True
 
 
 def test_download_youtube_video_returns_false_on_exception(monkeypatch):

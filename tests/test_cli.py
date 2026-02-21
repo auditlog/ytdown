@@ -75,7 +75,16 @@ def test_cli_mode_lists_formats(capsys, monkeypatch):
 
 
 def test_cli_mode_downloads_with_arguments(monkeypatch):
-    args = Namespace(url="https://youtube.com/watch?v=ok", list_formats=False, format="1080p", audio_only=True, audio_format='wav', audio_quality='4')
+    args = Namespace(
+        url="https://youtube.com/watch?v=ok",
+        list_formats=False,
+        format="1080p",
+        audio_only=True,
+        audio_format='wav',
+        audio_quality='4',
+        start=None,
+        to=None,
+    )
     download_mock = Mock()
 
     monkeypatch.setattr(cli, "validate_url", lambda _url: True)
@@ -89,6 +98,8 @@ def test_cli_mode_downloads_with_arguments(monkeypatch):
         True,
         "wav",
         "4",
+        None,
+        None,
     )
 
 
@@ -126,3 +137,95 @@ def test_cli_mode_rejects_invalid_audio_quality(monkeypatch):
     cli.cli_mode(args)
 
     download_mock.assert_not_called()
+
+
+def test_cli_mode_rejects_unpaired_start_or_to(monkeypatch):
+    args = Namespace(
+        url="https://youtube.com/watch?v=ok",
+        list_formats=False,
+        format=None,
+        audio_only=False,
+        audio_format='mp3',
+        audio_quality='192',
+        start='0:30',
+        to=None,
+    )
+    download_mock = Mock()
+
+    monkeypatch.setattr(cli, "validate_url", lambda _url: True)
+    monkeypatch.setattr(cli, "download_youtube_video", download_mock)
+
+    cli.cli_mode(args)
+
+    download_mock.assert_not_called()
+
+
+def test_cli_mode_rejects_invalid_time_range(monkeypatch):
+    args = Namespace(
+        url="https://youtube.com/watch?v=ok",
+        list_formats=False,
+        format=None,
+        audio_only=False,
+        audio_format='mp3',
+        audio_quality='192',
+        start='bad',
+        to='1:00',
+    )
+    download_mock = Mock()
+
+    monkeypatch.setattr(cli, "validate_url", lambda _url: True)
+    monkeypatch.setattr(cli, "download_youtube_video", download_mock)
+
+    cli.cli_mode(args)
+
+    download_mock.assert_not_called()
+
+
+def test_cli_mode_rejects_start_after_end(monkeypatch):
+    args = Namespace(
+        url="https://youtube.com/watch?v=ok",
+        list_formats=False,
+        format=None,
+        audio_only=False,
+        audio_format='mp3',
+        audio_quality='192',
+        start='2:00',
+        to='1:00',
+    )
+    download_mock = Mock()
+
+    monkeypatch.setattr(cli, "validate_url", lambda _url: True)
+    monkeypatch.setattr(cli, "download_youtube_video", download_mock)
+
+    cli.cli_mode(args)
+
+    download_mock.assert_not_called()
+
+
+def test_cli_mode_downloads_with_time_range(monkeypatch):
+    args = Namespace(
+        url="https://youtube.com/watch?v=ok",
+        list_formats=False,
+        format="1080p",
+        audio_only=False,
+        audio_format='mp3',
+        audio_quality='192',
+        start='0:30',
+        to='1:00',
+    )
+    download_mock = Mock()
+
+    monkeypatch.setattr(cli, "validate_url", lambda _url: True)
+    monkeypatch.setattr(cli, "download_youtube_video", download_mock)
+
+    cli.cli_mode(args)
+
+    download_mock.assert_called_once_with(
+        "https://youtube.com/watch?v=ok",
+        "1080p",
+        False,
+        "mp3",
+        "192",
+        30,
+        60,
+    )
