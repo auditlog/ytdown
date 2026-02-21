@@ -149,13 +149,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_id = update.effective_chat.id
 
-    # Audio upload callbacks — handled before URL check because
-    # audio uploads don't require a YouTube URL in the session
+    # Language selection callbacks — dispatched before URL check because
+    # audio uploads don't have a YouTube URL in session
+    if data.startswith("lang_"):
+        # e.g. "lang_pl_transcribe", "lang_en_audio_transcribe_summary"
+        _, lang, *action_parts = data.split("_")
+        action = "_".join(action_parts)
+        context.user_data['transcription_language'] = lang
+        url = user_urls.get(chat_id)
+
+        if action == "transcribe" and url:
+            await download_file(update, context, "audio", "mp3", url, transcribe=True)
+        elif action == "transcribe_summary" and url:
+            await show_summary_options(update, context, url)
+        elif action == "audio_transcribe":
+            await transcribe_audio_file(update, context)
+        elif action == "audio_transcribe_summary":
+            await show_audio_summary_options(update, context)
+        else:
+            await query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
+        return
+
+    # Audio upload callbacks — no YouTube URL required
     if data == "audio_transcribe":
-        await transcribe_audio_file(update, context)
+        await show_language_selection(update, context, "audio_transcribe")
         return
     elif data == "audio_transcribe_summary":
-        await show_audio_summary_options(update, context)
+        await show_language_selection(update, context, "audio_transcribe_summary")
         return
     elif data.startswith("audio_summary_option_"):
         option = int(data.split('_')[-1])
@@ -182,12 +202,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             format = parts[2] if len(parts) > 2 else "best"
             await download_file(update, context, type, format, url)
     elif data == "transcribe_summary":
-        await show_summary_options(update, context, url)
+        await show_language_selection(update, context, "transcribe_summary")
     elif data.startswith("summary_option_"):
         option = data.split('_')[2]
         await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=int(option))
     elif data == "transcribe":
-        await download_file(update, context, "audio", "mp3", url, transcribe=True)
+        await show_language_selection(update, context, "transcribe")
     elif data == "formats":
         await handle_formats_list(update, context, url)
     elif data == "time_range":
@@ -407,7 +427,7 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
                 # Start transcription in background
                 future = loop.run_in_executor(
                     _executor,
-                    lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, progress_callback)
+                    lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, progress_callback, language=context.user_data.get('transcription_language'))
                 )
 
                 # Update status while transcription is running
@@ -828,7 +848,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         loop = asyncio.get_event_loop()
         future = loop.run_in_executor(
             _executor,
-            lambda: transcribe_mp3_file(mp3_path, chat_download_path, progress_callback)
+            lambda: transcribe_mp3_file(mp3_path, chat_download_path, progress_callback, language=context.user_data.get('transcription_language'))
         )
 
         last_status = ""
@@ -980,4 +1000,29 @@ async def show_audio_summary_options(update: Update, context: ContextTypes.DEFAU
         f"*{title}*\n\nWybierz rodzaj podsumowania:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
+    )
+
+
+async def show_language_selection(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
+    """
+    Displays language selection buttons before transcription.
+
+    Args:
+        action: callback suffix to append after language, e.g. "transcribe",
+                "transcribe_summary", "audio_transcribe", "audio_transcribe_summary"
+    """
+    query = update.callback_query
+
+    keyboard = [
+        [
+            InlineKeyboardButton("PL Polski", callback_data=f"lang_pl_{action}"),
+            InlineKeyboardButton("EN English", callback_data=f"lang_en_{action}"),
+        ],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        "Wybierz język transkrypcji:",
+        reply_markup=reply_markup,
     )
