@@ -205,7 +205,7 @@ def transcribe_audio(file_path, api_key, language=None, prompt=None):
                 "file": (filename, audio_file.read(), "audio/mpeg")
             }
             data = {
-                "model": "whisper-large-v3",
+                "model": "whisper-large-v3-turbo",
                 "response_format": "text"
             }
 
