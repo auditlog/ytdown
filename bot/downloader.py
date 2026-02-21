@@ -5,9 +5,14 @@ Handles video/audio downloading via yt-dlp.
 """
 
 import logging
+import re
 from datetime import datetime
 
 import yt_dlp
+
+
+FORMAT_ID_PATTERN = re.compile(r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$")
+AUDIO_FORMATS = {"mp3", "m4a", "wav", "flac", "ogg", "opus"}
 
 
 def sanitize_filename(filename):
@@ -24,6 +29,35 @@ def sanitize_filename(filename):
     for char in invalid_chars:
         filename = filename.replace(char, '-')
     return filename
+
+
+def is_valid_ytdlp_format_id(format_id):
+    """Returns True if format ID is safe and supported by CLI/TG UI flows."""
+
+    if not isinstance(format_id, str):
+        return False
+    normalized = format_id.strip().lower()
+    return bool(FORMAT_ID_PATTERN.fullmatch(normalized))
+
+
+def is_valid_audio_format(audio_format):
+    """Returns True for allowed audio conversion formats."""
+
+    if not isinstance(audio_format, str):
+        return False
+    return audio_format.strip().lower() in AUDIO_FORMATS
+
+
+def normalize_format_id(format_id, *, default="best"):
+    """Normalizes shortcut/legacy format aliases."""
+
+    if format_id is None:
+        return None
+
+    normalized = format_id.strip().lower()
+    if normalized == "auto":
+        return default
+    return normalized
 
 
 def progress_hook(d):
@@ -98,6 +132,16 @@ def download_youtube_video(url, format_id=None, audio_only=False, audio_format='
     """
     logging.debug(f"Starting download for URL: {url}, format: {format_id}...")
     try:
+        normalized_format_id = normalize_format_id(format_id)
+        normalized_audio_format = audio_format.strip().lower() if audio_format else "mp3"
+        if normalized_audio_format and not is_valid_audio_format(normalized_audio_format):
+            print(f"[ERROR] Unsupported audio format: {normalized_audio_format}")
+            return False
+
+        if normalized_format_id is not None and not is_valid_ytdlp_format_id(normalized_format_id):
+            print(f"[ERROR] Unsupported format id: {normalized_format_id}")
+            return False
+
         current_date = datetime.now().strftime("%Y-%m-%d")
 
         ydl_opts = {
@@ -112,18 +156,18 @@ def download_youtube_video(url, format_id=None, audio_only=False, audio_format='
         }
 
         if audio_only:
-            print(f"[DEBUG] Configuring audio-only download ({audio_format})")
+            print(f"[DEBUG] Configuring audio-only download ({normalized_audio_format})")
             ydl_opts.update({
                 'format': 'bestaudio/best',
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
-                    'preferredcodec': audio_format,
-                    'preferredquality': audio_quality,
+                    'preferredcodec': normalized_audio_format,
+                    'preferredquality': str(audio_quality).strip(),
                 }],
             })
         elif format_id:
-            ydl_opts['format'] = format_id
-            print(f"[DEBUG] Set format: {format_id}")
+            ydl_opts['format'] = normalized_format_id
+            print(f"[DEBUG] Set format: {normalized_format_id}")
         else:
             print("[DEBUG] Using default format (best quality)")
 
@@ -153,7 +197,9 @@ def validate_url(url):
     Returns:
         bool: True if valid, False otherwise
     """
-    if not url.startswith(('https://www.youtube.com/', 'https://youtu.be/')):
+    from bot.security import validate_youtube_url
+
+    valid = validate_youtube_url(url)
+    if not valid:
         print("Error: Invalid URL. Provide a YouTube video link.")
-        return False
-    return True
+    return valid

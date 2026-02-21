@@ -220,6 +220,26 @@ def test_handle_callback_video_and_audio_download_data_dispatch():
     assert ("video", "720p", "https://www.youtube.com/watch?v=abc", {}) in calls
 
 
+def test_handle_callback_invalid_format_id_does_not_download(monkeypatch):
+    tc.user_urls[555] = "https://www.youtube.com/watch?v=abc"
+    invalid_update = _make_update("dl_video_bad", chat_id=555)
+    context = _make_context()
+
+    called = False
+
+    async def fake_download_file(update_arg, context_arg, type_arg, format_arg, url, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(tc, "download_file", fake_download_file)
+    asyncio.run(tc.handle_callback(invalid_update, context))
+
+    assert called is False
+    invalid_update.callback_query.edit_message_text.assert_awaited_once_with(
+        "Nieobsługiwany format. Spróbuj wybrać format ponownie."
+    )
+
+
 def test_handle_callback_formats_and_summary_option_routes():
     tc.user_urls[777] = "https://www.youtube.com/watch?v=abc"
     context = _make_context()

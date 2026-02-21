@@ -7,7 +7,16 @@ Handles command-line interface and interactive curses menu.
 import argparse
 import curses
 
-from bot.downloader import get_video_info, download_youtube_video, validate_url
+from bot.downloader import (
+    get_video_info,
+    download_youtube_video,
+    is_valid_audio_format,
+    is_valid_ytdlp_format_id,
+    validate_url,
+)
+
+
+SUPPORTED_AUDIO_FORMATS = ("mp3", "m4a", "wav", "flac", "ogg", "opus", "vorbis")
 
 
 def show_help():
@@ -23,7 +32,7 @@ def show_help():
     print("  --format <ID>           Specify format to download (format ID from list)")
     print("  --format auto           Automatically select best quality")
     print("  --audio-only            Download audio track only (default mp3)")
-    print("  --audio-format <FORMAT> Specify audio format (mp3, m4a, wav, flac)")
+    print(f"  --audio-format <FORMAT> Specify audio format ({', '.join(SUPPORTED_AUDIO_FORMATS)})")
     print("  --audio-quality <QUALITY> Specify audio quality (0-9 for vorbis/opus, 0-330 for mp3)")
     print("\nExamples:")
     print("  python main.py                                                 # run interactive menu")
@@ -31,7 +40,7 @@ def show_help():
     print("\nDescription:")
     print("  Program displays available video formats, allows selecting specific format")
     print("  and shows download progress in real-time. You can also download")
-    print("  only audio track in various formats (mp3, m4a, wav, flac).")
+    print(f"  only audio track in various formats ({', '.join(SUPPORTED_AUDIO_FORMATS)}).")
 
 
 def parse_arguments():
@@ -42,7 +51,11 @@ def parse_arguments():
     parser.add_argument("--list-formats", action="store_true", help="Show available formats without downloading")
     parser.add_argument("--format", help="Specify format to download (format ID from list)")
     parser.add_argument("--audio-only", action="store_true", help="Download audio track only")
-    parser.add_argument("--audio-format", default="mp3", help="Specify audio format (mp3, m4a, wav, flac)")
+    parser.add_argument(
+        "--audio-format",
+        default="mp3",
+        help=f"Specify audio format ({', '.join(SUPPORTED_AUDIO_FORMATS)})",
+    )
     parser.add_argument("--audio-quality", default="192", help="Specify audio quality")
 
     return parser.parse_args()
@@ -262,6 +275,16 @@ def cli_mode(args):
         return
 
     if not validate_url(args.url):
+        return
+
+    if args.audio_format and not is_valid_audio_format(args.audio_format):
+        print(f"Error: Unsupported audio format: {args.audio_format}")
+        print(f"Supported audio formats: {', '.join(SUPPORTED_AUDIO_FORMATS)}")
+        return
+
+    if args.format and not args.list_formats and not is_valid_ytdlp_format_id(args.format):
+        print(f"Error: Unsupported format id: {args.format}")
+        print("Use --list-formats to see available format IDs.")
         return
 
     if args.list_formats:

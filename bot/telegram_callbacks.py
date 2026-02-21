@@ -40,6 +40,8 @@ from bot.transcription import (
 from bot.downloader import (
     get_video_info,
     sanitize_filename,
+    is_valid_audio_format,
+    is_valid_ytdlp_format_id,
 )
 
 
@@ -211,12 +213,30 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         if type == "audio" and len(parts) >= 4 and parts[2] == "format":
             format_id = parts[3]
+            if not is_valid_ytdlp_format_id(format_id):
+                await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+                return
             await download_file(update, context, "audio", format_id, url)
+        elif type == "audio":
+            if len(parts) < 3:
+                await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+                return
+            audio_format = parts[2]
+            if not is_valid_audio_format(audio_format):
+                await query.edit_message_text("Nieobsługiwany format audio. Spróbuj wybrać format ponownie.")
+                return
+            await download_file(update, context, "audio", audio_format, url)
         elif type == "video" and len(parts) == 3:
             format = parts[2]
+            if not is_valid_ytdlp_format_id(format):
+                await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+                return
             await download_file(update, context, "video", format, url)
         else:
             format = parts[2] if len(parts) > 2 else "best"
+            if not is_valid_ytdlp_format_id(format):
+                await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+                return
             await download_file(update, context, type, format, url)
     elif data == "transcribe_summary":
         await show_language_selection(update, context, "transcribe_summary")
