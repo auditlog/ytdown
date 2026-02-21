@@ -196,6 +196,22 @@ def test_handle_callback_audio_summary_option_invokes_transcription(monkeypatch)
     assert called["summary_type"] == 2
 
 
+def test_handle_callback_audio_summary_option_invalid_shows_warning(monkeypatch):
+    update = _make_update("audio_summary_option_x", chat_id=555)
+    context = _make_context()
+
+    called = {}
+
+    async def fake_transcribe_audio_file(update_arg, context_arg, summary=False, summary_type=None):
+        called["called"] = True
+
+    monkeypatch.setattr(tc, "transcribe_audio_file", fake_transcribe_audio_file)
+    asyncio.run(tc.handle_callback(update, context))
+
+    update.callback_query.edit_message_text.assert_awaited_once_with("Nieobsługiwana opcja podsumowania.")
+    assert "called" not in called
+
+
 def test_handle_callback_video_and_audio_download_data_dispatch():
     tc.user_urls[555] = "https://www.youtube.com/watch?v=abc"
 
@@ -218,6 +234,35 @@ def test_handle_callback_video_and_audio_download_data_dispatch():
 
     assert ("audio", "140", "https://www.youtube.com/watch?v=abc", {"use_format_id": True}) in calls
     assert ("video", "720p", "https://www.youtube.com/watch?v=abc", {}) in calls
+
+
+def test_handle_callback_summary_option_invalid_shows_warning():
+    tc.user_urls[555] = "https://www.youtube.com/watch?v=abc"
+    update = _make_update("summary_option_999", chat_id=555)
+    context = _make_context()
+
+    called = {}
+
+    async def fake_download_file(update_arg, context_arg, type_arg, format_arg, url, **kwargs):
+        called["called"] = True
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(tc, "download_file", fake_download_file)
+    try:
+        asyncio.run(tc.handle_callback(update, context))
+    finally:
+        monkeypatch.undo()
+
+    update.callback_query.edit_message_text.assert_awaited_once_with("Nieobsługiwana opcja podsumowania.")
+    assert "called" not in called
+
+
+def test_parse_summary_option():
+    assert tc.parse_summary_option("summary_option_1") == 1
+    assert tc.parse_summary_option("audio_summary_option_4") == 4
+    assert tc.parse_summary_option("summary_option_0") is None
+    assert tc.parse_summary_option("audio_summary_option_bad") is None
+    assert tc.parse_summary_option("other_option_2") is None
 
 
 def test_parse_download_callback_parses_known_payloads():

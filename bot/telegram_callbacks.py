@@ -198,6 +198,38 @@ def parse_download_callback(data):
     return None
 
 
+def parse_summary_option(option_data):
+    """Parses summary option payloads.
+
+    Expected format:
+      - summary_option_<index>
+      - audio_summary_option_<index>
+    """
+    if not isinstance(option_data, str):
+        return None
+
+    if (
+        not option_data.startswith("summary_option_")
+        and not option_data.startswith("audio_summary_option_")
+    ):
+        return None
+
+    _, _, raw_value = option_data.rpartition("_")
+
+    if not raw_value:
+        return None
+
+    try:
+        summary_option = int(raw_value)
+    except ValueError:
+        return None
+
+    if summary_option < 1 or summary_option > 4:
+        return None
+
+    return summary_option
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all callback queries."""
     query = update.callback_query
@@ -235,7 +267,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_language_selection(update, context, "audio_transcribe_summary")
         return
     elif data.startswith("audio_summary_option_"):
-        option = int(data.split('_')[-1])
+        option = parse_summary_option(data)
+        if option is None:
+            await query.edit_message_text("Nieobsługiwana opcja podsumowania.")
+            return
         await transcribe_audio_file(update, context, summary=True, summary_type=option)
         return
 
@@ -276,8 +311,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "transcribe_summary":
         await show_language_selection(update, context, "transcribe_summary")
     elif data.startswith("summary_option_"):
-        option = data.split('_')[2]
-        await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=int(option))
+        option = parse_summary_option(data)
+        if option is None:
+            await query.edit_message_text("Nieobsługiwana opcja podsumowania.")
+            return
+        await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=option)
     elif data == "transcribe":
         await show_language_selection(update, context, "transcribe")
     elif data == "formats":
