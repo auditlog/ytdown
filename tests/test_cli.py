@@ -114,3 +114,15 @@ def test_cli_mode_rejects_invalid_format(monkeypatch):
     cli.cli_mode(args)
 
     download_mock.assert_not_called()
+
+
+def test_cli_mode_rejects_invalid_audio_quality(monkeypatch):
+    args = Namespace(url="https://youtube.com/watch?v=ok", list_formats=False, format=None, audio_only=True, audio_format="mp3", audio_quality='999')
+    download_mock = Mock()
+
+    monkeypatch.setattr(cli, "validate_url", lambda _url: True)
+    monkeypatch.setattr(cli, "download_youtube_video", download_mock)
+
+    cli.cli_mode(args)
+
+    download_mock.assert_not_called()

@@ -10,6 +10,7 @@ from bot.downloader import (
     download_youtube_video,
     is_valid_ytdlp_format_id,
     is_valid_audio_format,
+    is_valid_audio_quality,
     normalize_format_id,
     validate_url,
 )
@@ -156,6 +157,17 @@ def test_is_valid_audio_format():
     assert is_valid_audio_format("bad") is False
 
 
+def test_is_valid_audio_quality():
+    assert is_valid_audio_quality("mp3", "192") is True
+    assert is_valid_audio_quality("mp3", 330) is True
+    assert is_valid_audio_quality("mp3", -1) is False
+    assert is_valid_audio_quality("mp3", 331) is False
+    assert is_valid_audio_quality("opus", 4) is True
+    assert is_valid_audio_quality("opus", 10) is False
+    assert is_valid_audio_quality("flac", 256) is True
+    assert is_valid_audio_quality("flac", "bad") is False
+
+
 def test_normalize_format_id():
     assert normalize_format_id(None) is None
     assert normalize_format_id("auto") == "best"
@@ -183,6 +195,20 @@ def test_download_youtube_video_rejects_invalid_format_id(monkeypatch):
 
     monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
     assert download_youtube_video("https://youtube.com/watch?v=test", format_id="bad-format") is False
+
+
+def test_download_youtube_video_rejects_invalid_audio_quality(monkeypatch):
+    class MockYoutubeDL:
+        def __init__(self, opts):
+            raise AssertionError("yt-dlp should not be called for invalid audio quality")
+
+    monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
+    assert download_youtube_video(
+        "https://youtube.com/watch?v=test",
+        audio_only=True,
+        audio_format="mp3",
+        audio_quality="500",
+    ) is False
 
 
 def test_download_youtube_video_returns_false_on_exception(monkeypatch):

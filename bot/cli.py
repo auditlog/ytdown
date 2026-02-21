@@ -8,15 +8,14 @@ import argparse
 import curses
 
 from bot.downloader import (
+    SUPPORTED_AUDIO_FORMATS,
     get_video_info,
     download_youtube_video,
     is_valid_audio_format,
+    is_valid_audio_quality,
     is_valid_ytdlp_format_id,
     validate_url,
 )
-
-
-SUPPORTED_AUDIO_FORMATS = ("mp3", "m4a", "wav", "flac", "ogg", "opus", "vorbis")
 
 
 def show_help():
@@ -280,6 +279,11 @@ def cli_mode(args):
     if args.audio_format and not is_valid_audio_format(args.audio_format):
         print(f"Error: Unsupported audio format: {args.audio_format}")
         print(f"Supported audio formats: {', '.join(SUPPORTED_AUDIO_FORMATS)}")
+        return
+
+    if args.audio_only and not is_valid_audio_quality(args.audio_format, args.audio_quality):
+        print(f"Error: Unsupported audio quality '{args.audio_quality}' for format '{args.audio_format}'.")
+        print("Try values from help, e.g. 0-330 for mp3, 0-9 for Opus/Ogg/Vorbis.")
         return
 
     if args.format and not args.list_formats and not is_valid_ytdlp_format_id(args.format):

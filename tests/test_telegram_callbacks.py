@@ -216,8 +216,32 @@ def test_handle_callback_video_and_audio_download_data_dispatch():
     finally:
         monkeypatch.undo()
 
-    assert ("audio", "140", "https://www.youtube.com/watch?v=abc", {}) in calls
+    assert ("audio", "140", "https://www.youtube.com/watch?v=abc", {"use_format_id": True}) in calls
     assert ("video", "720p", "https://www.youtube.com/watch?v=abc", {}) in calls
+
+
+def test_parse_download_callback_parses_known_payloads():
+    assert tc.parse_download_callback("dl_video_720p") == {
+        "media_type": "video",
+        "mode": "format_id",
+        "format": "720p",
+    }
+    assert tc.parse_download_callback("dl_audio_mp3") == {
+        "media_type": "audio",
+        "mode": "codec",
+        "format": "mp3",
+    }
+    assert tc.parse_download_callback("dl_audio_format_140") == {
+        "media_type": "audio",
+        "mode": "format_id",
+        "format": "140",
+    }
+
+
+def test_parse_download_callback_returns_none_for_unknown_payload():
+    assert tc.parse_download_callback("formats") is None
+    assert tc.parse_download_callback("dl_unknown_720p") is None
+    assert tc.parse_download_callback("dl_audio_format") is None
 
 
 def test_handle_callback_invalid_format_id_does_not_download(monkeypatch):

@@ -12,7 +12,15 @@ import yt_dlp
 
 
 FORMAT_ID_PATTERN = re.compile(r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$")
-AUDIO_FORMATS = {"mp3", "m4a", "wav", "flac", "ogg", "opus"}
+SUPPORTED_AUDIO_FORMATS = ("mp3", "m4a", "wav", "flac", "ogg", "opus")
+AUDIO_FORMATS = set(SUPPORTED_AUDIO_FORMATS)
+
+QUALITY_RANGE_BY_CODEC = {
+    "mp3": (0, 330),
+    "opus": (0, 9),
+    "vorbis": (0, 9),
+    "ogg": (0, 9),
+}
 
 
 def sanitize_filename(filename):
@@ -46,6 +54,34 @@ def is_valid_audio_format(audio_format):
     if not isinstance(audio_format, str):
         return False
     return audio_format.strip().lower() in AUDIO_FORMATS
+
+
+def is_valid_audio_quality(audio_format, audio_quality):
+    """Returns True when audio quality is supported for selected codec."""
+
+    if not isinstance(audio_format, str):
+        return False
+
+    normalized_format = audio_format.strip().lower()
+    if normalized_format not in SUPPORTED_AUDIO_FORMATS:
+        return False
+
+    if isinstance(audio_quality, bool):
+        return False
+    try:
+        normalized_quality = int(str(audio_quality).strip())
+    except (TypeError, ValueError):
+        return False
+
+    if normalized_quality < 0:
+        return False
+
+    quality_range = QUALITY_RANGE_BY_CODEC.get(normalized_format)
+    if quality_range is None:
+        return True
+
+    min_quality, max_quality = quality_range
+    return min_quality <= normalized_quality <= max_quality
 
 
 def normalize_format_id(format_id, *, default="best"):
@@ -134,8 +170,13 @@ def download_youtube_video(url, format_id=None, audio_only=False, audio_format='
     try:
         normalized_format_id = normalize_format_id(format_id)
         normalized_audio_format = audio_format.strip().lower() if audio_format else "mp3"
+        normalized_audio_quality = str(audio_quality).strip() if audio_quality is not None else "192"
         if normalized_audio_format and not is_valid_audio_format(normalized_audio_format):
             print(f"[ERROR] Unsupported audio format: {normalized_audio_format}")
+            return False
+
+        if audio_only and not is_valid_audio_quality(normalized_audio_format, normalized_audio_quality):
+            print(f"[ERROR] Unsupported audio quality {normalized_audio_quality} for format {normalized_audio_format}")
             return False
 
         if normalized_format_id is not None and not is_valid_ytdlp_format_id(normalized_format_id):
@@ -162,7 +203,7 @@ def download_youtube_video(url, format_id=None, audio_only=False, audio_format='
                 'postprocessors': [{
                     'key': 'FFmpegExtractAudio',
                     'preferredcodec': normalized_audio_format,
-                    'preferredquality': str(audio_quality).strip(),
+                    'preferredquality': normalized_audio_quality,
                 }],
             })
         elif format_id:
