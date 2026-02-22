@@ -329,6 +329,7 @@ async def download_file(
     media_type = type
     query = update.callback_query
     chat_id = update.effective_chat.id
+    title = "Unknown"  # Default for error recording before info fetch
 
     # Helper for status updates
     async def update_status(text):
@@ -623,7 +624,7 @@ async def download_file(
                     )
 
                 # Record transcription+summary in history
-                add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range)
+                add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range, selected_format=format)
 
                 await update_status("Transkrypcja i podsumowanie zostały wysłane!")
 
@@ -670,7 +671,7 @@ async def download_file(
                     logging.error(f"Error deleting files: {e}")
 
                 # Record transcription in history
-                add_download_record(chat_id, title, url, "transcription", file_size_mb, time_range)
+                add_download_record(chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
 
                 await update_status("Transkrypcja została wysłana!")
 
@@ -700,11 +701,17 @@ async def download_file(
 
             # Record download in history
             format_type = f"{media_type}_{format}"
-            add_download_record(chat_id, title, url, format_type, file_size_mb, time_range)
+            add_download_record(chat_id, title, url, format_type, file_size_mb, time_range, selected_format=format)
 
             await update_status("Plik został wysłany!")
 
     except Exception as e:
+        # Record failure in download history
+        add_download_record(
+            chat_id, title, url, f"{media_type}_{format}",
+            status="failure", selected_format=format,
+            error_message=str(e),
+        )
         await update_status(f"Wystąpił błąd: {str(e)}")
 
 

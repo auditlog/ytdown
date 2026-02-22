@@ -218,11 +218,21 @@ def register_pin_failure(
     current_time = now or time.time()
 
     attempts_map[user_id] += 1
-    if attempts_map[user_id] >= max_attempts:
+    current_attempt = attempts_map[user_id]
+
+    if current_attempt >= max_attempts:
         block_until_map[user_id] = current_time + block_time
+        logging.warning(
+            "User %s BLOCKED after %d failed PIN attempts",
+            user_id, current_attempt,
+        )
         return 0
 
-    return max_attempts - attempts_map[user_id]
+    logging.warning(
+        "Failed PIN attempt for user %s (attempt %d/%d)",
+        user_id, current_attempt, max_attempts,
+    )
+    return max_attempts - current_attempt
 
 
 def validate_youtube_url(url):

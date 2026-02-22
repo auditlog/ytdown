@@ -154,3 +154,52 @@ def test_pin_failure_blocks_after_threshold():
 
     security.clear_failed_attempts(1, attempts=attempts)
     assert attempts[1] == 0
+
+
+def test_register_pin_failure_logs_warning_on_failed_attempt(caplog):
+    """Verify logging.warning is emitted for a non-blocking failed PIN attempt."""
+    import logging
+
+    attempts = defaultdict(int)
+    block_map = defaultdict(float)
+
+    with caplog.at_level(logging.WARNING):
+        security.register_pin_failure(
+            user_id=9001,
+            now=100.0,
+            attempts=attempts,
+            block_map=block_map,
+            max_attempts=3,
+            block_time=60,
+        )
+
+    assert any(
+        "Failed PIN attempt for user 9001" in rec.message and "1/3" in rec.message
+        for rec in caplog.records
+    )
+
+
+def test_register_pin_failure_logs_warning_on_block(caplog):
+    """Verify logging.warning is emitted when user gets blocked."""
+    import logging
+
+    attempts = defaultdict(int)
+    block_map = defaultdict(float)
+
+    # Use up first attempt
+    security.register_pin_failure(
+        user_id=9002, now=100.0, attempts=attempts, block_map=block_map,
+        max_attempts=2, block_time=60,
+    )
+
+    caplog.clear()
+    with caplog.at_level(logging.WARNING):
+        security.register_pin_failure(
+            user_id=9002, now=101.0, attempts=attempts, block_map=block_map,
+            max_attempts=2, block_time=60,
+        )
+
+    assert any(
+        "User 9002 BLOCKED" in rec.message and "2 failed PIN attempts" in rec.message
+        for rec in caplog.records
+    )

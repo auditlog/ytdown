@@ -439,6 +439,8 @@ class TestStatusAndStatsCommands:
                 "total_downloads": 0,
                 "total_size_mb": 0,
                 "format_counts": {},
+                "success_count": 0,
+                "failure_count": 0,
                 "recent": [],
             },
         )
@@ -458,12 +460,15 @@ class TestStatusAndStatsCommands:
                 "total_downloads": 1,
                 "total_size_mb": 123.4,
                 "format_counts": {"audio_mp3": 1},
+                "success_count": 1,
+                "failure_count": 0,
                 "recent": [
                     {
                         "timestamp": "2026-01-01T12:00:00",
                         "title": "Test title",
                         "format": "audio_mp3",
                         "file_size_mb": 50,
+                        "status": "success",
                     }
                 ],
             },
@@ -674,3 +679,135 @@ class TestUsersCommand:
         text = update.message.reply_text.await_args.args[0]
         assert "- Liczba: 11" in text
         assert "- Lista ID: 11 użytkowników" in text
+
+
+class TestNotifyAdminPinFailure:
+    def test_notify_sends_message_when_admin_chat_id_set(self, monkeypatch):
+        bot = Mock()
+        bot.send_message = AsyncMock()
+
+        user = Mock()
+        user.id = 999
+        user.username = "testuser"
+        user.first_name = "Test"
+        user.language_code = "pl"
+
+        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "12345")
+
+        _async(tc.notify_admin_pin_failure(bot, user, attempt_count=2, blocked=False))
+
+        bot.send_message.assert_awaited_once()
+        text = bot.send_message.await_args.kwargs["text"]
+        assert "[Failed PIN attempt]" in text
+        assert "999" in text
+        assert "@testuser" in text
+
+    def test_notify_skips_when_no_admin_chat_id(self, monkeypatch):
+        bot = Mock()
+        bot.send_message = AsyncMock()
+
+        user = Mock()
+        user.id = 999
+        user.username = "testuser"
+        user.first_name = "Test"
+        user.language_code = "pl"
+
+        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "")
+
+        _async(tc.notify_admin_pin_failure(bot, user, attempt_count=1, blocked=False))
+
+        bot.send_message.assert_not_awaited()
+
+    def test_notify_handles_network_error_gracefully(self, monkeypatch):
+        bot = Mock()
+        bot.send_message = AsyncMock(side_effect=Exception("network error"))
+
+        user = Mock()
+        user.id = 999
+        user.username = "testuser"
+        user.first_name = "Test"
+        user.language_code = "pl"
+
+        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "12345")
+
+        # Should not raise
+        _async(tc.notify_admin_pin_failure(bot, user, attempt_count=1, blocked=False))
+
+    def test_notify_handles_invalid_chat_id(self, monkeypatch):
+        bot = Mock()
+        bot.send_message = AsyncMock()
+
+        user = Mock()
+        user.id = 999
+        user.username = "testuser"
+        user.first_name = "Test"
+        user.language_code = "pl"
+
+        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "not_a_number")
+
+        _async(tc.notify_admin_pin_failure(bot, user, attempt_count=1, blocked=False))
+
+        bot.send_message.assert_not_awaited()
+
+    def test_notify_sends_blocked_message(self, monkeypatch):
+        bot = Mock()
+        bot.send_message = AsyncMock()
+
+        user = Mock()
+        user.id = 999
+        user.username = None
+        user.first_name = "Blocked"
+        user.language_code = None
+
+        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "12345")
+
+        _async(tc.notify_admin_pin_failure(bot, user, attempt_count=3, blocked=True))
+
+        text = bot.send_message.await_args.kwargs["text"]
+        assert "[BLOCKED]" in text
+        assert "n/a" in text  # username is None
+
+
+class TestHistoryWithNewFields:
+    def test_history_command_shows_success_failure_counts(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+
+        monkeypatch.setattr(tc, "authorized_users", {111})
+        monkeypatch.setattr(
+            tc,
+            "get_download_stats",
+            lambda user_id=None: {
+                "total_downloads": 5,
+                "total_size_mb": 200.0,
+                "format_counts": {"audio_mp3": 3, "video_best": 2},
+                "success_count": 4,
+                "failure_count": 1,
+                "recent": [
+                    {
+                        "timestamp": "2026-02-20T12:00:00",
+                        "title": "Test OK",
+                        "format": "audio_mp3",
+                        "file_size_mb": 5.0,
+                        "status": "success",
+                    },
+                    {
+                        "timestamp": "2026-02-20T13:00:00",
+                        "title": "Test Fail",
+                        "format": "video_best",
+                        "file_size_mb": 0,
+                        "status": "failure",
+                        "time_range": "0:30-5:00",
+                    },
+                ],
+            },
+        )
+
+        _async(tc.history_command(update, context))
+
+        text = update.message.reply_text.await_args.args[0]
+        assert "Udane: 4" in text
+        assert "Nieudane: 1" in text
+        assert "✅" in text
+        assert "❌" in text
+        assert "✂️0:30-5:00" in text

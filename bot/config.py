@@ -25,7 +25,8 @@ DEFAULT_CONFIG = {
     "TELEGRAM_BOT_TOKEN": "",
     "GROQ_API_KEY": "",
     "PIN_CODE": "12345678",
-    "CLAUDE_API_KEY": ""
+    "CLAUDE_API_KEY": "",
+    "ADMIN_CHAT_ID": ""
 }
 
 # Download directory
@@ -103,6 +104,7 @@ def load_config(
         "GROQ_API_KEY": environment.get("GROQ_API_KEY"),
         "CLAUDE_API_KEY": environment.get("CLAUDE_API_KEY"),
         "PIN_CODE": environment.get("PIN_CODE"),
+        "ADMIN_CHAT_ID": environment.get("ADMIN_CHAT_ID"),
     }
 
     for key, value in overrides.items():
@@ -285,7 +287,10 @@ def save_download_history(history):
         logging.error(f"Error saving {DOWNLOAD_HISTORY_FILE}: {e}")
 
 
-def add_download_record(user_id, title, url, format_type, file_size_mb=None, time_range=None):
+def add_download_record(
+    user_id, title, url, format_type, file_size_mb=None, time_range=None,
+    status="success", selected_format=None, error_message=None,
+):
     """
     Adds a download record to history.
 
@@ -298,6 +303,9 @@ def add_download_record(user_id, title, url, format_type, file_size_mb=None, tim
         format_type: Download format (e.g., "video_best", "audio_mp3")
         file_size_mb: File size in MB (optional)
         time_range: Time range dict (optional)
+        status: "success" or "failure" (default "success")
+        selected_format: Raw format string passed to yt-dlp (optional)
+        error_message: Error description when status is "failure" (optional)
     """
     record = {
         'timestamp': datetime.now().isoformat(),
@@ -305,6 +313,7 @@ def add_download_record(user_id, title, url, format_type, file_size_mb=None, tim
         'title': title,
         'url': url,
         'format': format_type,
+        'status': status,
     }
 
     if file_size_mb:
@@ -312,6 +321,12 @@ def add_download_record(user_id, title, url, format_type, file_size_mb=None, tim
 
     if time_range:
         record['time_range'] = f"{time_range.get('start', '0:00')}-{time_range.get('end', 'end')}"
+
+    if selected_format:
+        record['selected_format'] = selected_format
+
+    if error_message:
+        record['error_message'] = str(error_message)[:200]
 
     with _history_lock:
         history = load_download_history()
@@ -343,10 +358,16 @@ def get_download_stats(user_id=None):
         fmt = h.get('format', 'unknown')
         format_counts[fmt] = format_counts.get(fmt, 0) + 1
 
+    # Count by status (old records without status default to "success")
+    success_count = sum(1 for h in history if h.get('status', 'success') == 'success')
+    failure_count = sum(1 for h in history if h.get('status', 'success') == 'failure')
+
     return {
         'total_downloads': total_downloads,
         'total_size_mb': round(total_size, 2),
         'format_counts': format_counts,
+        'success_count': success_count,
+        'failure_count': failure_count,
         'recent': history[-10:][::-1] if history else []  # Last 10, newest first
     }
 
@@ -355,6 +376,7 @@ def get_download_stats(user_id=None):
 CONFIG = load_config(ensure_downloads_dir=True)
 BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
 PIN_CODE = CONFIG["PIN_CODE"]
+ADMIN_CHAT_ID = CONFIG.get("ADMIN_CHAT_ID", "")
 
 # Load authorized users from JSON file
 authorized_users = load_authorized_users()

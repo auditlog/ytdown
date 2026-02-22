@@ -12,7 +12,10 @@ import subprocess
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 
+from datetime import datetime
+
 from bot.config import (
+    ADMIN_CHAT_ID,
     DOWNLOAD_PATH,
     PIN_CODE,
     authorized_users,
@@ -133,6 +136,42 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data["awaiting_pin"] = True
 
 
+async def notify_admin_pin_failure(bot, user, attempt_count: int, blocked: bool):
+    """
+    Sends a Telegram notification to ADMIN_CHAT_ID about a failed PIN attempt.
+
+    Non-blocking: any error is silently logged so the auth flow is never interrupted.
+    """
+    if not ADMIN_CHAT_ID:
+        return
+
+    try:
+        admin_id = int(ADMIN_CHAT_ID)
+    except (ValueError, TypeError):
+        logging.warning("ADMIN_CHAT_ID is not a valid integer: %s", ADMIN_CHAT_ID)
+        return
+
+    try:
+        emoji = "\U0001f6ab" if blocked else "\u26a0\ufe0f"  # 🚫 or ⚠️
+        label = "[BLOCKED]" if blocked else "[Failed PIN attempt]"
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        username = f"@{user.username}" if user.username else "n/a"
+        text = (
+            f"{emoji} {label}\n\n"
+            f"User ID: {user.id}\n"
+            f"Username: {username}\n"
+            f"Name: {user.first_name or 'n/a'}\n"
+            f"Language: {user.language_code or 'n/a'}\n"
+            f"Attempts: {attempt_count}/{MAX_ATTEMPTS}\n"
+            f"Time: {timestamp}"
+        )
+
+        await bot.send_message(chat_id=admin_id, text=text)
+    except Exception as exc:
+        logging.error("Failed to send admin PIN notification: %s", exc)
+
+
 async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles PIN input from user."""
     user_id = update.effective_user.id
@@ -196,7 +235,17 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     block_time=BLOCK_TIME,
                 )
 
-                if remaining_attempts == 0:
+                # Determine attempt count for notification
+                attempt_count = MAX_ATTEMPTS - remaining_attempts
+                blocked = remaining_attempts == 0
+
+                # Notify admin (non-blocking)
+                await notify_admin_pin_failure(
+                    context.bot, update.effective_user,
+                    attempt_count, blocked,
+                )
+
+                if blocked:
                     await update.message.reply_text(
                         "Niepoprawny PIN!\n\n"
                         f"Przekroczono maksymalną liczbę prób ({MAX_ATTEMPTS}).\n"
@@ -301,6 +350,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     msg = "📊 **Historia pobrań**\n\n"
     msg += f"**Twoje statystyki:**\n"
     msg += f"- Łączna liczba pobrań: {stats['total_downloads']}\n"
+    msg += f"- Udane: {stats['success_count']} ✅  Nieudane: {stats['failure_count']} ❌\n"
     msg += f"- Łączny rozmiar: {stats['total_size_mb']:.1f} MB\n\n"
 
     # Format counts
@@ -320,7 +370,11 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timestamp = record.get('timestamp', '')[:10]  # Just date
             fmt = record.get('format', '?')
             size = record.get('file_size_mb', 0)
-            msg += f"- `{timestamp}` {title} ({fmt}, {size:.1f}MB)\n"
+            status_icon = "✅" if record.get('status', 'success') == 'success' else "❌"
+            time_range_str = ""
+            if record.get('time_range'):
+                time_range_str = f" ✂️{record['time_range']}"
+            msg += f"- {status_icon} `{timestamp}` {title} ({fmt}, {size:.1f}MB){time_range_str}\n"
 
     await update.message.reply_text(msg, parse_mode='Markdown')
 
