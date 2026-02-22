@@ -197,8 +197,8 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Check if waiting for PIN from this user
     if context.user_data.get("awaiting_pin", False) or not (user_id in authorized_users):
-        # Check if message looks like PIN (8 digits)
-        if message_text.isdigit() and len(message_text) == 8:
+        # Check if message looks like a PIN attempt (digits only)
+        if message_text.isdigit():
             if message_text == PIN_CODE:
                 # Reset failed attempts counter
                 clear_failed_attempts(user_id, attempts=failed_attempts)
