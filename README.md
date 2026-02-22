@@ -19,8 +19,13 @@ Bot Telegram do pobierania filmów z YouTube z funkcjami transkrypcji i podsumow
 - Limit rozmiaru plików - max 1GB
 - Walidacja URL - tylko HTTPS YouTube (youtube.com, youtu.be, music.youtube.com)
 - Blokada po 3 nieudanych próbach PIN (15 minut)
+- Logowanie nieudanych prób PIN + powiadomienia Telegram do admina
+- Walidacja format_id przed przekazaniem do yt-dlp
+- Walidacja zakresu czasowego względem długości filmu
+- Komenda `/logout` do zakończenia sesji
 - Wsparcie dla zmiennych środowiskowych
 - JSON persistence dla autoryzowanych użytkowników
+- Historia pobrań z rozróżnieniem sukcesów i błędów
 
 ### Zarządzanie plikami
 - Automatyczne czyszczenie plików starszych niż 24h
@@ -107,6 +112,7 @@ TELEGRAM_BOT_TOKEN=twój_token_bota
 GROQ_API_KEY=twój_klucz_groq
 CLAUDE_API_KEY=twój_klucz_claude
 PIN_CODE=12345678
+ADMIN_CHAT_ID=twój_telegram_user_id
 ```
 
 **UWAGA**: Plik `api_key.md` jest ignorowany przez git - nie commituj go do repozytorium!
@@ -130,6 +136,7 @@ export TELEGRAM_BOT_TOKEN="twój_token"
 export GROQ_API_KEY="twój_klucz"
 export CLAUDE_API_KEY="twój_klucz"
 export PIN_CODE="12345678"
+export ADMIN_CHAT_ID="twój_telegram_user_id"
 ```
 
 **Windows (PowerShell):**
@@ -138,6 +145,7 @@ $env:TELEGRAM_BOT_TOKEN="twój_token"
 $env:GROQ_API_KEY="twój_klucz"
 $env:CLAUDE_API_KEY="twój_klucz"
 $env:PIN_CODE="12345678"
+$env:ADMIN_CHAT_ID="twój_telegram_user_id"
 ```
 
 ## Uruchomienie
@@ -163,6 +171,8 @@ poetry run python main.py
 | `--audio-only` | Pobierz tylko ścieżkę audio | - |
 | `--audio-format <FORMAT>` | Format audio: mp3, m4a, wav, flac, opus, vorbis | mp3 |
 | `--audio-quality <QUALITY>` | Jakość audio (0-9 dla vorbis/opus, 0-330 dla mp3) | 192 |
+| `--start <TIMESTAMP>` | Czas rozpoczęcia klipu (SS, MM:SS, HH:MM:SS) | - |
+| `--to <TIMESTAMP>` | Czas zakończenia klipu (SS, MM:SS, HH:MM:SS) | - |
 
 #### Przykłady użycia
 
@@ -181,6 +191,9 @@ python main.py --cli --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --audio
 
 # Pobierz audio w formacie FLAC z najwyższą jakością
 python main.py --cli --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --audio-only --audio-format flac --audio-quality 0
+
+# Pobierz fragment filmu (od 1:30 do 5:00)
+python main.py --cli --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --start 1:30 --to 5:00
 ```
 
 ### Testy
@@ -204,13 +217,14 @@ Jeśli używasz testów asynchronicznych, upewnij się, że masz zainstalowany `
 | `/history` | Historia pobrań i statystyki użytkownika |
 | `/cleanup` | Ręczne usunięcie starych plików |
 | `/users` | Zarządzanie autoryzowanymi użytkownikami |
+| `/logout` | Wyloguj się z bota (zakończ sesję) |
 
 ## Używanie bota
 
 ### Pobieranie z YouTube
 1. Znajdź swojego bota na Telegramie
 2. Wyślij `/start`
-3. Wprowadź 8-cyfrowy kod PIN
+3. Wprowadź kod PIN
 4. Wyślij link do filmu YouTube
 5. Wybierz format i jakość
 6. Opcjonalnie: wybierz transkrypcję lub streszczenie
@@ -245,11 +259,16 @@ ytdown/
 │   ├── telegram_commands.py        # Handlery komend Telegram (/start, /help, etc.)
 │   └── telegram_callbacks.py       # Handlery callbacków (przyciski, pobieranie)
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy
-│   ├── test_security.py            # Testy bezpieczeństwa (wymaga importów)
-│   ├── test_security_standalone.py # Testy standalone (bez zależności)
-│   ├── test_json_persistence.py    # Testy persystencji JSON
-│   └── test_json_simple.py         # Proste testy JSON
+├── tests/                          # Testy (~210 testów)
+│   ├── conftest.py                 # Współdzielone fixtures
+│   ├── test_security.py            # Testy bezpieczeństwa
+│   ├── test_security_unit.py       # Testy PIN, blokowania, logowania
+│   ├── test_telegram_commands.py   # Testy komend, powiadomień admina
+│   ├── test_telegram_callbacks.py  # Testy callbacków, pobierania
+│   ├── test_downloader.py          # Testy downloadera, walidacji czasu
+│   ├── test_download_history.py    # Testy historii pobrań
+│   ├── test_cli.py                 # Testy CLI
+│   └── ...                         # Pozostałe testy
 ├── api_key.md                      # Konfiguracja (ignorowany przez git)
 ├── cookies.txt                     # Cookies YouTube (ignorowany przez git)
 ├── authorized_users.json           # Lista autoryzowanych użytkowników (ignorowany)

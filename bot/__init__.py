@@ -7,8 +7,6 @@ This package contains all modules for the YouTube downloader bot.
 # Core modules (minimal dependencies)
 from bot.config import (
     CONFIG,
-    BOT_TOKEN,
-    PIN_CODE,
     DOWNLOAD_PATH,
     authorized_users,
     load_config,
@@ -97,8 +95,6 @@ except ImportError:
 __all__ = [
     # Config
     'CONFIG',
-    'BOT_TOKEN',
-    'PIN_CODE',
     'DOWNLOAD_PATH',
     'authorized_users',
     'load_config',

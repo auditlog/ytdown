@@ -15,6 +15,7 @@ import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
+from telegram.helpers import escape_markdown
 
 # Thread pool for running sync functions
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -24,12 +25,12 @@ _download_progress = {}
 
 from bot.config import (
     CONFIG,
-    CONFIG_FILE_PATH,
     DOWNLOAD_PATH,
     add_download_record,
 )
 from bot.security import (
     MAX_FILE_SIZE_MB,
+    check_rate_limit,
     user_urls,
     user_time_ranges,
 )
@@ -45,6 +46,11 @@ from bot.downloader import (
     is_valid_audio_quality,
     COOKIES_FILE,
 )
+
+
+def escape_md(text: str) -> str:
+    """Escapes Markdown v1 special characters in text."""
+    return escape_markdown(text, version=1)
 
 
 def format_bytes(bytes_value):
@@ -237,7 +243,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await query.answer()
     data = query.data
 
+    user_id = update.effective_user.id
     chat_id = update.effective_chat.id
+
+    # Rate limit callbacks to prevent abuse
+    if not check_rate_limit(user_id):
+        await query.edit_message_text("Przekroczono limit requestów. Spróbuj ponownie za chwilę.")
+        return
 
     # Audio upload callbacks — no YouTube URL required
     if data == "audio_transcribe":
@@ -502,11 +514,14 @@ async def download_file(
 
         await run_download_with_progress()
 
-        # Find downloaded file
+        # Find downloaded file (exclude transcription/summary artifacts)
+        _artifact_suffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
         downloaded_file_path = None
         for file in os.listdir(chat_download_path):
             full_path = os.path.join(chat_download_path, file)
             if sanitized_title in file and full_path.startswith(output_path):
+                if any(file.endswith(s) for s in _artifact_suffixes):
+                    continue
                 downloaded_file_path = full_path
                 break
 
@@ -522,8 +537,8 @@ async def download_file(
 
             if not CONFIG["GROQ_API_KEY"]:
                 await update_status(
-                    "Błąd: Brak klucza API do transkrypcji w pliku konfiguracyjnym.\n"
-                    f"Dodaj klucz GROQ_API_KEY w pliku {CONFIG_FILE_PATH}."
+                    "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
+                    "Skontaktuj się z administratorem."
                 )
                 return
 
@@ -562,8 +577,8 @@ async def download_file(
             if summary:
                 if not CONFIG["CLAUDE_API_KEY"]:
                     await update_status(
-                        "Błąd: Brak klucza API Claude w pliku konfiguracyjnym.\n"
-                        f"Dodaj klucz CLAUDE_API_KEY w pliku {CONFIG_FILE_PATH}."
+                        "Funkcja niedostępna — brak klucza API do podsumowań.\n"
+                        "Skontaktuj się z administratorem."
                     )
                     return
 
@@ -608,7 +623,7 @@ async def download_file(
 
                 await send_long_message(
                     context.bot, chat_id, summary_text,
-                    header=f"*{title} - {summary_type_name}*\n\n"
+                    header=f"*{escape_md(title)} - {summary_type_name}*\n\n"
                 )
 
                 await update_status("Wysyłanie pliku z pełną transkrypcją...")
@@ -647,7 +662,7 @@ async def download_file(
                 if len(display_text) <= 30000:
                     await send_long_message(
                         context.bot, chat_id, display_text,
-                        header=f"*Transkrypcja: {title}*\n\n"
+                        header=f"*Transkrypcja: {escape_md(title)}*\n\n"
                     )
 
                 # Send file as attachment
@@ -712,7 +727,7 @@ async def download_file(
             status="failure", selected_format=format,
             error_message=str(e),
         )
-        await update_status(f"Wystąpił błąd: {str(e)}")
+        await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
 
 
 async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
@@ -789,7 +804,7 @@ async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYP
 
     await safe_edit_message(
         query,
-        f"*{title}*\n\nWybierz rodzaj podsumowania:",
+        f"*{escape_md(title)}*\n\nWybierz rodzaj podsumowania:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -830,7 +845,7 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
     await safe_edit_message(
         query,
-        f"*{title}*\nCzas trwania: {duration_str}{time_range_info}\n\nWybierz format do pobrania:",
+        f"*{escape_md(title)}*\nCzas trwania: {duration_str}{time_range_info}\n\nWybierz format do pobrania:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -873,7 +888,7 @@ async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_
 
     await safe_edit_message(
         query,
-        f"*{title}*\nCzas trwania: {duration_str}{current_range}\n\n"
+        f"*{escape_md(title)}*\nCzas trwania: {duration_str}{current_range}\n\n"
         f"Wybierz zakres czasowy do pobrania:\n\n"
         f"💡 Możesz też wpisać własny zakres w formacie:\n"
         f"`0:30-5:45` lub `1:00:00-1:30:00`",
@@ -954,8 +969,8 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
 
     if not CONFIG["GROQ_API_KEY"]:
         await update_status(
-            "Błąd: Brak klucza API do transkrypcji w pliku konfiguracyjnym.\n"
-            f"Dodaj klucz GROQ_API_KEY w pliku {CONFIG_FILE_PATH}."
+            "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
+            "Skontaktuj się z administratorem."
         )
         return
 
@@ -990,8 +1005,8 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     if summary:
         if not CONFIG["CLAUDE_API_KEY"]:
             await update_status(
-                "Błąd: Brak klucza API Claude w pliku konfiguracyjnym.\n"
-                f"Dodaj klucz CLAUDE_API_KEY w pliku {CONFIG_FILE_PATH}."
+                "Funkcja niedostępna — brak klucza API do podsumowań.\n"
+                "Skontaktuj się z administratorem."
             )
             return
 
@@ -1039,7 +1054,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         # Send summary as message(s)
         await send_long_message(
             context.bot, chat_id, summary_text,
-            header=f"*{title} - {summary_type_name}*\n\n"
+            header=f"*{escape_md(title)} - {summary_type_name}*\n\n"
         )
 
         await update_status("Wysyłanie pliku z pełną transkrypcją...")
@@ -1076,7 +1091,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         if len(display_text) <= 30000:
             await send_long_message(
                 context.bot, chat_id, display_text,
-                header=f"*Transkrypcja: {title}*\n\n"
+                header=f"*Transkrypcja: {escape_md(title)}*\n\n"
             )
 
         # Send file as attachment
@@ -1120,7 +1135,7 @@ async def show_audio_summary_options(update: Update, context: ContextTypes.DEFAU
 
     await safe_edit_message(
         query,
-        f"*{title}*\n\nWybierz rodzaj podsumowania:",
+        f"*{escape_md(title)}*\n\nWybierz rodzaj podsumowania:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )

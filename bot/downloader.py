@@ -34,12 +34,22 @@ def sanitize_filename(filename):
         filename: Original filename
 
     Returns:
-        str: Sanitized filename
+        str: Sanitized filename safe for filesystem use
     """
     invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
     for char in invalid_chars:
         filename = filename.replace(char, '-')
-    return filename
+    # Remove path traversal sequences
+    filename = filename.replace('..', '')
+    # Remove control characters
+    filename = ''.join(c for c in filename if c.isprintable())
+    # Limit length (preserve extension room)
+    if len(filename) > 200:
+        filename = filename[:200]
+    # Fallback for empty filename
+    if not filename.strip():
+        filename = "download"
+    return filename.strip()
 
 
 def is_valid_ytdlp_format_id(format_id):

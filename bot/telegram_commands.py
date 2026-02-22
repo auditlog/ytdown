@@ -11,6 +11,7 @@ import subprocess
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
+from telegram.helpers import escape_markdown
 
 from datetime import datetime
 
@@ -45,6 +46,21 @@ from bot.cleanup import (
     get_disk_usage,
 )
 from bot.downloader import get_video_info
+
+
+def escape_md(text: str) -> str:
+    """Escapes Markdown v1 special characters in text."""
+    return escape_markdown(text, version=1)
+
+
+def _is_admin(user_id: int) -> bool:
+    """Returns True if user_id matches ADMIN_CHAT_ID."""
+    if not ADMIN_CHAT_ID:
+        return True  # No admin configured — all authorized users are admin
+    try:
+        return user_id == int(ADMIN_CHAT_ID)
+    except (ValueError, TypeError):
+        return False
 
 
 def parse_time_range(text: str) -> dict | None:
@@ -436,6 +452,10 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
         return
 
+    if not _is_admin(user_id):
+        await update.message.reply_text("Ta komenda jest dostępna tylko dla administratora.")
+        return
+
     user_count = len(authorized_users)
     user_list = ', '.join(str(uid) for uid in sorted(authorized_users))
 
@@ -508,13 +528,25 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                 
                 await update.message.reply_text(
                     f"✅ Ustawiono zakres: {time_range['start']} - {time_range['end']}\n\n"
-                    f"*{title}*\nCzas trwania: {duration_str}\n"
+                    f"*{escape_md(title)}*\nCzas trwania: {duration_str}\n"
                     f"✂️ Zakres: {time_range['start']} - {time_range['end']}\n\n"
                     f"Wybierz format do pobrania:",
                     reply_markup=reply_markup,
                     parse_mode='Markdown'
                 )
                 return
+
+    # Check if user is blocked (before any further processing)
+    if is_user_blocked(user_id, block_map=block_until):
+        remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)
+        minutes = remaining_time // 60
+        seconds = remaining_time % 60
+
+        await update.message.reply_text(
+            f"Dostęp zablokowany z powodu zbyt wielu nieudanych prób. "
+            f"Spróbuj ponownie za {minutes} min {seconds} s."
+        )
+        return
 
     # Check rate limit
     if not check_rate_limit(user_id):
@@ -535,18 +567,6 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             "- https://www.youtube.com/watch?v=...\n"
             "- https://youtu.be/...\n"
             "- https://music.youtube.com/..."
-        )
-        return
-
-    # Check if user is blocked
-    if is_user_blocked(user_id, block_map=block_until):
-        remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)
-        minutes = remaining_time // 60
-        seconds = remaining_time % 60
-
-        await update.message.reply_text(
-            f"Dostęp zablokowany z powodu zbyt wielu nieudanych prób. "
-            f"Spróbuj ponownie za {minutes} min {seconds} s."
         )
         return
 
@@ -610,7 +630,7 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
         time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
 
     await progress_message.edit_text(
-        f"*{title}*\nCzas trwania: {duration_str}{size_warning}{time_range_info}\n\nWybierz format do pobrania:",
+        f"*{escape_md(title)}*\nCzas trwania: {duration_str}{size_warning}{time_range_info}\n\nWybierz format do pobrania:",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -790,7 +810,7 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         reply_markup = InlineKeyboardMarkup(keyboard)
 
         await progress_msg.edit_text(
-            f"*{title}*{duration_info}\n"
+            f"*{escape_md(title)}*{duration_info}\n"
             f"Rozmiar: {mp3_size_mb:.1f} MB\n\n"
             f"Wybierz opcję:",
             reply_markup=reply_markup,
@@ -799,4 +819,4 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     except Exception as e:
         logging.error(f"Error processing audio upload: {e}")
-        await progress_msg.edit_text(f"Błąd przetwarzania pliku audio: {str(e)}")
+        await progress_msg.edit_text("Błąd przetwarzania pliku audio. Spróbuj ponownie.")

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import DefaultDict
 from urllib.parse import urlparse
 
-from bot.config import authorized_users, save_authorized_users
+from bot.config import authorized_users, save_authorized_users, _auth_lock
 
 
 # Maximum failed attempts before blocking
@@ -267,6 +267,8 @@ def manage_authorized_user(user_id, action='add'):
     """
     Manages authorized users.
 
+    Thread-safe: uses _auth_lock to prevent race conditions.
+
     Args:
         user_id (int): User ID
         action (str): 'add' or 'remove'
@@ -275,26 +277,27 @@ def manage_authorized_user(user_id, action='add'):
         bool: True if operation succeeded
     """
     try:
-        if action == 'add':
-            if user_id not in authorized_users:
-                authorized_users.add(user_id)
-                save_authorized_users(authorized_users)
-                logging.info(f"Added user {user_id} to authorized")
+        with _auth_lock:
+            if action == 'add':
+                if user_id not in authorized_users:
+                    authorized_users.add(user_id)
+                    save_authorized_users(authorized_users)
+                    logging.info(f"Added user {user_id} to authorized")
+                    return True
+                logging.info(f"User {user_id} is already authorized")
                 return True
-            logging.info(f"User {user_id} is already authorized")
-            return True
 
-        if action == 'remove':
-            if user_id in authorized_users:
-                authorized_users.discard(user_id)
-                save_authorized_users(authorized_users)
-                logging.info(f"Removed user {user_id} from authorized")
+            if action == 'remove':
+                if user_id in authorized_users:
+                    authorized_users.discard(user_id)
+                    save_authorized_users(authorized_users)
+                    logging.info(f"Removed user {user_id} from authorized")
+                    return True
+                logging.info(f"User {user_id} was not authorized")
                 return True
-            logging.info(f"User {user_id} was not authorized")
-            return True
 
-        logging.error(f"Unknown action: {action}")
-        return False
+            logging.error(f"Unknown action: {action}")
+            return False
 
     except Exception as exc:
         logging.error(f"Error managing user {user_id}: {exc}")
