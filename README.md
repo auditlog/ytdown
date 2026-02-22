@@ -118,17 +118,6 @@ ADMIN_CHAT_ID=twój_telegram_user_id
 
 **UWAGA**: Plik `api_key.md` jest ignorowany przez git - nie commituj go do repozytorium!
 
-### Opcja 4: Cookies YouTube (wymagane przy blokadzie anty-botowej)
-
-Jeśli YouTube blokuje pobieranie komunikatem "Sign in to confirm you're not a bot", potrzebny jest plik `cookies.txt`:
-
-1. Zainstaluj rozszerzenie **"Get cookies.txt LOCALLY"** w przeglądarce (Chrome/Firefox)
-2. Wejdź na youtube.com (zalogowany na konto Google)
-3. Wyeksportuj cookies do pliku `cookies.txt`
-4. Umieść plik w głównym katalogu projektu (`ytdown/cookies.txt`)
-
-**UWAGA**: Plik `cookies.txt` zawiera dane sesji YouTube — nie udostępniaj go i nie commituj do repozytorium! Jest ignorowany przez git.
-
 ### Opcja 3: Zmienne środowiskowe (najbezpieczniejsze)
 
 **Linux/macOS/WSL:**
@@ -148,6 +137,27 @@ $env:CLAUDE_API_KEY="twój_klucz"
 $env:PIN_CODE="12345678"
 $env:ADMIN_CHAT_ID="twój_telegram_user_id"
 ```
+
+### Jak uzyskać ADMIN_CHAT_ID?
+
+`ADMIN_CHAT_ID` to Twój numeryczny identyfikator użytkownika Telegram. Bot wysyła na ten ID powiadomienia o nieudanych próbach logowania i blokadach. Aby go poznać:
+
+1. Napisz do bota [@userinfobot](https://t.me/userinfobot) na Telegramie
+2. Bot odpowie Twoim ID (np. `123456789`)
+3. Wpisz ten numer jako `ADMIN_CHAT_ID` w konfiguracji
+
+Parametr jest opcjonalny — bez niego bot działa normalnie, ale nie wysyła powiadomień bezpieczeństwa.
+
+### Cookies YouTube (opcjonalne, przy blokadzie anty-botowej)
+
+Jeśli YouTube blokuje pobieranie komunikatem "Sign in to confirm you're not a bot", potrzebny jest plik `cookies.txt`:
+
+1. Zainstaluj rozszerzenie **"Get cookies.txt LOCALLY"** w przeglądarce (Chrome/Firefox)
+2. Wejdź na youtube.com (zalogowany na konto Google)
+3. Wyeksportuj cookies do pliku `cookies.txt`
+4. Umieść plik w głównym katalogu projektu (`ytdown/cookies.txt`)
+
+**UWAGA**: Plik `cookies.txt` zawiera dane sesji YouTube — nie udostępniaj go i nie commituj do repozytorium! Jest ignorowany przez git.
 
 ## Uruchomienie
 
@@ -199,14 +209,15 @@ python main.py --cli --url "https://www.youtube.com/watch?v=dQw4w9WgXcQ" --start
 
 ### Testy
 ```bash
+# Uruchom wszystkie testy
 python -m pytest tests/
-# lub pojedyncze testy:
-python tests/test_security.py
-python tests/test_security_standalone.py
-python tests/test_json_persistence.py
-```
 
-Jeśli używasz testów asynchronicznych, upewnij się, że masz zainstalowany `pytest-asyncio`.
+# Uruchom z widocznym postępem
+python -m pytest tests/ -v
+
+# Uruchom konkretny plik testowy
+python -m pytest tests/test_subtitles.py -v
+```
 
 ## Komendy bota Telegram
 
