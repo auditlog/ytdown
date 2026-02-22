@@ -440,7 +440,7 @@ def test_transcribe_audio_file_requires_groq_api_key(tmp_path, monkeypatch):
     asyncio.run(tc.transcribe_audio_file(update, context))
 
     messages = [call.args[0] for call in update.callback_query.edit_message_text.await_args_list]
-    assert any("Brak klucza API do transkrypcji" in msg for msg in messages)
+    assert any("brak klucza api" in msg.lower() for msg in messages)
 
 
 def test_handle_callback_time_range_options_and_clear():

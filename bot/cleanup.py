@@ -33,10 +33,15 @@ def cleanup_old_files(directory, max_age_hours=24):
     freed_space_mb = 0
 
     try:
-        # Walk through all files in directory and subdirectories
-        for root, dirs, files in os.walk(directory):
+        # Walk through all files in directory and subdirectories (no symlink following)
+        for root, dirs, files in os.walk(directory, followlinks=False):
             for filename in files:
                 file_path = os.path.join(root, filename)
+
+                # Skip symlinks to prevent traversal attacks
+                if os.path.islink(file_path):
+                    logging.warning("Skipping symlink during cleanup: %s", file_path)
+                    continue
 
                 try:
                     # Check file age

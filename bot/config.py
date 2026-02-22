@@ -29,8 +29,8 @@ DEFAULT_CONFIG = {
     "ADMIN_CHAT_ID": ""
 }
 
-# Download directory
-DOWNLOAD_PATH = "./downloads"
+# Download directory (absolute path based on project root)
+DOWNLOAD_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads")
 
 # Path to authorized users file
 AUTHORIZED_USERS_FILE = "authorized_users.json"
@@ -139,14 +139,14 @@ def validate_config(config):
     Args:
         config: Configuration dictionary to validate
     """
-    # Check PIN format
+    # Check PIN format (any length, digits only)
     pin = config.get("PIN_CODE", "")
     if not pin:
         logging.error("ERROR: Missing PIN_CODE in configuration!")
-    elif not pin.isdigit() or len(pin) != 8:
-        logging.error(f"ERROR: PIN_CODE must be an 8-digit code! Received: {pin}")
+    elif not pin.isdigit():
+        logging.error("ERROR: PIN_CODE format invalid (length=%d, digits_only=%s)", len(pin), pin.isdigit())
     elif pin == "12345678":
-        logging.warning("WARNING: Using default PIN! Change it for security.")
+        logging.error("SECURITY: Using default PIN_CODE! Change it immediately for production use.")
 
     # Check Telegram token
     telegram_token = config.get("TELEGRAM_BOT_TOKEN", "")
@@ -164,15 +164,18 @@ def validate_config(config):
     if claude_key and not claude_key.startswith("sk-"):
         logging.warning("WARNING: CLAUDE_API_KEY should start with 'sk-'!")
 
-    # Check config file permissions (Unix only)
+    # Check config file permissions (Unix only) and auto-fix if possible
     if os.path.exists(CONFIG_FILE_PATH) and hasattr(os, 'stat'):
         try:
             file_stats = os.stat(CONFIG_FILE_PATH)
             file_mode = oct(file_stats.st_mode)[-3:]
             if file_mode != '600':
-                logging.warning(f"WARNING: File {CONFIG_FILE_PATH} has permissions {file_mode}. "
-                              f"Recommended: 600 (owner read/write only).")
-                logging.warning(f"Run: chmod 600 {CONFIG_FILE_PATH}")
+                logging.warning("Config file %s has permissions %s, expected 600", CONFIG_FILE_PATH, file_mode)
+                try:
+                    os.chmod(CONFIG_FILE_PATH, 0o600)
+                    logging.info("Fixed %s permissions to 600", CONFIG_FILE_PATH)
+                except OSError as e:
+                    logging.warning("Could not fix permissions for %s: %s", CONFIG_FILE_PATH, e)
         except Exception:
             logging.debug("Unable to verify config file permissions for %s", CONFIG_FILE_PATH)
 
@@ -237,6 +240,9 @@ MAX_HISTORY_ENTRIES = 500
 
 # Lock for thread-safe history operations
 _history_lock = threading.Lock()
+
+# Lock for thread-safe authorized users operations
+_auth_lock = threading.Lock()
 
 
 def load_download_history():
@@ -344,7 +350,8 @@ def get_download_stats(user_id=None):
     Returns:
         dict: Statistics dictionary
     """
-    history = load_download_history()
+    with _history_lock:
+        history = load_download_history()
 
     if user_id:
         history = [h for h in history if h.get('user_id') == user_id]

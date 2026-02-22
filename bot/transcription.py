@@ -49,7 +49,7 @@ def find_silence_points(file_path, num_parts, min_duration=0.5):
             "-f", "null", "-"
         ]
 
-        result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True)
+        result = subprocess.run(cmd, stderr=subprocess.PIPE, text=True, timeout=300)
         output = result.stderr
 
         for line in output.splitlines():
@@ -146,7 +146,7 @@ def split_mp3(file_path, output_dir, max_size_mb=MAX_MP3_PART_SIZE_MB):
                 "-acodec", "copy", output_path
             ]
 
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
 
             part_size = os.path.getsize(output_path) / (1024 * 1024)
             logging.info(f"Created {output_path} ({part_size:.2f}MB, {duration:.2f} seconds)")
@@ -226,7 +226,7 @@ def transcribe_audio(file_path, api_key, language=None, prompt=None):
                     return ""
             else:
                 logging.error(f"Groq API error: {response.status_code}")
-                logging.error(f"Response: {response.text}")
+                logging.error(f"Response: {response.text[:500]}")
                 return ""
     except Exception as e:
         logging.error(f"Error during transcription: {e}")
@@ -459,7 +459,7 @@ def post_process_transcript(text):
             return None
         else:
             logging.error(f"Claude API error during post-processing: {response.status_code}")
-            logging.error(response.text)
+            logging.error(f"Response: {response.text[:500]}")
             return None
     except Exception as e:
         logging.error(f"Error during transcript post-processing: {e}")
@@ -524,7 +524,7 @@ def generate_summary(transcript_text, summary_type):
             return summary
         else:
             logging.error(f"Claude API error: {response.status_code}")
-            logging.error(response.text)
+            logging.error(f"Response: {response.text[:500]}")
             return None
     except Exception as e:
         logging.error(f"Error generating summary: {e}")
