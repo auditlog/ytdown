@@ -44,6 +44,9 @@ from bot.downloader import (
     is_valid_audio_format,
     is_valid_ytdlp_format_id,
     is_valid_audio_quality,
+    get_available_subtitles,
+    download_subtitles,
+    parse_subtitle_file,
     COOKIES_FILE,
 )
 
@@ -301,7 +304,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
             return
     elif data == "transcribe_summary":
-        await show_summary_options(update, context, url)
+        await show_subtitle_source_menu(update, context, url, with_summary=True)
     elif data.startswith("summary_option_"):
         option = parse_summary_option(data)
         if option is None:
@@ -309,7 +312,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=option)
     elif data == "transcribe":
+        await show_subtitle_source_menu(update, context, url, with_summary=False)
+    elif data == "sub_src_ai":
         await download_file(update, context, "audio", "mp3", url, transcribe=True)
+    elif data == "sub_src_ai_s":
+        await show_summary_options(update, context, url)
+    elif data.startswith("sub_lang_") or data.startswith("sub_auto_"):
+        await _handle_subtitle_callback(update, context, url, data)
+    elif data.startswith("sub_sum_"):
+        await _handle_subtitle_summary_callback(update, context, url, data)
     elif data == "formats":
         await handle_formats_list(update, context, url)
     elif data == "time_range":
@@ -1141,3 +1152,317 @@ async def show_audio_summary_options(update: Update, context: ContextTypes.DEFAU
     )
 
 
+async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, url, with_summary=False):
+    """Shows menu to choose between YouTube subtitles and AI transcription.
+
+    If the video has subtitles, presents a choice. Otherwise falls through
+    to the existing AI transcription flow seamlessly.
+    """
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    await safe_edit_message(query, "Sprawdzanie dostępnych napisów...")
+
+    info = get_video_info(url)
+    if not info:
+        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        return
+
+    title = info.get('title', 'Nieznany tytuł')
+    subs = get_available_subtitles(info)
+
+    # No subtitles available — go directly to AI transcription
+    if not subs['has_any']:
+        if with_summary:
+            await show_summary_options(update, context, url)
+        else:
+            await download_file(update, context, "audio", "mp3", url, transcribe=True)
+        return
+
+    # Build subtitle source selection menu
+    summary_suffix = "_s" if with_summary else ""
+    keyboard = []
+
+    # Manual subtitles section
+    if subs['manual']:
+        keyboard.append([InlineKeyboardButton(
+            "--- Napisy YouTube (manualne) ---", callback_data="noop"
+        )])
+        for lang in subs['manual']:
+            keyboard.append([InlineKeyboardButton(
+                f"  {lang.upper()}", callback_data=f"sub_lang_{lang}{summary_suffix}"
+            )])
+
+    # Auto-generated subtitles section
+    if subs['auto']:
+        keyboard.append([InlineKeyboardButton(
+            "--- Napisy automatyczne ---", callback_data="noop"
+        )])
+        for lang in subs['auto']:
+            keyboard.append([InlineKeyboardButton(
+                f"  {lang.upper()} (auto)", callback_data=f"sub_auto_{lang}{summary_suffix}"
+            )])
+
+    # AI transcription option
+    keyboard.append([InlineKeyboardButton(
+        "Transkrypcja AI (Whisper)", callback_data=f"sub_src_ai{summary_suffix}"
+    )])
+    keyboard.append([InlineKeyboardButton("Powrót", callback_data="back")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        f"*{escape_md(title)}*\n\n"
+        f"Film ma dostępne napisy! Wybierz źródło transkrypcji:\n\n"
+        f"Napisy YouTube — natychmiastowo, 0 tokenów\n"
+        f"AI Whisper — kilka minut, zużywa tokeny",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+def _parse_subtitle_callback(data: str):
+    """Parses sub_lang_XX[_s] or sub_auto_XX[_s] callback data.
+
+    Returns:
+        tuple: (lang, auto, with_summary) or None on invalid data.
+    """
+    with_summary = data.endswith('_s')
+
+    if data.startswith('sub_lang_'):
+        rest = data[len('sub_lang_'):]
+        if with_summary:
+            rest = rest[:-2]  # remove '_s'
+        if not rest:
+            return None
+        return (rest, False, with_summary)
+
+    if data.startswith('sub_auto_'):
+        rest = data[len('sub_auto_'):]
+        if with_summary:
+            rest = rest[:-2]  # remove '_s'
+        if not rest:
+            return None
+        return (rest, True, with_summary)
+
+    return None
+
+
+async def _handle_subtitle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, url, data):
+    """Routes sub_lang_XX / sub_auto_XX callbacks to subtitle download."""
+    parsed = _parse_subtitle_callback(data)
+    if not parsed:
+        await update.callback_query.edit_message_text("Nieobsługiwana opcja napisów.")
+        return
+
+    lang, auto, with_summary = parsed
+
+    if with_summary:
+        # Store pending subtitle info for summary type selection
+        context.user_data['subtitle_pending'] = {
+            'url': url,
+            'lang': lang,
+            'auto': auto,
+        }
+        await show_subtitle_summary_options(update, context)
+    else:
+        await handle_subtitle_download(update, context, url, lang, auto, summary=False)
+
+
+async def _handle_subtitle_summary_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, url, data):
+    """Routes sub_sum_N callbacks to subtitle download with summary."""
+    try:
+        summary_type = int(data.replace("sub_sum_", ""))
+    except ValueError:
+        await update.callback_query.edit_message_text("Nieobsługiwana opcja podsumowania.")
+        return
+
+    if summary_type < 1 or summary_type > 4:
+        await update.callback_query.edit_message_text("Nieobsługiwana opcja podsumowania.")
+        return
+
+    pending = context.user_data.get('subtitle_pending')
+    if not pending:
+        await update.callback_query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
+        return
+
+    await handle_subtitle_download(
+        update, context,
+        pending['url'], pending['lang'], pending['auto'],
+        summary=True, summary_type=summary_type,
+    )
+
+
+async def show_subtitle_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Displays summary type selection for subtitle-based transcription."""
+    query = update.callback_query
+
+    keyboard = [
+        [InlineKeyboardButton("1. Krótkie podsumowanie", callback_data="sub_sum_1")],
+        [InlineKeyboardButton("2. Szczegółowe podsumowanie", callback_data="sub_sum_2")],
+        [InlineKeyboardButton("3. Podsumowanie w punktach", callback_data="sub_sum_3")],
+        [InlineKeyboardButton("4. Podział zadań na osoby", callback_data="sub_sum_4")],
+        [InlineKeyboardButton("Powrót", callback_data="back")]
+    ]
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await safe_edit_message(
+        query,
+        "Wybierz rodzaj podsumowania dla napisów:",
+        reply_markup=reply_markup,
+    )
+
+
+async def handle_subtitle_download(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url, lang, auto,
+    summary=False,
+    summary_type=None,
+):
+    """Downloads YouTube subtitles, parses to text, optionally generates summary.
+
+    This is the subtitle equivalent of download_file() with transcribe=True,
+    but skips audio download entirely — only fetches subtitle track.
+    """
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    async def update_status(text):
+        await safe_edit_message(query, text)
+
+    sub_type = "automatycznych" if auto else "manualnych"
+    await update_status(f"Pobieranie napisów YouTube ({lang.upper()}, {sub_type})...")
+
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    # Get video title for filename
+    info = get_video_info(url)
+    title = info.get('title', 'Nieznany tytuł') if info else 'Nieznany tytuł'
+
+    # Download subtitle file via yt-dlp (no audio download)
+    loop = asyncio.get_event_loop()
+    sub_path = await loop.run_in_executor(
+        _executor,
+        lambda: download_subtitles(url, lang, chat_download_path, auto=auto, title=title)
+    )
+
+    if not sub_path or not os.path.exists(sub_path):
+        await update_status("Nie udało się pobrać napisów. Spróbuj transkrypcji AI.")
+        return
+
+    # Parse subtitle file to plain text
+    transcript_text = parse_subtitle_file(sub_path)
+
+    if not transcript_text.strip():
+        await update_status("Napisy są puste. Spróbuj transkrypcji AI.")
+        return
+
+    # Save as _transcript.md
+    sanitized_title = sanitize_filename(title)
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    transcript_path = os.path.join(
+        chat_download_path,
+        f"{current_date} {sanitized_title}_transcript.md"
+    )
+    with open(transcript_path, 'w', encoding='utf-8') as f:
+        f.write(f"# {title}\n\n")
+        f.write(transcript_text)
+
+    if summary:
+        if not CONFIG["CLAUDE_API_KEY"]:
+            await update_status(
+                "Funkcja niedostępna — brak klucza API do podsumowań.\n"
+                "Skontaktuj się z administratorem."
+            )
+            return
+
+        await update_status("Napisy pobrane.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
+
+        summary_text = await loop.run_in_executor(
+            _executor,
+            lambda: generate_summary(transcript_text, summary_type)
+        )
+
+        if not summary_text:
+            await update_status("Wystąpił błąd podczas generowania podsumowania.")
+            return
+
+        await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
+
+        summary_types = {
+            1: "Krótkie podsumowanie",
+            2: "Szczegółowe podsumowanie",
+            3: "Podsumowanie w punktach",
+            4: "Podział zadań na osoby"
+        }
+        summary_type_name = summary_types.get(summary_type, "Podsumowanie")
+
+        summary_path = os.path.join(
+            chat_download_path,
+            f"{current_date} {sanitized_title}_summary.md"
+        )
+        with open(summary_path, 'w', encoding='utf-8') as f:
+            f.write(f"# {title} - {summary_type_name}\n\n")
+            f.write(summary_text)
+
+        await send_long_message(
+            context.bot, chat_id, summary_text,
+            header=f"*{escape_md(title)} - {summary_type_name}*\n\n"
+        )
+
+        await update_status("Wysyłanie pliku z transkrypcją napisów...")
+
+        with open(transcript_path, 'rb') as f:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=f,
+                filename=os.path.basename(transcript_path),
+                caption=f"Napisy YouTube ({lang.upper()}): {title}",
+                read_timeout=60,
+                write_timeout=60,
+            )
+
+        add_download_record(
+            chat_id, title, url,
+            f"yt_subtitles_{lang}_summary_{summary_type}",
+            0, None, selected_format=f"sub_{lang}",
+        )
+        await update_status("Napisy i podsumowanie zostały wysłane!")
+
+    else:
+        await update_status("Napisy pobrane.\n\nWysyłanie transkrypcji...")
+
+        display_text = transcript_text
+        if len(display_text) <= 30000:
+            await send_long_message(
+                context.bot, chat_id, display_text,
+                header=f"*Napisy YouTube ({lang.upper()}): {escape_md(title)}*\n\n"
+            )
+
+        with open(transcript_path, 'rb') as f:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=f,
+                filename=os.path.basename(transcript_path),
+                caption=f"Napisy YouTube ({lang.upper()}): {title}" if len(display_text) <= 30000
+                    else f"Napisy ({lang.upper()}): {title} ({len(display_text):,} znaków — tylko plik)",
+                read_timeout=60,
+                write_timeout=60,
+            )
+
+        # Clean up subtitle source file
+        try:
+            os.remove(sub_path)
+        except Exception as e:
+            logging.error(f"Error deleting subtitle file: {e}")
+
+        add_download_record(
+            chat_id, title, url,
+            f"yt_subtitles_{lang}",
+            0, None, selected_format=f"sub_{lang}",
+        )
+        await update_status("Napisy zostały wysłane!")

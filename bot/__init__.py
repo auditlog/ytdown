@@ -44,11 +44,17 @@ try:
         get_video_info,
         download_youtube_video,
         sanitize_filename,
+        get_available_subtitles,
+        download_subtitles,
+        parse_subtitle_file,
     )
 except ImportError:
     get_video_info = None
     download_youtube_video = None
     sanitize_filename = None
+    get_available_subtitles = None
+    download_subtitles = None
+    parse_subtitle_file = None
 
 try:
     from bot.telegram_commands import (
@@ -82,6 +88,9 @@ try:
         back_to_main_menu,
         transcribe_audio_file,
         show_audio_summary_options,
+        show_subtitle_source_menu,
+        handle_subtitle_download,
+        show_subtitle_summary_options,
     )
 except ImportError:
     handle_callback = None
@@ -91,6 +100,9 @@ except ImportError:
     back_to_main_menu = None
     transcribe_audio_file = None
     show_audio_summary_options = None
+    show_subtitle_source_menu = None
+    handle_subtitle_download = None
+    show_subtitle_summary_options = None
 
 __all__ = [
     # Config
@@ -118,6 +130,9 @@ __all__ = [
     'get_video_info',
     'download_youtube_video',
     'sanitize_filename',
+    'get_available_subtitles',
+    'download_subtitles',
+    'parse_subtitle_file',
     # Telegram commands
     'start',
     'help_command',
@@ -136,4 +151,7 @@ __all__ = [
     'back_to_main_menu',
     'transcribe_audio_file',
     'show_audio_summary_options',
+    'show_subtitle_source_menu',
+    'handle_subtitle_download',
+    'show_subtitle_summary_options',
 ]

@@ -129,6 +129,20 @@ def reset_module_state():
 
 
 @pytest.fixture
+def sample_video_info_with_subtitles(sample_video_info):
+    """Sample video info with subtitles and automatic captions."""
+    sample_video_info['subtitles'] = {
+        'pl': [{'ext': 'vtt', 'url': 'http://example.com/pl.vtt'}],
+        'en': [{'ext': 'vtt', 'url': 'http://example.com/en.vtt'}],
+    }
+    sample_video_info['automatic_captions'] = {
+        'pl': [{'ext': 'vtt', 'url': 'http://example.com/pl-auto.vtt'}],
+        'en': [{'ext': 'vtt', 'url': 'http://example.com/en-auto.vtt'}],
+    }
+    return sample_video_info
+
+
+@pytest.fixture
 def mock_yt_dlp(monkeypatch, sample_video_info):
     """Mock yt-dlp for testing."""
     mock_ydl = MagicMock()
