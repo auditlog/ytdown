@@ -268,6 +268,28 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return False
 
 
+async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles /logout command - removes user from authorized list."""
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+
+    if user_id not in authorized_users:
+        await update.message.reply_text("Nie jesteś zalogowany.")
+        return
+
+    manage_authorized_user(user_id, 'remove')
+
+    # Clear session state
+    user_urls.pop(chat_id, None)
+    user_time_ranges.pop(chat_id, None)
+    context.user_data.clear()
+
+    await update.message.reply_text(
+        "Wylogowano pomyślnie.\n\n"
+        "Aby ponownie korzystać z bota, użyj /start i podaj PIN."
+    )
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /help command."""
     await update.message.reply_text(
