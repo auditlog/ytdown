@@ -104,39 +104,28 @@ def _make_context():
     return context
 
 
-def test_handle_callback_audio_branch_show_language_selection(monkeypatch):
+def test_handle_callback_audio_transcribe_starts_directly(monkeypatch):
+    """audio_transcribe callback invokes transcribe_audio_file directly (no language selection)."""
     tc.user_urls.pop(123, None)
     update = _make_update("audio_transcribe", chat_id=123)
     context = _make_context()
 
     called = {}
 
-    async def fake_show_language_selection(update_arg, context_arg, action):
-        called["action"] = action
+    async def fake_transcribe(update_arg, context_arg, **kwargs):
+        called["invoked"] = True
 
-    monkeypatch.setattr(tc, "show_language_selection", AsyncMock(side_effect=fake_show_language_selection))
-
+    monkeypatch.setattr(tc, "transcribe_audio_file", fake_transcribe)
     asyncio.run(tc.handle_callback(update, context))
 
     update.callback_query.answer.assert_awaited_once()
-    assert called["action"] == "audio_transcribe"
+    assert called.get("invoked") is True
 
 
-def test_handle_callback_language_summary_without_active_url_shows_warning():
-    tc.user_urls.pop(321, None)
-
-    update = _make_update("lang_pl_transcribe_summary", chat_id=321)
-    context = _make_context()
-
-    asyncio.run(tc.handle_callback(update, context))
-
-    update.callback_query.answer.assert_awaited_once()
-    update.callback_query.edit_message_text.assert_awaited_once_with("Sesja wygasła. Wyślij link ponownie.")
-
-
-def test_handle_callback_lang_audio_transcribe_starts_download():
+def test_handle_callback_transcribe_starts_download(monkeypatch):
+    """transcribe callback downloads audio with transcribe=True (auto-detect language)."""
     tc.user_urls[123] = "https://www.youtube.com/watch?v=abc"
-    update = _make_update("lang_en_transcribe", chat_id=123)
+    update = _make_update("transcribe", chat_id=123)
     context = _make_context()
 
     called = {}
@@ -147,12 +136,8 @@ def test_handle_callback_lang_audio_transcribe_starts_download():
         called["url"] = url
         called["kwargs"] = kwargs
 
-    monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(tc, "download_file", fake_download_file)
-    try:
-        asyncio.run(tc.handle_callback(update, context))
-    finally:
-        monkeypatch.undo()
+    asyncio.run(tc.handle_callback(update, context))
 
     update.callback_query.answer.assert_awaited_once()
     assert called["type"] == "audio"
@@ -161,9 +146,10 @@ def test_handle_callback_lang_audio_transcribe_starts_download():
     assert called["kwargs"]["transcribe"] is True
 
 
-def test_handle_callback_lang_audio_summary_shows_options(monkeypatch):
+def test_handle_callback_transcribe_summary_shows_options(monkeypatch):
+    """transcribe_summary callback shows summary options directly (no language selection)."""
     tc.user_urls[333] = "https://www.youtube.com/watch?v=abc"
-    update = _make_update("lang_en_transcribe_summary", chat_id=333)
+    update = _make_update("transcribe_summary", chat_id=333)
     context = _make_context()
 
     shown = {}

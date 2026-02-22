@@ -84,7 +84,6 @@ try:
         back_to_main_menu,
         transcribe_audio_file,
         show_audio_summary_options,
-        show_language_selection,
     )
 except ImportError:
     handle_callback = None
@@ -94,7 +93,6 @@ except ImportError:
     back_to_main_menu = None
     transcribe_audio_file = None
     show_audio_summary_options = None
-    show_language_selection = None
 
 __all__ = [
     # Config
@@ -142,5 +140,4 @@ __all__ = [
     'back_to_main_menu',
     'transcribe_audio_file',
     'show_audio_summary_options',
-    'show_language_selection',
 ]
