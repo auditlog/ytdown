@@ -514,11 +514,14 @@ async def download_file(
 
         await run_download_with_progress()
 
-        # Find downloaded file
+        # Find downloaded file (exclude transcription/summary artifacts)
+        _artifact_suffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
         downloaded_file_path = None
         for file in os.listdir(chat_download_path):
             full_path = os.path.join(chat_download_path, file)
             if sanitized_title in file and full_path.startswith(output_path):
+                if any(file.endswith(s) for s in _artifact_suffixes):
+                    continue
                 downloaded_file_path = full_path
                 break
 
