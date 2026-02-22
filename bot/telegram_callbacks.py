@@ -37,6 +37,9 @@ from bot.security import (
 from bot.transcription import (
     transcribe_mp3_file,
     generate_summary,
+    is_text_too_long_for_summary,
+    CORRECTION_DURATION_LIMIT_MIN,
+    SUMMARY_DURATION_LIMIT_MIN,
 )
 from bot.downloader import (
     get_video_info,
@@ -593,8 +596,6 @@ async def download_file(
                     )
                     return
 
-                await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
-
                 with open(transcript_path, 'r', encoding='utf-8') as f:
                     transcript_text = f.read()
 
@@ -606,6 +607,26 @@ async def download_file(
                             break
                     else:
                         logging.warning("Transcription contains only header, using original text")
+
+                if is_text_too_long_for_summary(transcript_text):
+                    await update_status(
+                        "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
+                        "Wysyłam samą transkrypcję."
+                    )
+                    # Send transcript file without summary
+                    with open(transcript_path, 'rb') as f:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=f,
+                            filename=os.path.basename(transcript_path),
+                            caption=f"Transkrypcja: {title} (podsumowanie pominięte — tekst zbyt długi)",
+                            read_timeout=60,
+                            write_timeout=60,
+                        )
+                    add_download_record(chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
+                    return
+
+                await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
 
                 # Run summary generation in thread pool
                 loop = asyncio.get_event_loop()
@@ -1021,8 +1042,6 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             )
             return
 
-        await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
-
         with open(transcript_path, 'r', encoding='utf-8') as f:
             transcript_text = f.read()
 
@@ -1035,6 +1054,25 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                     break
             else:
                 logging.warning("Transcription contains only header, using original text")
+
+        if is_text_too_long_for_summary(transcript_text):
+            await update_status(
+                "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
+                "Wysyłam samą transkrypcję."
+            )
+            with open(transcript_path, 'rb') as f:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=f,
+                    filename=os.path.basename(transcript_path),
+                    caption=f"Transkrypcja: {title} (podsumowanie pominięte — tekst zbyt długi)",
+                    read_timeout=60,
+                    write_timeout=60,
+                )
+            add_download_record(chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
+            return
+
+        await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
 
         loop = asyncio.get_event_loop()
         summary_text = await loop.run_in_executor(
@@ -1169,11 +1207,22 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
         return
 
     title = info.get('title', 'Nieznany tytuł')
+    duration = info.get('duration', 0)
+    duration_min = duration / 60 if duration else 0
     subs = get_available_subtitles(info)
 
     # No subtitles available — go directly to AI transcription
     if not subs['has_any']:
         if with_summary:
+            # For very long videos, warn that summary may not work
+            if duration_min > SUMMARY_DURATION_LIMIT_MIN:
+                await safe_edit_message(
+                    query,
+                    f"Film trwa {duration_min:.0f} min — to zbyt długo na podsumowanie AI "
+                    f"(limit ~{SUMMARY_DURATION_LIMIT_MIN} min).\n"
+                    f"Transkrypcja jest dostępna, ale bez podsumowania."
+                )
+                return
             await show_summary_options(update, context, url)
         else:
             await download_file(update, context, "audio", "mp3", url, transcribe=True)
@@ -1211,12 +1260,27 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
+    # Duration warnings
+    duration_warning = ""
+    if duration_min > SUMMARY_DURATION_LIMIT_MIN:
+        duration_warning = (
+            f"\n\nUwaga: film trwa {duration_min:.0f} min — podsumowanie "
+            f"i korekta AI niedostępne (limit ~{SUMMARY_DURATION_LIMIT_MIN} min)."
+        )
+    elif duration_min > CORRECTION_DURATION_LIMIT_MIN:
+        duration_warning = (
+            f"\n\nUwaga: film trwa {duration_min:.0f} min — korekta AI "
+            f"transkrypcji niedostępna (limit ~{CORRECTION_DURATION_LIMIT_MIN} min). "
+            f"Podsumowanie działa normalnie."
+        )
+
     await safe_edit_message(
         query,
         f"*{escape_md(title)}*\n\n"
         f"Film ma dostępne napisy! Wybierz źródło transkrypcji:\n\n"
         f"Napisy YouTube — natychmiastowo, 0 tokenów\n"
-        f"AI Whisper — kilka minut, zużywa tokeny",
+        f"AI Whisper — kilka minut, zużywa tokeny"
+        f"{duration_warning}",
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
@@ -1371,6 +1435,14 @@ async def handle_subtitle_download(
     with open(transcript_path, 'w', encoding='utf-8') as f:
         f.write(f"# {title}\n\n")
         f.write(transcript_text)
+
+    # Check if summary was requested but text is too long
+    if summary and is_text_too_long_for_summary(transcript_text):
+        await update_status(
+            "Napisy pobrane, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
+            "Wysyłam samą transkrypcję z napisów."
+        )
+        summary = False
 
     if summary:
         if not CONFIG["CLAUDE_API_KEY"]:

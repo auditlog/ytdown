@@ -508,6 +508,7 @@ class TestStatusAndStatsCommands:
         context = _make_context()
 
         monkeypatch.setattr(tc, "authorized_users", {1, 2, 111})
+        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "111")
 
         _async(tc.users_command(update, context))
 
@@ -673,6 +674,7 @@ class TestUsersCommand:
         context = _make_context()
 
         monkeypatch.setattr(tc, "authorized_users", {user_id, *range(1, 11)})
+        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "111")
 
         _async(tc.users_command(update, context))
 

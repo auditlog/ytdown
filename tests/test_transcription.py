@@ -234,3 +234,124 @@ def test_generate_summary_error(monkeypatch):
 
     monkeypatch.setattr(tr.requests, "post", lambda *args, **kwargs: Resp())
     assert tr.generate_summary("tekst", 1) is None
+
+
+# --- Token estimation and length guard tests ---
+
+
+def test_estimate_token_count_empty():
+    assert tr.estimate_token_count("") == 0
+    assert tr.estimate_token_count(None) == 0
+
+
+def test_estimate_token_count_short_text():
+    # 100 chars → ~25 tokens
+    text = "a" * 100
+    assert tr.estimate_token_count(text) == 25
+
+
+def test_estimate_token_count_long_text():
+    # 200k chars → ~50k tokens
+    text = "x" * 200_000
+    assert tr.estimate_token_count(text) == 50_000
+
+
+def test_is_text_too_long_for_correction_short():
+    assert tr.is_text_too_long_for_correction("Hello world") is False
+
+
+def test_is_text_too_long_for_correction_at_limit():
+    # POST_PROCESS_MAX_INPUT_TOKENS = 50_000 → 200k chars
+    text = "x" * (50_000 * 4)
+    assert tr.is_text_too_long_for_correction(text) is False
+
+
+def test_is_text_too_long_for_correction_over_limit():
+    text = "x" * (50_001 * 4 + 4)
+    assert tr.is_text_too_long_for_correction(text) is True
+
+
+def test_is_text_too_long_for_summary_short():
+    assert tr.is_text_too_long_for_summary("Short text") is False
+
+
+def test_is_text_too_long_for_summary_over_limit():
+    # SUMMARY_MAX_INPUT_TOKENS = 175_000 → 700k chars
+    text = "x" * (175_001 * 4 + 4)
+    assert tr.is_text_too_long_for_summary(text) is True
+
+
+def test_post_process_skips_long_text(monkeypatch):
+    """post_process_transcript returns None for text exceeding token limit."""
+    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
+
+    long_text = "word " * 60_000  # ~300k chars → ~75k tokens > 50k limit
+    result = tr.post_process_transcript(long_text)
+    assert result is None
+
+
+def test_post_process_dynamic_max_tokens(monkeypatch):
+    """post_process_transcript uses dynamic max_tokens based on input length."""
+    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
+
+    captured = {}
+
+    class Resp:
+        status_code = 200
+        def json(self):
+            return {"content": [{"type": "text", "text": "corrected"}]}
+
+    def mock_post(url, *args, **kwargs):
+        captured["json"] = kwargs.get("json", {})
+        return Resp()
+
+    monkeypatch.setattr(tr.requests, "post", mock_post)
+
+    text = "a" * 4000  # ~1000 tokens
+    tr.post_process_transcript(text)
+
+    # max_tokens should be ~input_tokens + 2000, capped at 64000
+    assert captured["json"]["max_tokens"] == 1000 + 2000
+
+
+def test_generate_summary_skips_too_long_text(monkeypatch):
+    """generate_summary returns None for text exceeding context window."""
+    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
+
+    long_text = "word " * 200_000  # ~1M chars → ~250k tokens > 175k limit
+    result = tr.generate_summary(long_text, 1)
+    assert result is None
+
+
+def test_generate_summary_dynamic_max_tokens_by_type(monkeypatch):
+    """generate_summary uses different max_tokens per summary type."""
+    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
+
+    captured = {}
+
+    class Resp:
+        status_code = 200
+        def json(self):
+            return {"content": [{"type": "text", "text": "summary"}]}
+
+    def mock_post(url, *args, **kwargs):
+        captured["json"] = kwargs.get("json", {})
+        return Resp()
+
+    monkeypatch.setattr(tr.requests, "post", mock_post)
+
+    # Type 1 (short): 4096
+    tr.generate_summary("text", 1)
+    assert captured["json"]["max_tokens"] == 4096
+
+    # Type 2 (detailed): 16384
+    tr.generate_summary("text", 2)
+    assert captured["json"]["max_tokens"] == 16384
+
+    # Type 3 (bullet points): 8192
+    tr.generate_summary("text", 3)
+    assert captured["json"]["max_tokens"] == 8192
+
+    # Type 4 (task division): 8192
+    tr.generate_summary("text", 4)
+    assert captured["json"]["max_tokens"] == 8192
