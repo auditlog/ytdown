@@ -138,7 +138,7 @@ def test_pin_failure_blocks_after_threshold():
         block_map=block_map,
         max_attempts=2,
         block_time=20,
-    ) == 1
+    ) == (1, 1)
     assert security.is_user_blocked(1, now=105.0, block_map=block_map) is False
 
     assert security.register_pin_failure(
@@ -148,7 +148,7 @@ def test_pin_failure_blocks_after_threshold():
         block_map=block_map,
         max_attempts=2,
         block_time=20,
-    ) == 0
+    ) == (0, 2)
     assert security.is_user_blocked(1, now=110.0, block_map=block_map) is True
     assert security.get_block_remaining_seconds(1, now=110.0, block_map=block_map) == 16
 
@@ -203,3 +203,29 @@ def test_register_pin_failure_logs_warning_on_block(caplog):
         "User 9002 BLOCKED" in rec.message and "2 failed PIN attempts" in rec.message
         for rec in caplog.records
     )
+
+
+def test_register_pin_failure_returns_actual_attempt_after_reblock():
+    """After block expires, actual attempt count keeps incrementing (not reset)."""
+    attempts = defaultdict(int)
+    block_map = defaultdict(float)
+
+    # First block at attempt 2
+    security.register_pin_failure(
+        user_id=1, now=100.0, attempts=attempts, block_map=block_map,
+        max_attempts=2, block_time=20,
+    )
+    remaining, actual = security.register_pin_failure(
+        user_id=1, now=101.0, attempts=attempts, block_map=block_map,
+        max_attempts=2, block_time=20,
+    )
+    assert remaining == 0
+    assert actual == 2
+
+    # Block expires, attempt 3 → immediate re-block
+    remaining, actual = security.register_pin_failure(
+        user_id=1, now=200.0, attempts=attempts, block_map=block_map,
+        max_attempts=2, block_time=20,
+    )
+    assert remaining == 0
+    assert actual == 3  # Real attempt count, not capped at max_attempts

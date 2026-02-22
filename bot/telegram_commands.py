@@ -243,7 +243,7 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     await process_audio_file(update, context, pending_audio)
             else:
                 # Increment failed attempts counter
-                remaining_attempts = register_pin_failure(
+                remaining_attempts, attempt_count = register_pin_failure(
                     user_id,
                     attempts=failed_attempts,
                     block_map=block_until,
@@ -251,8 +251,6 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     block_time=BLOCK_TIME,
                 )
 
-                # Determine attempt count for notification
-                attempt_count = MAX_ATTEMPTS - remaining_attempts
                 blocked = remaining_attempts == 0
 
                 # Notify admin (non-blocking)
