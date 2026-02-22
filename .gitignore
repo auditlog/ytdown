@@ -23,6 +23,7 @@ package-lock.json
 
 # IDE
 pyrightconfig.json
+.claude/
 
 # Legacy / backup
 backup/
