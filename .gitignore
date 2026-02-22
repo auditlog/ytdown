@@ -21,9 +21,26 @@ node_modules/
 package.json
 package-lock.json
 
-# IDE
+# IDE / editor configs
 pyrightconfig.json
 .claude/
+.cursor.sh
+.cursor/
+.gemini/
+.vscode/
+
+# Project docs (local only)
+CLAUDE.md
+PLAN.md
+PRD.md
+TODO.md
+config_improvements.md
+
+# Scripts (local only)
+deploy_to_rpi.sh
+
+# Test data
+test_transcript.txt
 
 # Legacy / backup
 backup/
