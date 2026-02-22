@@ -206,11 +206,13 @@ def register_pin_failure(
     block_map: DefaultDict[int, float] | None = None,
     max_attempts: int = MAX_ATTEMPTS,
     block_time: int = BLOCK_TIME,
-) -> int:
+) -> tuple[int, int]:
     """
     Increments failed PIN attempts and optionally sets block time.
 
-    Returns remaining attempts until block (0 when blocked now).
+    Returns:
+        tuple: (remaining_attempts, actual_attempt_number).
+            remaining is 0 when blocked.
     """
 
     attempts_map = _as_attempt_map(attempts)
@@ -226,13 +228,13 @@ def register_pin_failure(
             "User %s BLOCKED after %d failed PIN attempts",
             user_id, current_attempt,
         )
-        return 0
+        return (0, current_attempt)
 
     logging.warning(
         "Failed PIN attempt for user %s (attempt %d/%d)",
         user_id, current_attempt, max_attempts,
     )
-    return max_attempts - current_attempt
+    return (max_attempts - current_attempt, current_attempt)
 
 
 def validate_youtube_url(url):

@@ -356,6 +356,7 @@ async def download_file(
     query = update.callback_query
     chat_id = update.effective_chat.id
     title = "Unknown"  # Default for error recording before info fetch
+    success_recorded = False  # Guard against duplicate history records
 
     # Helper for status updates
     async def update_status(text):
@@ -624,6 +625,7 @@ async def download_file(
                             write_timeout=60,
                         )
                     add_download_record(chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
+                    success_recorded = True
                     return
 
                 await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
@@ -672,6 +674,7 @@ async def download_file(
 
                 # Record transcription+summary in history
                 add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range, selected_format=format)
+                success_recorded = True
 
                 await update_status("Transkrypcja i podsumowanie zostały wysłane!")
 
@@ -719,6 +722,7 @@ async def download_file(
 
                 # Record transcription in history
                 add_download_record(chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
+                success_recorded = True
 
                 await update_status("Transkrypcja została wysłana!")
 
@@ -749,16 +753,19 @@ async def download_file(
             # Record download in history
             format_type = f"{media_type}_{format}"
             add_download_record(chat_id, title, url, format_type, file_size_mb, time_range, selected_format=format)
+            success_recorded = True
 
             await update_status("Plik został wysłany!")
 
     except Exception as e:
-        # Record failure in download history
-        add_download_record(
-            chat_id, title, url, f"{media_type}_{format}",
-            status="failure", selected_format=format,
-            error_message=str(e),
-        )
+        # Only record failure if success wasn't already recorded
+        if not success_recorded:
+            add_download_record(
+                chat_id, title, url, f"{media_type}_{format}",
+                status="failure", selected_format=format,
+                error_message=str(e),
+            )
+        logging.error(f"Error in download_file: {e}")
         await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
 
 
