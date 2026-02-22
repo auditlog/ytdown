@@ -32,6 +32,7 @@ The app runs in two modes:
 - File-based persistence (JSON), no database.
 - `authorized_users.json` for access persistence.
 - `download_history.json` for download stats/history.
+- `cookies.txt` for YouTube authentication (optional, gitignored).
 - `downloads/<chat_id>/` for user output files.
 
 ## Development Commands
@@ -99,7 +100,8 @@ When editing user messages, maintain Polish UX consistency.
 
 ## Security Expectations
 
-- Do not commit secrets (`api_key.md` must stay ignored).
+- Do not commit secrets (`api_key.md` and `cookies.txt` must stay ignored).
+- `cookies.txt` contains YouTube session data — never expose or commit it.
 - Keep URL validation strict (HTTPS + allowed YouTube domains).
 - Do not bypass rate limiting/PIN checks in command handlers.
 - Maintain cleanup behavior for disk safety.

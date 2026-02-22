@@ -43,6 +43,7 @@ from bot.downloader import (
     is_valid_audio_format,
     is_valid_ytdlp_format_id,
     is_valid_audio_quality,
+    COOKIES_FILE,
 )
 
 
@@ -387,6 +388,8 @@ async def download_file(
         'buffer_size': 1024 * 16,  # 16KB buffer
         'http_chunk_size': 10485760,  # 10MB chunks
     }
+    if os.path.exists(COOKIES_FILE):
+        ydl_opts['cookiefile'] = COOKIES_FILE
 
     # Apply time range if set
     time_range = user_time_ranges.get(chat_id)

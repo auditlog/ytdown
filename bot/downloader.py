@@ -5,10 +5,13 @@ Handles video/audio downloading via yt-dlp.
 """
 
 import logging
+import os
 import re
 from datetime import datetime
 
 import yt_dlp
+
+COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
 
 
 FORMAT_ID_PATTERN = re.compile(r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$")
@@ -167,11 +170,14 @@ def get_basic_ydl_opts():
     Returns:
         dict: yt-dlp options dictionary
     """
-    return {
+    opts = {
         'quiet': True,
         'no_warnings': True,
         'progress_hooks': [progress_hook],
     }
+    if os.path.exists(COOKIES_FILE):
+        opts['cookiefile'] = COOKIES_FILE
+    return opts
 
 
 def get_video_info(url):
@@ -262,6 +268,8 @@ def download_youtube_video(
             'retries': 3,
             'fragment_retries': 3,
         }
+        if os.path.exists(COOKIES_FILE):
+            ydl_opts['cookiefile'] = COOKIES_FILE
 
         if audio_only:
             print(f"[DEBUG] Configuring audio-only download ({normalized_audio_format})")
