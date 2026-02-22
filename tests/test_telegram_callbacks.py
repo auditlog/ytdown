@@ -184,9 +184,9 @@ def test_handle_callback_sub_src_ai_starts_download(monkeypatch):
 
 
 def test_handle_callback_sub_src_ai_s_shows_summary_options(monkeypatch):
-    """sub_src_ai_s callback shows summary options."""
+    """sub_src_ai_sum callback shows summary options."""
     tc.user_urls[333] = "https://www.youtube.com/watch?v=abc"
-    update = _make_update("sub_src_ai_s", chat_id=333)
+    update = _make_update("sub_src_ai_sum", chat_id=333)
     context = _make_context()
 
     shown = {}

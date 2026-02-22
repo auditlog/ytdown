@@ -318,7 +318,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_subtitle_source_menu(update, context, url, with_summary=False)
     elif data == "sub_src_ai":
         await download_file(update, context, "audio", "mp3", url, transcribe=True)
-    elif data == "sub_src_ai_s":
+    elif data == "sub_src_ai_sum":
         await show_summary_options(update, context, url)
     elif data.startswith("sub_lang_") or data.startswith("sub_auto_"):
         await _handle_subtitle_callback(update, context, url, data)
@@ -1229,7 +1229,7 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
         return
 
     # Build subtitle source selection menu
-    summary_suffix = "_s" if with_summary else ""
+    summary_suffix = "_sum" if with_summary else ""
     keyboard = []
 
     # Manual subtitles section
@@ -1287,17 +1287,17 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
 
 
 def _parse_subtitle_callback(data: str):
-    """Parses sub_lang_XX[_s] or sub_auto_XX[_s] callback data.
+    """Parses sub_lang_XX[_sum] or sub_auto_XX[_sum] callback data.
 
     Returns:
         tuple: (lang, auto, with_summary) or None on invalid data.
     """
-    with_summary = data.endswith('_s')
+    with_summary = data.endswith('_sum')
 
     if data.startswith('sub_lang_'):
         rest = data[len('sub_lang_'):]
         if with_summary:
-            rest = rest[:-2]  # remove '_s'
+            rest = rest[:-4]  # remove '_sum'
         if not rest:
             return None
         return (rest, False, with_summary)
@@ -1305,7 +1305,7 @@ def _parse_subtitle_callback(data: str):
     if data.startswith('sub_auto_'):
         rest = data[len('sub_auto_'):]
         if with_summary:
-            rest = rest[:-2]  # remove '_s'
+            rest = rest[:-4]  # remove '_sum'
         if not rest:
             return None
         return (rest, True, with_summary)
@@ -1497,6 +1497,12 @@ async def handle_subtitle_download(
                 read_timeout=60,
                 write_timeout=60,
             )
+
+        # Clean up raw subtitle source file (VTT/SRT)
+        try:
+            os.remove(sub_path)
+        except Exception as e:
+            logging.error(f"Error deleting subtitle file: {e}")
 
         add_download_record(
             chat_id, title, url,

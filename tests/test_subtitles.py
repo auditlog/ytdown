@@ -14,6 +14,7 @@ from bot.downloader import (
     download_subtitles,
     parse_subtitle_file,
 )
+from bot.telegram_callbacks import _parse_subtitle_callback
 
 
 # --- get_available_subtitles tests ---
@@ -448,3 +449,47 @@ class TestDownloadSubtitles:
             title="Test"
         )
         assert result == sub_file
+
+
+# --- _parse_subtitle_callback tests ---
+
+
+class TestParseSubtitleCallback:
+    """Tests for _parse_subtitle_callback() — callback data parsing."""
+
+    def test_manual_lang_no_summary(self):
+        assert _parse_subtitle_callback("sub_lang_en") == ("en", False, False)
+
+    def test_manual_lang_with_summary(self):
+        assert _parse_subtitle_callback("sub_lang_en_sum") == ("en", False, True)
+
+    def test_auto_lang_no_summary(self):
+        assert _parse_subtitle_callback("sub_auto_pl") == ("pl", True, False)
+
+    def test_auto_lang_with_summary(self):
+        assert _parse_subtitle_callback("sub_auto_pl_sum") == ("pl", True, True)
+
+    def test_lang_ending_in_s_no_summary(self):
+        """Spanish (es) must work without summary — was broken by '_s' suffix."""
+        assert _parse_subtitle_callback("sub_lang_es") == ("es", False, False)
+
+    def test_lang_ending_in_s_with_summary(self):
+        """Spanish (es) must work with summary."""
+        assert _parse_subtitle_callback("sub_lang_es_sum") == ("es", False, True)
+
+    def test_auto_lang_ending_in_s_no_summary(self):
+        """Auto Malay (ms) without summary."""
+        assert _parse_subtitle_callback("sub_auto_ms") == ("ms", True, False)
+
+    def test_auto_lang_ending_in_s_with_summary(self):
+        """Auto Bosnian (bs) with summary."""
+        assert _parse_subtitle_callback("sub_auto_bs_sum") == ("bs", True, True)
+
+    def test_invalid_prefix(self):
+        assert _parse_subtitle_callback("sub_unknown_en") is None
+
+    def test_empty_lang(self):
+        assert _parse_subtitle_callback("sub_lang_") is None
+
+    def test_empty_lang_with_summary(self):
+        assert _parse_subtitle_callback("sub_lang__sum") is None
