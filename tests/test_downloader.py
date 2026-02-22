@@ -289,3 +289,105 @@ def test_validate_url():
     assert validate_url("https://youtu.be/test")
     assert not validate_url("http://youtube.com/watch?v=test")
     assert not validate_url("https://example.com/watch?v=test")
+
+
+class TestDurationValidation:
+    """Tests for video_duration parameter in download_youtube_video."""
+
+    def test_start_beyond_duration_rejected(self, monkeypatch):
+        class MockYoutubeDL:
+            def __init__(self, opts):
+                raise AssertionError("yt-dlp should not be called")
+
+        monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
+        # Video is 60s, start=70s — should fail
+        result = download_youtube_video(
+            "https://youtube.com/watch?v=test",
+            time_range_start="1:10",
+            time_range_end="1:30",
+            video_duration=60,
+        )
+        assert result is False
+
+    def test_end_beyond_duration_rejected(self, monkeypatch):
+        class MockYoutubeDL:
+            def __init__(self, opts):
+                raise AssertionError("yt-dlp should not be called")
+
+        monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
+        # Video is 120s, end=150s — should fail
+        result = download_youtube_video(
+            "https://youtube.com/watch?v=test",
+            time_range_start="0:10",
+            time_range_end="2:30",
+            video_duration=120,
+        )
+        assert result is False
+
+    def test_valid_range_within_duration_accepted(self, monkeypatch):
+        captured = {}
+
+        class MockYoutubeDL:
+            def __init__(self, opts):
+                captured["opts"] = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def extract_info(self, url, download):
+                return {"title": "test"}
+
+        monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
+        # Video is 300s, range 10-60 — should succeed
+        result = download_youtube_video(
+            "https://youtube.com/watch?v=test",
+            time_range_start="0:10",
+            time_range_end="1:00",
+            video_duration=300,
+        )
+        assert result is True
+        assert captured["opts"]["download_sections"] == [{"start_time": 10, "end_time": 60}]
+
+    def test_no_duration_check_when_none(self, monkeypatch):
+        captured = {}
+
+        class MockYoutubeDL:
+            def __init__(self, opts):
+                captured["opts"] = opts
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def extract_info(self, url, download):
+                return {"title": "test"}
+
+        monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
+        # video_duration=None — no check, download proceeds
+        result = download_youtube_video(
+            "https://youtube.com/watch?v=test",
+            time_range_start="0:10",
+            time_range_end="99:00",
+            video_duration=None,
+        )
+        assert result is True
+
+    def test_start_equals_duration_rejected(self, monkeypatch):
+        class MockYoutubeDL:
+            def __init__(self, opts):
+                raise AssertionError("yt-dlp should not be called")
+
+        monkeypatch.setattr("yt_dlp.YoutubeDL", MockYoutubeDL)
+        # Video is 60s, start=60s — at boundary, should fail
+        result = download_youtube_video(
+            "https://youtube.com/watch?v=test",
+            time_range_start="1:00",
+            time_range_end="1:30",
+            video_duration=60,
+        )
+        assert result is False

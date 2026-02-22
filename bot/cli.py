@@ -343,6 +343,13 @@ def cli_mode(args):
             print("opus   - Opus format")
             print("vorbis - Vorbis format")
     else:
+        # Fetch video duration when time range is set for validation
+        duration = None
+        if start_time is not None:
+            info = get_video_info(args.url)
+            if info:
+                duration = info.get('duration')
+
         download_youtube_video(
             args.url,
             args.format,
@@ -351,4 +358,5 @@ def cli_mode(args):
             args.audio_quality,
             start_time,
             end_time,
+            video_duration=duration,
         )

@@ -26,6 +26,7 @@ from bot.cli import parse_arguments, cli_mode, curses_main
 from bot.telegram_commands import (
     start,
     help_command,
+    logout_command,
     status_command,
     history_command,
     cleanup_command,
@@ -50,7 +51,8 @@ async def set_bot_commands(application):
         BotCommand("status", "Sprawdź przestrzeń dyskową"),
         BotCommand("history", "Historia pobrań"),
         BotCommand("cleanup", "Usuń stare pliki (>24h)"),
-        BotCommand("users", "Zarządzanie użytkownikami")
+        BotCommand("users", "Zarządzanie użytkownikami"),
+        BotCommand("logout", "Wyloguj się z bota")
     ]
 
     await application.bot.set_my_commands(commands)
@@ -101,6 +103,7 @@ def main():
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("cleanup", cleanup_command))
     application.add_handler(CommandHandler("users", users_command))
+    application.add_handler(CommandHandler("logout", logout_command))
 
     # Handler for text messages (including PIN and links)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_youtube_link))

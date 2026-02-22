@@ -100,6 +100,7 @@ def test_cli_mode_downloads_with_arguments(monkeypatch):
         "4",
         None,
         None,
+        video_duration=None,
     )
 
 
@@ -217,6 +218,7 @@ def test_cli_mode_downloads_with_time_range(monkeypatch):
 
     monkeypatch.setattr(cli, "validate_url", lambda _url: True)
     monkeypatch.setattr(cli, "download_youtube_video", download_mock)
+    monkeypatch.setattr(cli, "get_video_info", lambda _url: {"duration": 300})
 
     cli.cli_mode(args)
 
@@ -228,4 +230,5 @@ def test_cli_mode_downloads_with_time_range(monkeypatch):
         "192",
         30,
         60,
+        video_duration=300,
     )

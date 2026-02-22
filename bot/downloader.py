@@ -208,6 +208,7 @@ def download_youtube_video(
     audio_quality='192',
     time_range_start=None,
     time_range_end=None,
+    video_duration=None,
 ):
     """
     Downloads YouTube video or audio.
@@ -220,6 +221,7 @@ def download_youtube_video(
         audio_quality: Audio quality (bitrate)
         time_range_start: Start time (HH:MM:SS, MM:SS, or seconds)
         time_range_end: End time (HH:MM:SS, MM:SS, or seconds)
+        video_duration: Total video duration in seconds (optional, for range validation)
 
     Returns:
         bool: True on success, False on error
@@ -251,6 +253,15 @@ def download_youtube_video(
         if (time_range_start is None) != (time_range_end is None):
             print("[ERROR] Both --start and --to must be provided.")
             return False
+
+        # Validate time range against video duration when known
+        if video_duration is not None and normalized_time_range_start is not None:
+            if normalized_time_range_start >= video_duration:
+                print(f"[ERROR] Start time ({normalized_time_range_start}s) is at or beyond video duration ({video_duration}s).")
+                return False
+            if normalized_time_range_end > video_duration:
+                print(f"[ERROR] End time ({normalized_time_range_end}s) exceeds video duration ({video_duration}s).")
+                return False
 
         if normalized_format_id is not None and not is_valid_ytdlp_format_id(normalized_format_id):
             print(f"[ERROR] Unsupported format id: {normalized_format_id}")
