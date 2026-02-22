@@ -17,6 +17,41 @@ from mutagen.mp3 import MP3
 from bot.config import CONFIG
 from bot.security import MAX_MP3_PART_SIZE_MB
 
+# Claude Haiku 4.5 limits
+CLAUDE_MAX_OUTPUT_TOKENS = 64_000
+CLAUDE_CONTEXT_WINDOW_TOKENS = 200_000
+
+# Conservative thresholds (leave room for prompt overhead)
+# Post-processing must output ~same length as input
+POST_PROCESS_MAX_INPUT_TOKENS = 50_000   # ~200k chars, ~4.5h speech
+# Summary input is bounded by context window
+SUMMARY_MAX_INPUT_TOKENS = 175_000       # ~700k chars, ~14h speech
+
+# Approximate speech duration thresholds (minutes) for user-facing warnings
+CORRECTION_DURATION_LIMIT_MIN = 270      # ~4.5h
+SUMMARY_DURATION_LIMIT_MIN = 840         # ~14h
+
+
+def estimate_token_count(text: str) -> int:
+    """Estimates token count for text.
+
+    Uses ~4 characters per token as rough heuristic.
+    Works reasonably for both Polish and English text.
+    """
+    if not text:
+        return 0
+    return len(text) // 4
+
+
+def is_text_too_long_for_correction(text: str) -> bool:
+    """Returns True if text exceeds post-processing input limit."""
+    return estimate_token_count(text) > POST_PROCESS_MAX_INPUT_TOKENS
+
+
+def is_text_too_long_for_summary(text: str) -> bool:
+    """Returns True if text exceeds summary context window limit."""
+    return estimate_token_count(text) > SUMMARY_MAX_INPUT_TOKENS
+
 
 def get_api_key():
     """Returns Groq API key from configuration."""
@@ -373,12 +408,23 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None, language=
 
     # Post-process transcript with Claude to fix typos and incomplete words
     if get_claude_api_key():
-        if progress_callback:
-            progress_callback("Korekta transkrypcji przez AI...")
-        corrected = post_process_transcript(combined_text)
-        if corrected:
-            combined_text = corrected
-            logging.info(f"Post-processed transcript: {len(combined_text)} characters")
+        if is_text_too_long_for_correction(combined_text):
+            logging.info(
+                f"Skipping post-processing: text too long "
+                f"({len(combined_text):,} chars, ~{estimate_token_count(combined_text):,} tokens)"
+            )
+            if progress_callback:
+                progress_callback(
+                    "Korekta AI pominięta — tekst zbyt długi.\n"
+                    "Transkrypcja zostanie wysłana bez korekty."
+                )
+        else:
+            if progress_callback:
+                progress_callback("Korekta transkrypcji przez AI...")
+            corrected = post_process_transcript(combined_text)
+            if corrected:
+                combined_text = corrected
+                logging.info(f"Post-processed transcript: {len(combined_text)} characters")
     else:
         logging.info("Skipping post-processing: no Claude API key configured")
 
@@ -403,16 +449,31 @@ def post_process_transcript(text):
 
     Fixes typos, incomplete words, and punctuation errors while
     preserving the original meaning and structure of the text.
+    Skips processing if text is too long for the model's output limit.
 
     Args:
         text: Raw transcription text
 
     Returns:
-        str or None: Corrected text, or None on error
+        str or None: Corrected text, or None on error/skip
     """
     api_key = get_claude_api_key()
     if not api_key:
         return None
+
+    # Correction must output ~same length as input — skip if too long
+    input_tokens = estimate_token_count(text)
+    if input_tokens > POST_PROCESS_MAX_INPUT_TOKENS:
+        logging.info(
+            f"Skipping post-processing: text too long ({input_tokens:,} est. tokens, "
+            f"limit {POST_PROCESS_MAX_INPUT_TOKENS:,}). Roughly {len(text):,} characters."
+        )
+        return None
+
+    # Dynamic max_tokens: output ≈ input length + small buffer for prompt overhead
+    dynamic_max_tokens = min(input_tokens + 2000, CLAUDE_MAX_OUTPUT_TOKENS)
+    # Dynamic timeout: ~200 tokens/sec generation, minimum 180s
+    dynamic_timeout = max(180, dynamic_max_tokens // 150)
 
     url = "https://api.anthropic.com/v1/messages"
     headers = {
@@ -423,7 +484,7 @@ def post_process_transcript(text):
 
     data = {
         "model": "claude-haiku-4-5",
-        "max_tokens": 32768,
+        "max_tokens": dynamic_max_tokens,
         "messages": [
             {
                 "role": "user",
@@ -444,7 +505,7 @@ def post_process_transcript(text):
     }
 
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=180)
+        response = requests.post(url, headers=headers, json=data, timeout=dynamic_timeout)
 
         if response.status_code == 200:
             result = response.json()
@@ -470,6 +531,9 @@ def generate_summary(transcript_text, summary_type):
     """
     Generates summary of transcription using Claude API (Haiku).
 
+    Dynamically adjusts max_tokens based on summary type and input length.
+    Returns None if text exceeds context window limit.
+
     Args:
         transcript_text: Transcription text
         summary_type: Type of summary (1-4)
@@ -482,6 +546,15 @@ def generate_summary(transcript_text, summary_type):
         logging.error("Cannot read Claude API key from api_key.md.")
         return None
 
+    # Check if text fits in context window
+    input_tokens = estimate_token_count(transcript_text)
+    if input_tokens > SUMMARY_MAX_INPUT_TOKENS:
+        logging.warning(
+            f"Text too long for summary ({input_tokens:,} est. tokens, "
+            f"limit {SUMMARY_MAX_INPUT_TOKENS:,}). Roughly {len(transcript_text):,} characters."
+        )
+        return None
+
     prompts = {
         1: "Napisz krótkie podsumowanie następującego tekstu:",
         2: "Napisz szczegółowe i rozbudowane podsumowanie następującego tekstu:",
@@ -490,6 +563,18 @@ def generate_summary(transcript_text, summary_type):
     }
 
     selected_prompt = prompts.get(summary_type, prompts[1])
+
+    # Dynamic max_tokens based on summary type
+    # Detailed summaries need more room; short ones need less
+    summary_max_tokens = {
+        1: 4096,    # short summary
+        2: 16384,   # detailed summary
+        3: 8192,    # bullet points
+        4: 8192,    # task division
+    }
+    dynamic_max_tokens = summary_max_tokens.get(summary_type, 8192)
+    # Dynamic timeout: scale with input size, minimum 120s
+    dynamic_timeout = max(120, input_tokens // 500)
 
     url = "https://api.anthropic.com/v1/messages"
     headers = {
@@ -500,7 +585,7 @@ def generate_summary(transcript_text, summary_type):
 
     data = {
         "model": "claude-haiku-4-5",
-        "max_tokens": 16384,
+        "max_tokens": dynamic_max_tokens,
         "messages": [
             {
                 "role": "user",
@@ -510,7 +595,7 @@ def generate_summary(transcript_text, summary_type):
     }
 
     try:
-        response = requests.post(url, headers=headers, json=data, timeout=120)
+        response = requests.post(url, headers=headers, json=data, timeout=dynamic_timeout)
 
         if response.status_code == 200:
             result = response.json()

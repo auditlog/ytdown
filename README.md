@@ -306,7 +306,9 @@ ytdown/
 - Max 20MB dla pojedynczej części transkrypcji (większe pliki są dzielone automatycznie)
 - Max 20MB dla przesyłanych plików audio (limit Telegram Bot API dla pobierania plików przez bota)
 - Telegram limit: 50MB dla plików, 4096 znaków dla wiadomości
-- Max 16384 tokenów dla streszczeń Claude
+- Korekta AI transkrypcji: do ~4.5h materiału audio (powyżej automatycznie pomijana)
+- Podsumowanie AI: do ~14h materiału audio (powyżej automatycznie pomijane)
+- Sama transkrypcja (Whisper) i napisy YouTube działają bez limitu długości
 
 ## Rozwiązywanie problemów
 

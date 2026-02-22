@@ -34,10 +34,16 @@ try:
     from bot.transcription import (
         transcribe_mp3_file,
         generate_summary,
+        estimate_token_count,
+        is_text_too_long_for_correction,
+        is_text_too_long_for_summary,
     )
 except ImportError:
     transcribe_mp3_file = None
     generate_summary = None
+    estimate_token_count = None
+    is_text_too_long_for_correction = None
+    is_text_too_long_for_summary = None
 
 try:
     from bot.downloader import (
