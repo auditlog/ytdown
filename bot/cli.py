@@ -7,7 +7,16 @@ Handles command-line interface and interactive curses menu.
 import argparse
 import curses
 
-from bot.downloader import get_video_info, download_youtube_video, validate_url
+from bot.downloader import (
+    SUPPORTED_AUDIO_FORMATS,
+    get_video_info,
+    download_youtube_video,
+    is_valid_audio_format,
+    is_valid_audio_quality,
+    is_valid_ytdlp_format_id,
+    parse_time_seconds,
+    validate_url,
+)
 
 
 def show_help():
@@ -23,15 +32,17 @@ def show_help():
     print("  --format <ID>           Specify format to download (format ID from list)")
     print("  --format auto           Automatically select best quality")
     print("  --audio-only            Download audio track only (default mp3)")
-    print("  --audio-format <FORMAT> Specify audio format (mp3, m4a, wav, flac)")
+    print(f"  --audio-format <FORMAT> Specify audio format ({', '.join(SUPPORTED_AUDIO_FORMATS)})")
     print("  --audio-quality <QUALITY> Specify audio quality (0-9 for vorbis/opus, 0-330 for mp3)")
+    print("  --start <TIMESTAMP>     Clip start time (SS, MM:SS, HH:MM:SS)")
+    print("  --to <TIMESTAMP>        Clip end time (SS, MM:SS, HH:MM:SS)")
     print("\nExamples:")
     print("  python main.py                                                 # run interactive menu")
     print("  python main.py --cli --url https://www.youtube.com/watch?v=dQw4w9WgXcQ --audio-only")
     print("\nDescription:")
     print("  Program displays available video formats, allows selecting specific format")
     print("  and shows download progress in real-time. You can also download")
-    print("  only audio track in various formats (mp3, m4a, wav, flac).")
+    print(f"  only audio track in various formats ({', '.join(SUPPORTED_AUDIO_FORMATS)}).")
 
 
 def parse_arguments():
@@ -42,8 +53,14 @@ def parse_arguments():
     parser.add_argument("--list-formats", action="store_true", help="Show available formats without downloading")
     parser.add_argument("--format", help="Specify format to download (format ID from list)")
     parser.add_argument("--audio-only", action="store_true", help="Download audio track only")
-    parser.add_argument("--audio-format", default="mp3", help="Specify audio format (mp3, m4a, wav, flac)")
+    parser.add_argument(
+        "--audio-format",
+        default="mp3",
+        help=f"Specify audio format ({', '.join(SUPPORTED_AUDIO_FORMATS)})",
+    )
     parser.add_argument("--audio-quality", default="192", help="Specify audio quality")
+    parser.add_argument("--start", default=None, help="Start timestamp for partial download (SS, MM:SS, HH:MM:SS)")
+    parser.add_argument("--to", default=None, help="End timestamp for partial download (SS, MM:SS, HH:MM:SS)")
 
     return parser.parse_args()
 
@@ -264,6 +281,39 @@ def cli_mode(args):
     if not validate_url(args.url):
         return
 
+    if args.audio_format and not is_valid_audio_format(args.audio_format):
+        print(f"Error: Unsupported audio format: {args.audio_format}")
+        print(f"Supported audio formats: {', '.join(SUPPORTED_AUDIO_FORMATS)}")
+        return
+
+    if args.audio_only and not is_valid_audio_quality(args.audio_format, args.audio_quality):
+        print(f"Error: Unsupported audio quality '{args.audio_quality}' for format '{args.audio_format}'.")
+        print("Try values from help, e.g. 0-330 for mp3, 0-9 for Opus/Ogg/Vorbis.")
+        return
+
+    start_arg = getattr(args, "start", None)
+    end_arg = getattr(args, "to", None)
+    start_time = parse_time_seconds(start_arg)
+    end_time = parse_time_seconds(end_arg)
+
+    if (start_arg is not None) != (end_arg is not None):
+        print("Error: Both --start and --to must be provided together.")
+        return
+
+    if (start_arg is not None) and (start_time is None or end_time is None):
+        print("Error: Invalid time format for --start/--to.")
+        print("Use SS, MM:SS, or HH:MM:SS formats.")
+        return
+
+    if start_arg is not None and start_time >= end_time:
+        print("Error: --start must be earlier than --to.")
+        return
+
+    if args.format and not args.list_formats and not is_valid_ytdlp_format_id(args.format):
+        print(f"Error: Unsupported format id: {args.format}")
+        print("Use --list-formats to see available format IDs.")
+        return
+
     if args.list_formats:
         info = get_video_info(args.url)
         if info:
@@ -298,5 +348,7 @@ def cli_mode(args):
             args.format,
             args.audio_only,
             args.audio_format,
-            args.audio_quality
+            args.audio_quality,
+            start_time,
+            end_time,
         )

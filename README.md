@@ -32,7 +32,7 @@ Bot Telegram do pobierania filmów z YouTube z funkcjami transkrypcji i podsumow
 
 - Python 3.12+
 - ffmpeg (zainstalowany w systemie)
-- Poetry (package manager)
+- Poetry (opcjonalnie, zalecane) lub pip
 
 ## Instalacja
 
@@ -70,7 +70,7 @@ source venv/bin/activate  # Linux/macOS
 # lub: venv\Scripts\activate  # Windows
 
 # Zainstaluj zależności
-pip install yt-dlp mutagen python-telegram-bot requests python-dotenv
+pip install -r requirements.txt
 ```
 
 ### Instalacja ffmpeg
@@ -111,6 +111,17 @@ PIN_CODE=12345678
 
 **UWAGA**: Plik `api_key.md` jest ignorowany przez git - nie commituj go do repozytorium!
 
+### Opcja 4: Cookies YouTube (wymagane przy blokadzie anty-botowej)
+
+Jeśli YouTube blokuje pobieranie komunikatem "Sign in to confirm you're not a bot", potrzebny jest plik `cookies.txt`:
+
+1. Zainstaluj rozszerzenie **"Get cookies.txt LOCALLY"** w przeglądarce (Chrome/Firefox)
+2. Wejdź na youtube.com (zalogowany na konto Google)
+3. Wyeksportuj cookies do pliku `cookies.txt`
+4. Umieść plik w głównym katalogu projektu (`ytdown/cookies.txt`)
+
+**UWAGA**: Plik `cookies.txt` zawiera dane sesji YouTube — nie udostępniaj go i nie commituj do repozytorium! Jest ignorowany przez git.
+
 ### Opcja 3: Zmienne środowiskowe (najbezpieczniejsze)
 
 **Linux/macOS/WSL:**
@@ -134,6 +145,8 @@ $env:PIN_CODE="12345678"
 ### Bot Telegram
 ```bash
 python main.py
+# lub (Poetry):
+poetry run python main.py
 ```
 
 ### Tryb CLI (interfejs tekstowy)
@@ -178,6 +191,8 @@ python tests/test_security.py
 python tests/test_security_standalone.py
 python tests/test_json_persistence.py
 ```
+
+Jeśli używasz testów asynchronicznych, upewnij się, że masz zainstalowany `pytest-asyncio`.
 
 ## Komendy bota Telegram
 
@@ -236,6 +251,7 @@ ytdown/
 │   ├── test_json_persistence.py    # Testy persystencji JSON
 │   └── test_json_simple.py         # Proste testy JSON
 ├── api_key.md                      # Konfiguracja (ignorowany przez git)
+├── cookies.txt                     # Cookies YouTube (ignorowany przez git)
 ├── authorized_users.json           # Lista autoryzowanych użytkowników (ignorowany)
 ├── README.md                       # Ten plik
 └── downloads/                      # Pobrane pliki (ignorowany)
@@ -245,6 +261,7 @@ ytdown/
 ## Bezpieczeństwo
 
 - Klucze API w gitignore
+- Cookies YouTube w gitignore (`cookies.txt`)
 - Rate limiting (10 req/min)
 - Limit plików (1GB)
 - Tylko HTTPS YouTube

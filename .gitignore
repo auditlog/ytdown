@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.pytest_cache/
+
+# Environment & secrets
+.env
+api_key.md
+api_key_draft.md
+authorized_users.json
+cookies.txt
+
+# Runtime data
+downloads/
+download_history.json
+
+# Node
+node_modules/
+package.json
+package-lock.json
+
+# IDE
+pyrightconfig.json
+.claude/
+
+# Legacy / backup
+backup/
+youtube_downloader_telegram.py
+run_tests.sh
+git/

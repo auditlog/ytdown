@@ -40,6 +40,10 @@ from bot.transcription import (
 from bot.downloader import (
     get_video_info,
     sanitize_filename,
+    is_valid_audio_format,
+    is_valid_ytdlp_format_id,
+    is_valid_audio_quality,
+    COOKIES_FILE,
 )
 
 
@@ -158,6 +162,75 @@ async def send_long_message(bot, chat_id, text, header="", parse_mode='Markdown'
         )
 
 
+def parse_download_callback(data):
+    """Parses download-related callback data.
+
+    Expected formats:
+      - dl_video_<format>
+      - dl_audio_<codec>
+      - dl_audio_format_<format_id>
+    """
+    if not isinstance(data, str):
+        return None
+
+    if not data.startswith("dl_"):
+        return None
+
+    parts = data.split("_")
+    if len(parts) < 3:
+        return None
+
+    media_type = parts[1]
+    if media_type not in {"audio", "video"}:
+        return None
+
+    if media_type == "audio":
+        if len(parts) == 4 and parts[2] == "format":
+            return {"media_type": "audio", "mode": "format_id", "format": parts[3]}
+        if len(parts) == 3 and parts[2] != "format":
+            return {"media_type": "audio", "mode": "codec", "format": parts[2]}
+        return None
+
+    if media_type == "video":
+        if len(parts) == 3:
+            return {"media_type": "video", "mode": "format_id", "format": parts[2]}
+        return None
+
+    return None
+
+
+def parse_summary_option(option_data):
+    """Parses summary option payloads.
+
+    Expected format:
+      - summary_option_<index>
+      - audio_summary_option_<index>
+    """
+    if not isinstance(option_data, str):
+        return None
+
+    if (
+        not option_data.startswith("summary_option_")
+        and not option_data.startswith("audio_summary_option_")
+    ):
+        return None
+
+    _, _, raw_value = option_data.rpartition("_")
+
+    if not raw_value:
+        return None
+
+    try:
+        summary_option = int(raw_value)
+    except ValueError:
+        return None
+
+    if summary_option < 1 or summary_option > 4:
+        return None
+
+    return summary_option
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all callback queries."""
     query = update.callback_query
@@ -195,7 +268,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await show_language_selection(update, context, "audio_transcribe_summary")
         return
     elif data.startswith("audio_summary_option_"):
-        option = int(data.split('_')[-1])
+        option = parse_summary_option(data)
+        if option is None:
+            await query.edit_message_text("Nieobsługiwana opcja podsumowania.")
+            return
         await transcribe_audio_file(update, context, summary=True, summary_type=option)
         return
 
@@ -206,23 +282,41 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("dl_"):
-        parts = data.split('_')
-        type = parts[1]
+        download_data = parse_download_callback(data)
+        if not download_data:
+            await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+            return
 
-        if type == "audio" and len(parts) >= 4 and parts[2] == "format":
-            format_id = parts[3]
-            await download_file(update, context, "audio", format_id, url)
-        elif type == "video" and len(parts) == 3:
-            format = parts[2]
-            await download_file(update, context, "video", format, url)
+        media_type = download_data["media_type"]
+        mode = download_data["mode"]
+        selected_format = download_data["format"]
+
+        if media_type == "audio" and mode == "format_id":
+            if not is_valid_ytdlp_format_id(selected_format):
+                await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+                return
+            await download_file(update, context, "audio", selected_format, url, use_format_id=True)
+        elif media_type == "audio":
+            if not is_valid_audio_format(selected_format):
+                await query.edit_message_text("Nieobsługiwany format audio. Spróbuj wybrać format ponownie.")
+                return
+            await download_file(update, context, "audio", selected_format, url)
+        elif media_type == "video":
+            if not is_valid_ytdlp_format_id(selected_format):
+                await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+                return
+            await download_file(update, context, "video", selected_format, url)
         else:
-            format = parts[2] if len(parts) > 2 else "best"
-            await download_file(update, context, type, format, url)
+            await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+            return
     elif data == "transcribe_summary":
         await show_language_selection(update, context, "transcribe_summary")
     elif data.startswith("summary_option_"):
-        option = data.split('_')[2]
-        await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=int(option))
+        option = parse_summary_option(data)
+        if option is None:
+            await query.edit_message_text("Nieobsługiwana opcja podsumowania.")
+            return
+        await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=option)
     elif data == "transcribe":
         await show_language_selection(update, context, "transcribe")
     elif data == "formats":
@@ -240,8 +334,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await back_to_main_menu(update, context, url)
 
 
-async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type, format, url, transcribe=False, summary=False, summary_type=None):
+async def download_file(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    type,
+    format,
+    url,
+    transcribe=False,
+    summary=False,
+    summary_type=None,
+    use_format_id=False,
+    audio_quality='192',
+):
     """Downloads file and sends it to user with progress updates."""
+    media_type = type
     query = update.callback_query
     chat_id = update.effective_chat.id
 
@@ -282,6 +388,8 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
         'buffer_size': 1024 * 16,  # 16KB buffer
         'http_chunk_size': 10485760,  # 10MB chunks
     }
+    if os.path.exists(COOKIES_FILE):
+        ydl_opts['cookiefile'] = COOKIES_FILE
 
     # Apply time range if set
     time_range = user_time_ranges.get(chat_id)
@@ -293,18 +401,26 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
         ydl_opts['force_keyframes_at_cuts'] = True
         logging.info(f"Applying time range: {start} - {end}")
 
-    if type == "audio" or transcribe:
-        audio_format_to_use = "mp3" if transcribe else format
+    if media_type == "audio" or transcribe:
+        if use_format_id and not transcribe:
+            ydl_opts['format'] = format
+            ydl_opts['postprocessors'] = []
+        else:
+            audio_format_to_use = "mp3" if transcribe else format
+            normalized_quality = str(audio_quality).strip()
+            if not is_valid_audio_quality(audio_format_to_use, normalized_quality):
+                await update_status("Nieobsługiwana jakość audio. Spróbuj zmienić opcję.")
+                return
 
-        ydl_opts.update({
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': audio_format_to_use,
-                'preferredquality': '192',
-            }],
-        })
-    elif type == "video":
+            ydl_opts.update({
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': audio_format_to_use,
+                    'preferredquality': normalized_quality,
+                }],
+            })
+    elif media_type == "video":
         if format == "best":
             ydl_opts['format'] = 'best'
         elif format in ["1080p", "720p", "480p", "360p"]:
@@ -583,7 +699,7 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
             await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie pliku do Telegram...")
 
             with open(downloaded_file_path, 'rb') as f:
-                if type == "audio":
+                if media_type == "audio":
                     await context.bot.send_audio(
                         chat_id=chat_id,
                         audio=f,
@@ -604,7 +720,7 @@ async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type
             os.remove(downloaded_file_path)
 
             # Record download in history
-            format_type = f"{type}_{format}"
+            format_type = f"{media_type}_{format}"
             add_download_record(chat_id, title, url, format_type, file_size_mb, time_range)
 
             await update_status("Plik został wysłany!")

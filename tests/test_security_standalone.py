@@ -6,11 +6,16 @@ Nie wymaga zainstalowanych bibliotek Telegram
 
 import time
 from collections import defaultdict
+import pytest
 
 # Stałe z głównego pliku (matching bot/security.py)
 RATE_LIMIT_REQUESTS = 10
 RATE_LIMIT_WINDOW = 60
 MAX_FILE_SIZE_MB = 1000  # 1GB limit
+
+pytestmark = pytest.mark.skip(
+    reason="Legacy standalone script; consolidated into test_security.py."
+)
 
 # Słownik do śledzenia requestów użytkowników
 user_requests = defaultdict(list)
