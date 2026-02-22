@@ -8,6 +8,7 @@ Bot Telegram do pobierania filmów z YouTube z funkcjami transkrypcji i podsumow
 - Pobieranie filmów YouTube w różnych formatach wideo (1080p, 720p, 480p, 360p)
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
+- **Napisy YouTube jako źródło transkrypcji** — natychmiastowe pobieranie napisów (manualnych lub automatycznych) bez zużycia tokenów AI
 - Generowanie podsumowań transkrypcji (Claude API - Haiku 4.5)
 - **Transkrypcja przesłanych plików audio** — wiadomości głosowe, pliki audio i dokumenty audio (np. notatki głosowe z WhatsApp)
 - Ochrona dostępu kodem PIN
@@ -228,6 +229,7 @@ Jeśli używasz testów asynchronicznych, upewnij się, że masz zainstalowany `
 4. Wyślij link do filmu YouTube
 5. Wybierz format i jakość
 6. Opcjonalnie: wybierz transkrypcję lub streszczenie
+   - Jeśli film ma napisy YouTube — możesz wybrać gotowe napisy (natychmiastowo, 0 tokenów) lub transkrypcję AI (minuty, tokeny Groq/Claude)
 
 ### Transkrypcja plików audio
 1. Wyślij wiadomość głosową, plik audio lub dokument audio (np. notatkę głosową z WhatsApp)
@@ -259,7 +261,7 @@ ytdown/
 │   ├── telegram_commands.py        # Handlery komend Telegram (/start, /help, etc.)
 │   └── telegram_callbacks.py       # Handlery callbacków (przyciski, pobieranie)
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~210 testów)
+├── tests/                          # Testy (~274 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, logowania
@@ -279,6 +281,7 @@ ytdown/
 
 ## Bezpieczeństwo
 
+- Pełny audyt bezpieczeństwa (15 poprawek: 1 krytyczna, 3 wysokie, 10 średnich, 1 niska)
 - Klucze API w gitignore
 - Cookies YouTube w gitignore (`cookies.txt`)
 - Rate limiting (10 req/min)

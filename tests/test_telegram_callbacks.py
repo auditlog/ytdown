@@ -122,34 +122,71 @@ def test_handle_callback_audio_transcribe_starts_directly(monkeypatch):
     assert called.get("invoked") is True
 
 
-def test_handle_callback_transcribe_starts_download(monkeypatch):
-    """transcribe callback downloads audio with transcribe=True (auto-detect language)."""
+def test_handle_callback_transcribe_shows_subtitle_menu(monkeypatch):
+    """transcribe callback routes through show_subtitle_source_menu."""
     tc.user_urls[123] = "https://www.youtube.com/watch?v=abc"
     update = _make_update("transcribe", chat_id=123)
     context = _make_context()
 
     called = {}
 
+    async def fake_show_subtitle_source_menu(update_arg, context_arg, url, with_summary=False):
+        called["url"] = url
+        called["with_summary"] = with_summary
+
+    monkeypatch.setattr(tc, "show_subtitle_source_menu", fake_show_subtitle_source_menu)
+    asyncio.run(tc.handle_callback(update, context))
+
+    update.callback_query.answer.assert_awaited_once()
+    assert called["url"] == "https://www.youtube.com/watch?v=abc"
+    assert called["with_summary"] is False
+
+
+def test_handle_callback_transcribe_summary_shows_subtitle_menu(monkeypatch):
+    """transcribe_summary callback routes through show_subtitle_source_menu with_summary=True."""
+    tc.user_urls[333] = "https://www.youtube.com/watch?v=abc"
+    update = _make_update("transcribe_summary", chat_id=333)
+    context = _make_context()
+
+    called = {}
+
+    async def fake_show_subtitle_source_menu(update_arg, context_arg, url, with_summary=False):
+        called["url"] = url
+        called["with_summary"] = with_summary
+
+    monkeypatch.setattr(tc, "show_subtitle_source_menu", fake_show_subtitle_source_menu)
+    asyncio.run(tc.handle_callback(update, context))
+
+    update.callback_query.answer.assert_awaited_once()
+    assert called["url"] == "https://www.youtube.com/watch?v=abc"
+    assert called["with_summary"] is True
+
+
+def test_handle_callback_sub_src_ai_starts_download(monkeypatch):
+    """sub_src_ai callback downloads audio with transcribe=True."""
+    tc.user_urls[123] = "https://www.youtube.com/watch?v=abc"
+    update = _make_update("sub_src_ai", chat_id=123)
+    context = _make_context()
+
+    called = {}
+
     async def fake_download_file(update_arg, context_arg, type_arg, format_arg, url, **kwargs):
         called["type"] = type_arg
-        called["format"] = format_arg
         called["url"] = url
-        called["kwargs"] = kwargs
+        called["transcribe"] = kwargs.get("transcribe")
 
     monkeypatch.setattr(tc, "download_file", fake_download_file)
     asyncio.run(tc.handle_callback(update, context))
 
-    update.callback_query.answer.assert_awaited_once()
     assert called["type"] == "audio"
-    assert called["format"] == "mp3"
     assert called["url"] == "https://www.youtube.com/watch?v=abc"
-    assert called["kwargs"]["transcribe"] is True
+    assert called["transcribe"] is True
 
 
-def test_handle_callback_transcribe_summary_shows_options(monkeypatch):
-    """transcribe_summary callback shows summary options directly (no language selection)."""
+def test_handle_callback_sub_src_ai_s_shows_summary_options(monkeypatch):
+    """sub_src_ai_s callback shows summary options."""
     tc.user_urls[333] = "https://www.youtube.com/watch?v=abc"
-    update = _make_update("transcribe_summary", chat_id=333)
+    update = _make_update("sub_src_ai_s", chat_id=333)
     context = _make_context()
 
     shown = {}
@@ -160,7 +197,6 @@ def test_handle_callback_transcribe_summary_shows_options(monkeypatch):
     monkeypatch.setattr(tc, "show_summary_options", fake_show_summary_options)
     asyncio.run(tc.handle_callback(update, context))
 
-    update.callback_query.answer.assert_awaited_once()
     assert shown["url"] == "https://www.youtube.com/watch?v=abc"
 
 

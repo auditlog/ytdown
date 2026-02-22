@@ -331,6 +331,162 @@ def download_youtube_video(
         return False
 
 
+def get_available_subtitles(info: dict) -> dict:
+    """Returns available subtitle info from yt-dlp info dict.
+
+    Reads info['subtitles'] (manual) and info['automatic_captions'] (auto-generated).
+    Priority: pl, en first, then alphabetically. Limited to 6 manual + 4 auto.
+
+    Args:
+        info: Video info dictionary from yt-dlp.
+
+    Returns:
+        dict with keys: 'manual', 'auto', 'has_any'.
+    """
+    if not info or not isinstance(info, dict):
+        return {'manual': {}, 'auto': {}, 'has_any': False}
+
+    priority_langs = ['pl', 'en']
+
+    def sort_languages(langs_dict):
+        if not langs_dict:
+            return []
+        priority = [l for l in priority_langs if l in langs_dict]
+        rest = sorted(l for l in langs_dict if l not in priority_langs)
+        return priority + rest
+
+    manual_subs = info.get('subtitles') or {}
+    auto_subs = info.get('automatic_captions') or {}
+
+    manual_sorted = sort_languages(manual_subs)[:6]
+    auto_sorted = sort_languages(auto_subs)[:4]
+
+    manual = {lang: manual_subs[lang] for lang in manual_sorted}
+    auto = {lang: auto_subs[lang] for lang in auto_sorted}
+
+    return {
+        'manual': manual,
+        'auto': auto,
+        'has_any': bool(manual or auto),
+    }
+
+
+def download_subtitles(url, lang, output_dir, auto=False, title=""):
+    """Downloads subtitles via yt-dlp with skip_download=True.
+
+    Args:
+        url: YouTube video URL.
+        lang: Subtitle language code (e.g. 'en', 'pl').
+        output_dir: Directory to save subtitle file.
+        auto: If True, download auto-generated captions.
+        title: Video title for filename.
+
+    Returns:
+        Path to downloaded subtitle file, or None on error.
+    """
+    try:
+        safe_title = sanitize_filename(title) if title else "subtitles"
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        output_template = os.path.join(output_dir, f"{current_date} {safe_title}")
+
+        ydl_opts = {
+            'skip_download': True,
+            'writesubtitles': not auto,
+            'writeautomaticsub': auto,
+            'subtitleslangs': [lang],
+            'subtitlesformat': 'vtt/srt/best',
+            'outtmpl': f"{output_template}.%(ext)s",
+            'quiet': True,
+            'no_warnings': True,
+        }
+        if os.path.exists(COOKIES_FILE):
+            ydl_opts['cookiefile'] = COOKIES_FILE
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([url])
+
+        # Find the downloaded subtitle file
+        for ext in ['vtt', 'srt', 'ass', 'json3', 'srv1', 'srv2', 'srv3', 'lrc']:
+            candidate = f"{output_template}.{lang}.{ext}"
+            if os.path.exists(candidate):
+                return candidate
+
+        logging.warning(f"Subtitle file not found after download for lang={lang}, auto={auto}")
+        return None
+
+    except Exception as e:
+        logging.error(f"Error downloading subtitles: {e}")
+        return None
+
+
+def parse_subtitle_file(file_path: str) -> str:
+    """Parses VTT/SRT subtitle file to clean plain text.
+
+    Removes WEBVTT header, timestamps, sequence numbers, HTML tags.
+    Deduplicates consecutive identical lines (common in auto-captions).
+
+    Args:
+        file_path: Path to subtitle file (.vtt or .srt).
+
+    Returns:
+        Clean plain text string.
+    """
+    if not file_path or not os.path.exists(file_path):
+        return ""
+
+    with open(file_path, 'r', encoding='utf-8') as f:
+        content = f.read()
+
+    lines = content.split('\n')
+    text_lines = []
+
+    # Patterns to skip
+    # VTT: 00:00:01.000 --> 00:00:04.000, SRT: 00:00:01,000 --> 00:00:04,000
+    timestamp_pattern = re.compile(
+        r'^\d{1,2}:\d{2}:\d{2}[.,]\d{2,3}\s*-->\s*\d{1,2}:\d{2}:\d{2}[.,]\d{2,3}'
+    )
+    sequence_pattern = re.compile(r'^\d+$')
+    html_tag_pattern = re.compile(r'<[^>]+>')
+
+    for line in lines:
+        stripped = line.strip()
+
+        # Skip empty, WEBVTT header, NOTE blocks, STYLE blocks
+        if not stripped:
+            continue
+        if stripped.startswith('WEBVTT'):
+            continue
+        if stripped.startswith('NOTE'):
+            continue
+        if stripped.startswith('STYLE'):
+            continue
+        if stripped.startswith('Kind:') or stripped.startswith('Language:'):
+            continue
+
+        # Skip timestamps
+        if timestamp_pattern.match(stripped):
+            continue
+
+        # Skip sequence numbers (SRT format)
+        if sequence_pattern.match(stripped):
+            continue
+
+        # Remove HTML tags (<c>, <b>, <i>, etc.) and yt-dlp position tags
+        cleaned = html_tag_pattern.sub('', stripped)
+        cleaned = cleaned.strip()
+
+        if not cleaned:
+            continue
+
+        # Deduplicate consecutive identical lines
+        if text_lines and text_lines[-1] == cleaned:
+            continue
+
+        text_lines.append(cleaned)
+
+    return '\n'.join(text_lines)
+
+
 def validate_url(url):
     """
     Checks if URL is a valid YouTube link.
