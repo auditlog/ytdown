@@ -33,6 +33,7 @@ from bot.telegram_commands import (
     users_command,
     handle_youtube_link,
     handle_audio_upload,
+    handle_video_upload,
 )
 from bot.telegram_callbacks import handle_callback
 
@@ -120,8 +121,22 @@ def main():
         | filters.Document.MimeType("audio/flac")
         | filters.Document.MimeType("audio/opus")
         | filters.Document.MimeType("audio/webm")
+        | filters.Document.MimeType("audio/aac")
+        | filters.Document.MimeType("audio/amr")
+        | filters.Document.MimeType("audio/x-caf")
     )
     application.add_handler(MessageHandler(audio_doc_filter, handle_audio_upload))
+
+    # Handlers for video uploads (native video + video documents)
+    video_doc_filter = (
+        filters.VIDEO
+        | filters.Document.MimeType("video/mp4")
+        | filters.Document.MimeType("video/quicktime")
+        | filters.Document.MimeType("video/x-matroska")
+        | filters.Document.MimeType("video/x-msvideo")
+        | filters.Document.MimeType("video/webm")
+    )
+    application.add_handler(MessageHandler(video_doc_filter, handle_video_upload))
 
     application.add_handler(CallbackQueryHandler(handle_callback))
 

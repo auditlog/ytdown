@@ -16,7 +16,9 @@ from bot.config import (
 
 from bot.security import (
     check_rate_limit,
+    validate_url,
     validate_youtube_url,
+    detect_platform,
     manage_authorized_user,
     estimate_file_size,
     user_urls,
@@ -73,6 +75,7 @@ try:
         handle_pin,
         process_youtube_link,
         handle_audio_upload,
+        handle_video_upload,
     )
 except ImportError:
     start = None
@@ -84,6 +87,7 @@ except ImportError:
     handle_pin = None
     process_youtube_link = None
     handle_audio_upload = None
+    handle_video_upload = None
 
 try:
     from bot.telegram_callbacks import (
@@ -120,7 +124,9 @@ __all__ = [
     'save_authorized_users',
     # Security
     'check_rate_limit',
+    'validate_url',
     'validate_youtube_url',
+    'detect_platform',
     'manage_authorized_user',
     'estimate_file_size',
     'user_urls',
@@ -149,6 +155,7 @@ __all__ = [
     'handle_pin',
     'process_youtube_link',
     'handle_audio_upload',
+    'handle_video_upload',
     # Telegram callbacks
     'handle_callback',
     'download_file',

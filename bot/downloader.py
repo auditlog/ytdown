@@ -335,39 +335,61 @@ def get_available_subtitles(info: dict) -> dict:
     """Returns available subtitle info from yt-dlp info dict.
 
     Reads info['subtitles'] (manual) and info['automatic_captions'] (auto-generated).
-    Priority: pl, en first, then alphabetically. Limited to 6 manual + 4 auto.
+    Manual: pl, en, original lang first, then alphabetically (max 6).
+    Auto: only pl, en, and original language (no random langs like aa/ab).
 
     Args:
         info: Video info dictionary from yt-dlp.
 
     Returns:
-        dict with keys: 'manual', 'auto', 'has_any'.
+        dict with keys: 'manual', 'auto', 'has_any', 'original_lang'.
     """
     if not info or not isinstance(info, dict):
-        return {'manual': {}, 'auto': {}, 'has_any': False}
+        return {'manual': {}, 'auto': {}, 'has_any': False,
+                'original_lang': None}
 
+    original_lang = info.get('language') or None
     priority_langs = ['pl', 'en']
 
-    def sort_languages(langs_dict):
+    def sort_languages(langs_dict, limit=None):
         if not langs_dict:
             return []
-        priority = [l for l in priority_langs if l in langs_dict]
-        rest = sorted(l for l in langs_dict if l not in priority_langs)
-        return priority + rest
+        # Build ordered list: pl, en, original lang, then rest alphabetically
+        seen = set()
+        result = []
+        for l in priority_langs:
+            if l in langs_dict and l not in seen:
+                result.append(l)
+                seen.add(l)
+        if original_lang and original_lang in langs_dict and original_lang not in seen:
+            result.append(original_lang)
+            seen.add(original_lang)
+        rest = sorted(l for l in langs_dict if l not in seen)
+        result.extend(rest)
+        if limit:
+            result = result[:limit]
+        return result
 
     manual_subs = info.get('subtitles') or {}
     auto_subs = info.get('automatic_captions') or {}
 
-    manual_sorted = sort_languages(manual_subs)[:6]
-    auto_sorted = sort_languages(auto_subs)[:4]
+    manual_sorted = sort_languages(manual_subs, limit=6)
+    # Auto subs: only show pl, en, and original language — skip random langs
+    auto_target = []
+    for l in priority_langs:
+        if l in auto_subs:
+            auto_target.append(l)
+    if original_lang and original_lang in auto_subs and original_lang not in auto_target:
+        auto_target.append(original_lang)
 
     manual = {lang: manual_subs[lang] for lang in manual_sorted}
-    auto = {lang: auto_subs[lang] for lang in auto_sorted}
+    auto = {lang: auto_subs[lang] for lang in auto_target}
 
     return {
         'manual': manual,
         'auto': auto,
         'has_any': bool(manual or auto),
+        'original_lang': original_lang,
     }
 
 
@@ -489,7 +511,7 @@ def parse_subtitle_file(file_path: str) -> str:
 
 def validate_url(url):
     """
-    Checks if URL is a valid YouTube link.
+    Checks if URL is from a supported platform.
 
     Args:
         url: URL to validate
@@ -497,9 +519,9 @@ def validate_url(url):
     Returns:
         bool: True if valid, False otherwise
     """
-    from bot.security import validate_youtube_url
+    from bot.security import validate_url as _validate_url
 
-    valid = validate_youtube_url(url)
+    valid = _validate_url(url)
     if not valid:
-        print("Error: Invalid URL. Provide a YouTube video link.")
+        print("Error: Invalid URL. Supported: YouTube, Vimeo, TikTok, Instagram, LinkedIn.")
     return valid

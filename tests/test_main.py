@@ -68,6 +68,7 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
         COMMAND=DummyFilter(),
         VOICE="VOICE",
         AUDIO="AUDIO",
+        VIDEO=DummyFilter(),
         Document=SimpleNamespace(MimeType=lambda *_: DummyFilter()),
     )
     monkeypatch.setattr(app_main, "filters", filters)

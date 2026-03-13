@@ -33,7 +33,9 @@ from bot.security import (
     user_urls,
     user_time_ranges,
     check_rate_limit,
+    validate_url,
     validate_youtube_url,
+    detect_platform,
     manage_authorized_user,
     estimate_file_size,
     is_user_blocked,
@@ -138,7 +140,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in authorized_users:
         await update.message.reply_text(
             f"Witaj, {user_name}!\n\n"
-            "Jesteś już zalogowany. Możesz wysłać link do YouTube, aby pobrać film lub audio."
+            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+            "aby pobrać film lub audio."
         )
         return
 
@@ -227,7 +230,8 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await update.message.reply_text(
                     "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-                    "Wyślij link do YouTube, aby pobrać film lub audio."
+                    "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+                    "aby pobrać film lub audio."
                 )
 
                 # Check for pending URL
@@ -241,6 +245,12 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 if pending_audio:
                     context.user_data.pop("pending_audio", None)
                     await process_audio_file(update, context, pending_audio)
+
+                # Check for pending video upload
+                pending_video = context.user_data.get("pending_video")
+                if pending_video:
+                    context.user_data.pop("pending_video", None)
+                    await process_video_file(update, context, pending_video)
             else:
                 # Increment failed attempts counter
                 remaining_attempts, attempt_count = register_pin_failure(
@@ -308,17 +318,21 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /help command."""
     await update.message.reply_text(
         "Jak korzystać z bota:\n\n"
-        "📹 *Pobieranie z YouTube:*\n"
-        "1. Wyślij link do filmu z YouTube\n"
+        "📹 *Pobieranie video/audio:*\n"
+        "1. Wyślij link z obsługiwanej platformy\n"
         "2. Wybierz format (video lub audio) i jakość\n"
         "3. Poczekaj na pobranie pliku\n\n"
-        "🎤 *Transkrypcja plików audio:*\n"
-        "1. Wyślij wiadomość głosową lub plik audio\n"
+        "🎤 *Transkrypcja plików audio/video:*\n"
+        "1. Wyślij wiadomość głosową, plik audio lub video\n"
         "2. Wybierz: transkrypcja lub transkrypcja + podsumowanie\n"
-        "3. Obsługiwane formaty: OGG, MP3, M4A, WAV, FLAC, OPUS\n\n"
-        "Bot obsługuje linki z YouTube w formatach:\n"
-        "- https://www.youtube.com/watch?v=...\n"
-        "- https://youtu.be/...\n\n"
+        "3. Obsługiwane formaty audio: OGG, MP3, M4A, WAV, FLAC, OPUS\n"
+        "4. Obsługiwane formaty video: MP4, MOV, MKV, AVI, WEBM\n\n"
+        "🌐 *Obsługiwane platformy:*\n"
+        "- YouTube (youtube.com, youtu.be)\n"
+        "- Vimeo (vimeo.com)\n"
+        "- TikTok (tiktok.com)\n"
+        "- Instagram (instagram.com)\n"
+        "- LinkedIn (linkedin.com)\n\n"
         "Komendy administracyjne:\n"
         "- /status - sprawdź przestrzeń dyskową\n"
         "- /cleanup - usuń stare pliki (>24h)",
@@ -510,18 +524,23 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                 
                 # Apply the custom time range
                 user_time_ranges[chat_id] = time_range
-                
+
                 # Send confirmation and show main menu with updated time range
+                # Respect platform for conditional buttons
+                cur_platform = context.user_data.get('platform', 'youtube')
                 keyboard = [
                     [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
                     [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
                     [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-                    [InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")],
+                ]
+                if cur_platform != 'tiktok':
+                    keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
+                keyboard.extend([
                     [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
                     [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
                     [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
                     [InlineKeyboardButton("Lista formatów", callback_data="formats")]
-                ]
+                ])
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await update.message.reply_text(
@@ -557,14 +576,15 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # Validate URL
-    if not validate_youtube_url(message_text):
+    if not validate_url(message_text):
         await update.message.reply_text(
             "Nieprawidłowy URL!\n\n"
-            "Podaj prawidłowy link do YouTube.\n"
-            "Obsługiwane formaty:\n"
-            "- https://www.youtube.com/watch?v=...\n"
-            "- https://youtu.be/...\n"
-            "- https://music.youtube.com/..."
+            "Obsługiwane platformy:\n"
+            "- YouTube (youtube.com, youtu.be)\n"
+            "- Vimeo (vimeo.com)\n"
+            "- TikTok (tiktok.com)\n"
+            "- Instagram (instagram.com)\n"
+            "- LinkedIn (linkedin.com)"
         )
         return
 
@@ -572,11 +592,15 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
-    """Processes YouTube link after PIN authorization."""
+    """Processes a media link after PIN authorization."""
     chat_id = update.effective_chat.id
     user_urls[chat_id] = url
     # Clear any previous time range
     user_time_ranges.pop(chat_id, None)
+
+    # Detect and store platform for conditional UI
+    platform = detect_platform(url) or 'youtube'
+    context.user_data['platform'] = platform
 
     progress_message = await update.message.reply_text("Pobieranie informacji o filmie...")
 
@@ -592,6 +616,10 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     estimated_size = estimate_file_size(info)
     size_warning = ""
 
+    # TikTok: short videos, no time range or FLAC needed
+    hide_time_range = platform == 'tiktok'
+    hide_flac = platform == 'tiktok'
+
     if estimated_size and estimated_size > MAX_FILE_SIZE_MB:
         size_warning = f"\n*Uwaga:* Szacowany rozmiar najlepszej jakości: {estimated_size:.1f} MB (limit: {MAX_FILE_SIZE_MB} MB)\n"
 
@@ -604,20 +632,25 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
             [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
             [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
             [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-            [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
-            [InlineKeyboardButton("Lista formatów", callback_data="formats")]
         ]
+        if not hide_time_range:
+            keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
+        keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
     else:
         keyboard = [
             [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
             [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
             [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-            [InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")],
+        ]
+        if not hide_flac:
+            keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
+        keyboard.extend([
             [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
             [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-            [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
-            [InlineKeyboardButton("Lista formatów", callback_data="formats")]
-        ]
+        ])
+        if not hide_time_range:
+            keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
+        keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -760,6 +793,9 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
             'audio/x-wav': '.wav',
             'audio/flac': '.flac',
             'audio/webm': '.webm',
+            'audio/aac': '.aac',
+            'audio/amr': '.amr',
+            'audio/x-caf': '.caf',
         }
         ext = mime_to_ext.get(audio_info['mime_type'], '.ogg')
         title = audio_info['title']
@@ -818,3 +854,170 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
     except Exception as e:
         logging.error(f"Error processing audio upload: {e}")
         await progress_msg.edit_text("Błąd przetwarzania pliku audio. Spróbuj ponownie.")
+
+
+def _extract_video_info(message) -> dict | None:
+    """
+    Extracts video file metadata from a Telegram message.
+
+    Handles native video messages and documents with video MIME types.
+    """
+    video_mime_to_ext = {
+        'video/mp4': '.mp4',
+        'video/quicktime': '.mov',
+        'video/x-matroska': '.mkv',
+        'video/x-msvideo': '.avi',
+        'video/webm': '.webm',
+    }
+
+    if message.video:
+        vid = message.video
+        mime = vid.mime_type or 'video/mp4'
+        return {
+            'file_id': vid.file_id,
+            'file_size': vid.file_size,
+            'duration': vid.duration,
+            'mime_type': mime,
+            'title': vid.file_name or 'Video',
+            'ext': video_mime_to_ext.get(mime, '.mp4'),
+        }
+
+    if message.document:
+        doc = message.document
+        mime = doc.mime_type or ''
+        if mime in video_mime_to_ext:
+            return {
+                'file_id': doc.file_id,
+                'file_size': doc.file_size,
+                'duration': None,
+                'mime_type': mime,
+                'title': doc.file_name or 'Video',
+                'ext': video_mime_to_ext[mime],
+            }
+
+    return None
+
+
+async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handles video file uploads — extracts audio and offers transcription."""
+    user_id = update.effective_user.id
+    message = update.message
+
+    video_info = _extract_video_info(message)
+    if not video_info:
+        return
+
+    # PIN authentication — same pattern as handle_audio_upload
+    pin_handled = await handle_pin(update, context)
+    if pin_handled:
+        return
+
+    if user_id not in authorized_users:
+        context.user_data["pending_video"] = video_info
+        await message.reply_text(
+            "Wymagane uwierzytelnienie!\n\n"
+            "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
+        )
+        context.user_data["awaiting_pin"] = True
+        return
+
+    # Rate limiting
+    if not check_rate_limit(user_id):
+        await message.reply_text(
+            "Przekroczono limit requestów!\n\n"
+            f"Możesz wysłać maksymalnie {RATE_LIMIT_REQUESTS} requestów "
+            f"w ciągu {RATE_LIMIT_WINDOW} sekund.\n"
+            "Spróbuj ponownie za chwilę."
+        )
+        return
+
+    await process_video_file(update, context, video_info)
+
+
+async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE, video_info: dict | None = None):
+    """
+    Downloads a video file from Telegram, extracts audio via ffmpeg,
+    and shows transcription options.
+    """
+    chat_id = update.effective_chat.id
+    message = update.message
+
+    if not video_info:
+        video_info = _extract_video_info(message)
+    if not video_info:
+        await message.reply_text("Nie rozpoznano pliku video.")
+        return
+
+    file_size = video_info.get('file_size') or 0
+    file_size_mb = file_size / (1024 * 1024) if file_size else 0
+
+    if file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB:
+        await message.reply_text(
+            f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
+            f"Rozmiar: {file_size_mb:.1f} MB\n"
+            f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB"
+        )
+        return
+
+    progress_msg = await message.reply_text("Pobieranie pliku video...")
+
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    try:
+        tg_file = await context.bot.get_file(video_info['file_id'])
+
+        title = video_info['title']
+        ext = video_info['ext']
+
+        # Sanitize title for filename
+        safe_title = "".join(c if c.isalnum() or c in ' -_' else '_' for c in title)[:80]
+        timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
+        video_path = os.path.join(chat_download_path, f"{timestamp}_{safe_title}{ext}")
+
+        await tg_file.download_to_drive(video_path)
+
+        # Extract audio from video
+        await progress_msg.edit_text("Ekstrakcja audio z video...")
+        mp3_path = os.path.splitext(video_path)[0] + '.mp3'
+        result = subprocess.run(
+            ['ffmpeg', '-i', video_path, '-vn', '-acodec', 'libmp3lame', '-q:a', '2', mp3_path],
+            capture_output=True, timeout=180
+        )
+        if result.returncode != 0:
+            logging.error(f"ffmpeg video audio extraction failed: {result.stderr.decode()}")
+            await progress_msg.edit_text("Błąd ekstrakcji audio z pliku video.")
+            return
+
+        # Remove original video after successful extraction
+        os.remove(video_path)
+
+        mp3_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
+
+        # Store info for callback handlers
+        context.user_data['audio_file_path'] = mp3_path
+        context.user_data['audio_file_title'] = title
+
+        duration_info = ""
+        if video_info.get('duration'):
+            mins = video_info['duration'] // 60
+            secs = video_info['duration'] % 60
+            duration_info = f"\nCzas trwania: {mins}:{secs:02d}"
+
+        keyboard = [
+            [InlineKeyboardButton("Transkrypcja", callback_data="audio_transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="audio_transcribe_summary")],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await progress_msg.edit_text(
+            f"*{escape_md(title)}*{duration_info}\n"
+            f"Rozmiar audio: {mp3_size_mb:.1f} MB\n\n"
+            f"Wybierz opcję:",
+            reply_markup=reply_markup,
+            parse_mode='Markdown'
+        )
+
+    except Exception as e:
+        logging.error(f"Error processing video upload: {e}")
+        await progress_msg.edit_text("Błąd przetwarzania pliku video. Spróbuj ponownie.")

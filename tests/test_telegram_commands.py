@@ -64,7 +64,8 @@ class TestStart:
         assert "awaiting_pin" not in context.user_data
         update.message.reply_text.assert_awaited_once_with(
             "Witaj, User!\n\n"
-            "Jesteś już zalogowany. Możesz wysłać link do YouTube, aby pobrać film lub audio."
+            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+            "aby pobrać film lub audio."
         )
 
     def test_start_blocked_until_expiration(self, monkeypatch):
@@ -106,7 +107,8 @@ class TestHandlePin:
         assert called["url"] == "https://youtube.com/watch?v=abc"
         update.message.reply_text.assert_awaited_once_with(
             "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-            "Wyślij link do YouTube, aby pobrać film lub audio."
+            "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+            "aby pobrać film lub audio."
         )
 
     def test_handle_pin_rejects_wrong_pin_and_increments_attempts(self, monkeypatch):
@@ -813,3 +815,197 @@ class TestHistoryWithNewFields:
         assert "✅" in text
         assert "❌" in text
         assert "✂️0:30-5:00" in text
+
+
+class TestVideoUpload:
+    def test_handle_video_upload_requires_pin_when_unauthorized(self, monkeypatch):
+        update = _make_update(user_id=888, chat_id=888)
+        message = update.message
+        message.video = Mock(
+            file_id="vid1",
+            file_size=5000,
+            duration=30,
+            mime_type="video/mp4",
+            file_name="test.mp4",
+        )
+        message.document = None
+        context = _make_context()
+
+        monkeypatch.setattr(tc, "authorized_users", set())
+        monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
+
+        _async(tc.handle_video_upload(update, context))
+
+        assert "pending_video" in context.user_data
+        assert context.user_data["awaiting_pin"] is True
+
+    def test_handle_video_upload_checks_rate_limit(self, monkeypatch):
+        update = _make_update(user_id=888, chat_id=888)
+        message = update.message
+        message.video = Mock(
+            file_id="vid1",
+            file_size=5000,
+            duration=30,
+            mime_type="video/mp4",
+            file_name="test.mp4",
+        )
+        message.document = None
+        context = _make_context()
+
+        monkeypatch.setattr(tc, "authorized_users", {888})
+        monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
+        monkeypatch.setattr(tc, "check_rate_limit", lambda *_: False)
+
+        _async(tc.handle_video_upload(update, context))
+
+        assert "Przekroczono limit requestów" in update.message.reply_text.await_args.args[0]
+
+    def test_handle_video_upload_triggers_processing(self, monkeypatch):
+        update = _make_update(user_id=888, chat_id=888)
+        message = update.message
+        message.video = Mock(
+            file_id="vid1",
+            file_size=5000,
+            duration=30,
+            mime_type="video/mp4",
+            file_name="test.mp4",
+        )
+        message.document = None
+        context = _make_context()
+
+        monkeypatch.setattr(tc, "authorized_users", {888})
+        monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
+        monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
+
+        called = {}
+
+        async def fake_process(update_arg, context_arg, video_info):
+            called["called"] = True
+
+        monkeypatch.setattr(tc, "process_video_file", fake_process)
+
+        _async(tc.handle_video_upload(update, context))
+
+        assert called["called"] is True
+
+    def test_process_video_file_rejects_large_files(self):
+        update = _make_update(user_id=888, chat_id=888)
+        context = _make_context()
+
+        _async(tc.process_video_file(update, context, {
+            "file_id": "big_vid",
+            "file_size": 50 * 1024 * 1024,
+            "duration": 60,
+            "mime_type": "video/mp4",
+            "title": "bigvideo",
+            "ext": ".mp4",
+        }))
+
+        assert "Plik jest za duży" in update.message.reply_text.await_args.args[0]
+
+    def test_extract_video_info_from_video_message(self):
+        message = Mock()
+        message.video = Mock(
+            file_id="v1",
+            file_size=2048,
+            duration=15,
+            mime_type="video/mp4",
+            file_name="clip.mp4",
+        )
+        message.document = None
+
+        info = tc._extract_video_info(message)
+
+        assert info == {
+            'file_id': 'v1',
+            'file_size': 2048,
+            'duration': 15,
+            'mime_type': 'video/mp4',
+            'title': 'clip.mp4',
+            'ext': '.mp4',
+        }
+
+    def test_extract_video_info_from_document(self):
+        message = Mock()
+        message.video = None
+        message.document = Mock(
+            file_id="d1",
+            file_size=4096,
+            mime_type="video/x-matroska",
+            file_name="movie.mkv",
+        )
+
+        info = tc._extract_video_info(message)
+
+        assert info == {
+            'file_id': 'd1',
+            'file_size': 4096,
+            'duration': None,
+            'mime_type': 'video/x-matroska',
+            'title': 'movie.mkv',
+            'ext': '.mkv',
+        }
+
+    def test_extract_video_info_ignores_non_video_document(self):
+        message = Mock()
+        message.video = None
+        message.document = Mock(
+            file_id="d1",
+            file_size=500,
+            mime_type="application/pdf",
+            file_name="doc.pdf",
+        )
+
+        assert tc._extract_video_info(message) is None
+
+
+class TestMultiPlatformUI:
+    def test_process_youtube_link_hides_flac_and_time_range_for_tiktok(self, monkeypatch):
+        update = _make_update(user_id=444, chat_id=444)
+        context = _make_context()
+        progress_message = Mock()
+        progress_message.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=progress_message)
+
+        monkeypatch.setattr(tc, "get_video_info", lambda *_: {
+            "title": "TikTok Video",
+            "duration": 30,
+        })
+        monkeypatch.setattr(tc, "estimate_file_size", lambda *_: 10)
+        monkeypatch.setattr(tc, "detect_platform", lambda *_: "tiktok")
+
+        _async(tc.process_youtube_link(update, context, "https://www.tiktok.com/@user/video/1"))
+
+        assert context.user_data['platform'] == 'tiktok'
+        buttons = [
+            button.text
+            for row in progress_message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        assert "Audio (FLAC)" not in buttons
+        assert "✂️ Zakres czasowy" not in buttons
+        assert "Audio (MP3)" in buttons
+
+    def test_process_youtube_link_shows_all_buttons_for_youtube(self, monkeypatch):
+        update = _make_update(user_id=444, chat_id=444)
+        context = _make_context()
+        progress_message = Mock()
+        progress_message.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=progress_message)
+
+        monkeypatch.setattr(tc, "get_video_info", lambda *_: {
+            "title": "YouTube Video",
+            "duration": 600,
+        })
+        monkeypatch.setattr(tc, "estimate_file_size", lambda *_: 10)
+        monkeypatch.setattr(tc, "detect_platform", lambda *_: "youtube")
+
+        _async(tc.process_youtube_link(update, context, "https://www.youtube.com/watch?v=abc"))
+
+        buttons = [
+            button.text
+            for row in progress_message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        assert "Audio (FLAC)" in buttons
+        assert "✂️ Zakres czasowy" in buttons

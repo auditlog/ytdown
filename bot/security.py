@@ -31,14 +31,44 @@ MAX_FILE_SIZE_MB = 1000  # 1GB limit
 # Groq API has 25MB limit, use 20MB for safety margin
 MAX_MP3_PART_SIZE_MB = 20
 
-# Allowed domains
+# Allowed domains grouped by platform
 ALLOWED_DOMAINS = [
+    # YouTube
     'youtube.com',
     'www.youtube.com',
     'youtu.be',
     'm.youtube.com',
-    'music.youtube.com'
+    'music.youtube.com',
+    # Vimeo
+    'vimeo.com',
+    'player.vimeo.com',
+    # TikTok
+    'tiktok.com',
+    'www.tiktok.com',
+    'vm.tiktok.com',
+    'm.tiktok.com',
+    # Instagram
+    'instagram.com',
+    'www.instagram.com',
+    # LinkedIn
+    'linkedin.com',
+    'www.linkedin.com',
 ]
+
+# Domain -> platform mapping for detect_platform()
+_DOMAIN_TO_PLATFORM = {
+    'youtube.com': 'youtube',
+    'youtu.be': 'youtube',
+    'm.youtube.com': 'youtube',
+    'music.youtube.com': 'youtube',
+    'vimeo.com': 'vimeo',
+    'player.vimeo.com': 'vimeo',
+    'tiktok.com': 'tiktok',
+    'm.tiktok.com': 'tiktok',
+    'vm.tiktok.com': 'tiktok',
+    'instagram.com': 'instagram',
+    'linkedin.com': 'linkedin',
+}
 
 
 @dataclass
@@ -237,32 +267,68 @@ def register_pin_failure(
     return (max_attempts - current_attempt, current_attempt)
 
 
-def validate_youtube_url(url):
+def _normalize_domain(url: str) -> str | None:
+    """Extracts and normalizes domain from URL. Returns None on error."""
+    try:
+        if not url or not url.startswith('https://'):
+            return None
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        # Strip www. prefix for matching (but keep platform-specific prefixes
+        # like m., vm., player., music. which are in ALLOWED_DOMAINS directly)
+        return domain
+    except Exception:
+        return None
+
+
+def validate_url(url) -> bool:
     """
-    Validates YouTube URL.
+    Validates URL against all supported platforms.
 
     Args:
         url: URL to validate
 
     Returns:
-        bool: True if URL is valid, False otherwise
+        bool: True if URL is from a supported platform, False otherwise
     """
-    try:
-        # Only HTTPS is allowed (secure connection)
-        if not url.startswith('https://'):
-            return False
-
-        parsed = urlparse(url)
-        domain = parsed.netloc.lower()
-
-        # Remove 'www.' if exists
-        if domain.startswith('www.'):
-            domain = domain[4:]
-
-        # Check if domain is in allowed list
-        return domain in ALLOWED_DOMAINS
-    except Exception:
+    domain = _normalize_domain(url)
+    if domain is None:
         return False
+
+    # Check direct match first
+    if domain in ALLOWED_DOMAINS:
+        return True
+
+    # Strip www. and check again (handles www.youtube.com etc.)
+    if domain.startswith('www.'):
+        return domain[4:] in ALLOWED_DOMAINS
+
+    return False
+
+
+# Backward-compatible alias
+validate_youtube_url = validate_url
+
+
+def detect_platform(url) -> str | None:
+    """
+    Detects platform from URL.
+
+    Args:
+        url: URL to detect platform for
+
+    Returns:
+        Platform name ('youtube', 'vimeo', 'tiktok', 'instagram', 'linkedin')
+        or None if not recognized.
+    """
+    domain = _normalize_domain(url)
+    if domain is None:
+        return None
+
+    # Strip www. for lookup
+    bare = domain[4:] if domain.startswith('www.') else domain
+
+    return _DOMAIN_TO_PLATFORM.get(bare) or _DOMAIN_TO_PLATFORM.get(domain)
 
 
 def manage_authorized_user(user_id, action='add'):

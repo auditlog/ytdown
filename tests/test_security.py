@@ -62,7 +62,6 @@ def test_url_validation():
     # Nieprawidłowe URL-e
     invalid_urls = [
         "https://www.google.com",
-        "https://vimeo.com/123456",
         "http://youtube.com/watch?v=test",  # http zamiast https
         "youtube.com/watch?v=test",  # brak protokołu
         "https://fake-youtube.com/watch?v=test",

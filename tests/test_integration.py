@@ -182,7 +182,6 @@ class TestSecurityIntegration:
 
         invalid_urls = [
             "http://youtube.com/watch?v=test",  # Not HTTPS
-            "https://vimeo.com/test",  # Wrong domain
             "https://malicious.com/youtube.com",  # Subdomain trick
             "not_a_url",
             "",

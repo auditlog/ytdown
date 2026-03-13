@@ -68,6 +68,73 @@ def test_validate_youtube_url_edge_cases():
     assert security.validate_youtube_url(None) is False
 
 
+def test_validate_url_vimeo():
+    assert security.validate_url("https://vimeo.com/123456") is True
+    assert security.validate_url("https://player.vimeo.com/video/123") is True
+    assert security.validate_url("http://vimeo.com/123") is False  # HTTP not allowed
+
+
+def test_validate_url_tiktok():
+    assert security.validate_url("https://www.tiktok.com/@user/video/123") is True
+    assert security.validate_url("https://tiktok.com/@user/video/123") is True
+    assert security.validate_url("https://vm.tiktok.com/abc123") is True
+    assert security.validate_url("https://m.tiktok.com/@user/video/123") is True
+
+
+def test_validate_url_instagram():
+    assert security.validate_url("https://www.instagram.com/reel/abc123") is True
+    assert security.validate_url("https://instagram.com/p/abc123") is True
+    assert security.validate_url("http://instagram.com/p/abc") is False
+
+
+def test_validate_url_linkedin():
+    assert security.validate_url("https://www.linkedin.com/posts/user-123") is True
+    assert security.validate_url("https://linkedin.com/posts/user-123") is True
+
+
+def test_validate_url_rejects_unsupported():
+    assert security.validate_url("https://example.com/video") is False
+    assert security.validate_url("https://dailymotion.com/video/abc") is False
+
+
+def test_detect_platform_youtube():
+    assert security.detect_platform("https://www.youtube.com/watch?v=abc") == "youtube"
+    assert security.detect_platform("https://youtu.be/abc") == "youtube"
+    assert security.detect_platform("https://music.youtube.com/watch?v=abc") == "youtube"
+    assert security.detect_platform("https://m.youtube.com/watch?v=abc") == "youtube"
+
+
+def test_detect_platform_vimeo():
+    assert security.detect_platform("https://vimeo.com/123") == "vimeo"
+    assert security.detect_platform("https://player.vimeo.com/video/123") == "vimeo"
+
+
+def test_detect_platform_tiktok():
+    assert security.detect_platform("https://www.tiktok.com/@user/video/1") == "tiktok"
+    assert security.detect_platform("https://vm.tiktok.com/abc") == "tiktok"
+
+
+def test_detect_platform_instagram():
+    assert security.detect_platform("https://www.instagram.com/reel/abc") == "instagram"
+    assert security.detect_platform("https://instagram.com/p/abc") == "instagram"
+
+
+def test_detect_platform_linkedin():
+    assert security.detect_platform("https://www.linkedin.com/posts/user") == "linkedin"
+    assert security.detect_platform("https://linkedin.com/posts/user") == "linkedin"
+
+
+def test_detect_platform_unknown():
+    assert security.detect_platform("https://example.com/video") is None
+    assert security.detect_platform("") is None
+    assert security.detect_platform(None) is None
+
+
+def test_validate_url_is_backward_compatible_alias():
+    """validate_youtube_url and validate_url are the same function."""
+    assert security.validate_youtube_url is security.validate_url
+
+
 def test_estimate_file_size_various_inputs():
     info_with_size = {"formats": [{"filesize": 50 * 1024 * 1024}]}
     assert security.estimate_file_size(info_with_size) == 50.0

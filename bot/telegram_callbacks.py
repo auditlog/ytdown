@@ -766,7 +766,16 @@ async def download_file(
                 error_message=str(e),
             )
         logging.error(f"Error in download_file: {e}")
-        await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
+
+        # Detect login/cookie errors for platforms requiring authentication
+        error_str = str(e).lower()
+        if any(kw in error_str for kw in ('login', 'sign in', 'cookie', 'authentication')):
+            await update_status(
+                "Ta platforma wymaga zalogowania.\n\n"
+                "Umieść plik cookies.txt w katalogu bota i spróbuj ponownie."
+            )
+        else:
+            await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
 
 
 async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
@@ -863,16 +872,25 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     duration = info.get('duration', 0)
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
+    # Respect platform for conditional buttons
+    platform = context.user_data.get('platform', 'youtube')
+    hide_time_range = platform == 'tiktok'
+    hide_flac = platform == 'tiktok'
+
     keyboard = [
         [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
         [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
         [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-        [InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")],
+    ]
+    if not hide_flac:
+        keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
+    keyboard.extend([
         [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
         [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-        [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
-        [InlineKeyboardButton("Lista formatów", callback_data="formats")]
-    ]
+    ])
+    if not hide_time_range:
+        keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
+    keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -1237,7 +1255,17 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
 
     # Build subtitle source selection menu
     summary_suffix = "_sum" if with_summary else ""
+    original_lang = subs.get('original_lang')
     keyboard = []
+
+    def _lang_label(lang_code, suffix=""):
+        """Build button label with original language marker."""
+        label = f"  {lang_code.upper()}"
+        if original_lang and lang_code == original_lang:
+            label += " (oryginal)"
+        if suffix:
+            label += f" {suffix}"
+        return label
 
     # Manual subtitles section
     if subs['manual']:
@@ -1246,7 +1274,7 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
         )])
         for lang in subs['manual']:
             keyboard.append([InlineKeyboardButton(
-                f"  {lang.upper()}", callback_data=f"sub_lang_{lang}{summary_suffix}"
+                _lang_label(lang), callback_data=f"sub_lang_{lang}{summary_suffix}"
             )])
 
     # Auto-generated subtitles section
@@ -1256,7 +1284,7 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
         )])
         for lang in subs['auto']:
             keyboard.append([InlineKeyboardButton(
-                f"  {lang.upper()} (auto)", callback_data=f"sub_auto_{lang}{summary_suffix}"
+                _lang_label(lang, "(auto)"), callback_data=f"sub_auto_{lang}{summary_suffix}"
             )])
 
     # AI transcription option

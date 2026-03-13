@@ -1,24 +1,36 @@
-# YouTube Downloader Telegram Bot
+# Media Downloader Telegram Bot
 
-Bot Telegram do pobierania filmów z YouTube z funkcjami transkrypcji i podsumowań przy użyciu AI.
+Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i LinkedIn z funkcjami transkrypcji i podsumowań AI.
 
 ## Funkcje
 
 ### Podstawowe
-- Pobieranie filmów YouTube w różnych formatach wideo (1080p, 720p, 480p, 360p)
+- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp)
+- Pobieranie video w różnych formatach (1080p, 720p, 480p, 360p)
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
 - **Napisy YouTube jako źródło transkrypcji** — natychmiastowe pobieranie napisów (manualnych lub automatycznych) bez zużycia tokenów AI
 - Generowanie podsumowań transkrypcji (Claude API - Haiku 4.5)
 - **Transkrypcja przesłanych plików audio** — wiadomości głosowe, pliki audio i dokumenty audio (np. notatki głosowe z WhatsApp)
+- **Transkrypcja przesłanych plików video** — ekstrakcja audio z MP4, MKV, AVI, MOV, WebM
 - Ochrona dostępu kodem PIN
 - Interfejs wiersza poleceń (CLI) z pełnym wsparciem dla wyboru formatu, jakości i audio
 - Bot Telegram z interaktywnym menu
+- Warunkowe menu per platforma (np. TikTok: ukryty FLAC i zakres czasowy)
+
+### Obsługiwane platformy
+| Platforma | Domeny | Uwagi |
+|-----------|--------|-------|
+| YouTube | youtube.com, youtu.be, music.youtube.com | Pełne wsparcie (video, audio, napisy, zakres czasowy) |
+| Vimeo | vimeo.com, player.vimeo.com | Video, audio, transkrypcja |
+| TikTok | tiktok.com, vm.tiktok.com, m.tiktok.com | Uproszczone menu (krótkie video) |
+| Instagram | instagram.com | Reels, Stories, posty video. Wymaga cookies.txt |
+| LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik
 - Limit rozmiaru plików - max 1GB
-- Walidacja URL - tylko HTTPS YouTube (youtube.com, youtu.be, music.youtube.com)
+- Walidacja URL - whitelist domen (YouTube, Vimeo, TikTok, Instagram, LinkedIn), wymagany HTTPS
 - Blokada po 3 nieudanych próbach PIN (15 minut)
 - Logowanie nieudanych prób PIN + powiadomienia Telegram do admina
 - Walidacja format_id przed przekazaniem do yt-dlp
@@ -148,16 +160,23 @@ $env:ADMIN_CHAT_ID="twój_telegram_user_id"
 
 Parametr jest opcjonalny — bez niego bot działa normalnie, ale nie wysyła powiadomień bezpieczeństwa.
 
-### Cookies YouTube (opcjonalne, przy blokadzie anty-botowej)
+### Cookies (opcjonalne, dla platform wymagających logowania)
 
-Jeśli YouTube blokuje pobieranie komunikatem "Sign in to confirm you're not a bot", potrzebny jest plik `cookies.txt`:
+Plik `cookies.txt` jest potrzebny gdy:
+- YouTube blokuje pobieranie komunikatem "Sign in to confirm you're not a bot"
+- Instagram wymaga logowania do treści
+- LinkedIn wymaga logowania do postów video
+- TikTok blokuje pobieranie bez sesji
 
+Jak uzyskać cookies:
 1. Zainstaluj rozszerzenie **"Get cookies.txt LOCALLY"** w przeglądarce (Chrome/Firefox)
-2. Wejdź na youtube.com (zalogowany na konto Google)
+2. Zaloguj się na daną platformę (YouTube, Instagram, LinkedIn, TikTok)
 3. Wyeksportuj cookies do pliku `cookies.txt`
 4. Umieść plik w głównym katalogu projektu (`ytdown/cookies.txt`)
 
-**UWAGA**: Plik `cookies.txt` zawiera dane sesji YouTube — nie udostępniaj go i nie commituj do repozytorium! Jest ignorowany przez git.
+Bot automatycznie wykrywa brak cookies i wyświetla odpowiedni komunikat.
+
+**UWAGA**: Plik `cookies.txt` zawiera dane sesji — nie udostępniaj go i nie commituj do repozytorium! Jest ignorowany przez git.
 
 ## Uruchomienie
 
@@ -233,11 +252,11 @@ python -m pytest tests/test_subtitles.py -v
 
 ## Używanie bota
 
-### Pobieranie z YouTube
+### Pobieranie video/audio z platform
 1. Znajdź swojego bota na Telegramie
 2. Wyślij `/start`
 3. Wprowadź kod PIN
-4. Wyślij link do filmu YouTube
+4. Wyślij link z obsługiwanej platformy (YouTube, Vimeo, TikTok, Instagram, LinkedIn)
 5. Wybierz format i jakość
 6. Opcjonalnie: wybierz transkrypcję lub streszczenie
    - Jeśli film ma napisy YouTube — możesz wybrać gotowe napisy (natychmiastowo, 0 tokenów) lub transkrypcję AI (minuty, tokeny Groq/Claude)
@@ -245,8 +264,15 @@ python -m pytest tests/test_subtitles.py -v
 ### Transkrypcja plików audio
 1. Wyślij wiadomość głosową, plik audio lub dokument audio (np. notatkę głosową z WhatsApp)
 2. Wybierz opcję: "Transkrypcja" lub "Transkrypcja + Podsumowanie"
-3. Obsługiwane formaty: OGG, OPUS, MP3, M4A, WAV, FLAC, WebM
+3. Obsługiwane formaty: OGG, OPUS, MP3, M4A, WAV, FLAC, WebM, AAC, AMR, CAF
 4. Limit rozmiaru: 20 MB (ograniczenie Telegram Bot API)
+
+### Transkrypcja plików video
+1. Wyślij plik video (jako natywne video lub dokument)
+2. Bot automatycznie wyekstrahuje audio (ffmpeg)
+3. Wybierz opcję: "Transkrypcja" lub "Transkrypcja + Podsumowanie"
+4. Obsługiwane formaty: MP4, MOV, MKV, AVI, WebM
+5. Limit rozmiaru: 20 MB (ograniczenie Telegram Bot API)
 
 ## Typy streszczeń
 
@@ -267,12 +293,12 @@ ytdown/
 │   ├── security.py                 # Rate limiting, walidacja URL, bezpieczeństwo
 │   ├── cleanup.py                  # Czyszczenie plików i monitoring dysku
 │   ├── transcription.py            # Transkrypcja (Groq) i podsumowania (Claude)
-│   ├── downloader.py               # Pobieranie z YouTube (yt-dlp)
+│   ├── downloader.py               # Pobieranie mediów z platform (yt-dlp)
 │   ├── cli.py                      # Interfejs wiersza poleceń
 │   ├── telegram_commands.py        # Handlery komend Telegram (/start, /help, etc.)
 │   └── telegram_callbacks.py       # Handlery callbacków (przyciski, pobieranie)
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~274 testów)
+├── tests/                          # Testy (~320 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, logowania
@@ -297,18 +323,19 @@ ytdown/
 - Cookies YouTube w gitignore (`cookies.txt`)
 - Rate limiting (10 req/min)
 - Limit plików (1GB)
-- Tylko HTTPS YouTube
+- Tylko HTTPS (whitelist domen)
 - Blokada po złym PIN
 - Autoryzacja zapisywana w JSON
 
 ## Ograniczenia
 
 - Max 20MB dla pojedynczej części transkrypcji (większe pliki są dzielone automatycznie)
-- Max 20MB dla przesyłanych plików audio (limit Telegram Bot API dla pobierania plików przez bota)
+- Max 20MB dla przesyłanych plików audio/video (limit Telegram Bot API dla pobierania plików przez bota)
 - Telegram limit: 50MB dla plików, 4096 znaków dla wiadomości
 - Korekta AI transkrypcji: do ~4.5h materiału audio (powyżej automatycznie pomijana)
 - Podsumowanie AI: do ~14h materiału audio (powyżej automatycznie pomijane)
 - Sama transkrypcja (Whisper) i napisy YouTube działają bez limitu długości
+- Instagram, LinkedIn, TikTok mogą wymagać cookies.txt do pobierania
 
 ## Rozwiązywanie problemów
 
@@ -343,7 +370,7 @@ Ten projekt jest dostępny na licencji MIT.
 
 ## Podziękowania
 
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - pobieranie z YouTube
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - pobieranie mediów z platform (YouTube, Vimeo, TikTok, Instagram, LinkedIn)
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - API Telegram
 - [Groq](https://groq.com/) - transkrypcja audio (Whisper)
 - [Anthropic Claude](https://www.anthropic.com/) - generowanie podsumowań (Haiku 4.5)

@@ -43,7 +43,7 @@ class TestGetAvailableSubtitles:
         assert result['auto'] == {}
 
     def test_auto_subtitles_only(self, sample_video_info):
-        """Returns auto captions when no manual subtitles."""
+        """Returns auto captions filtered to pl/en/original lang only."""
         sample_video_info['automatic_captions'] = {
             'en': [{'ext': 'vtt', 'url': 'http://example.com/en.vtt'}],
             'de': [{'ext': 'vtt', 'url': 'http://example.com/de.vtt'}],
@@ -52,7 +52,22 @@ class TestGetAvailableSubtitles:
         assert result['has_any'] is True
         assert result['manual'] == {}
         assert 'en' in result['auto']
+        # 'de' excluded — not in pl/en/original lang set
+        assert 'de' not in result['auto']
+
+    def test_auto_subtitles_with_original_lang(self, sample_video_info):
+        """Returns original language in auto captions even if not pl/en."""
+        sample_video_info['language'] = 'de'
+        sample_video_info['automatic_captions'] = {
+            'en': [{'ext': 'vtt'}],
+            'de': [{'ext': 'vtt'}],
+            'fr': [{'ext': 'vtt'}],
+        }
+        result = get_available_subtitles(sample_video_info)
+        assert 'en' in result['auto']
         assert 'de' in result['auto']
+        assert 'fr' not in result['auto']
+        assert result['original_lang'] == 'de'
 
     def test_both_manual_and_auto(self, sample_video_info):
         """Returns both manual and auto subtitles."""
@@ -90,14 +105,15 @@ class TestGetAvailableSubtitles:
         result = get_available_subtitles(sample_video_info)
         assert len(result['manual']) == 6
 
-    def test_auto_limit_4(self, sample_video_info):
-        """Auto captions limited to 4 languages."""
+    def test_auto_only_priority_and_original(self, sample_video_info):
+        """Auto captions show only pl, en, and original language."""
+        sample_video_info['language'] = 'ja'
         sample_video_info['automatic_captions'] = {
             lang: [{'ext': 'vtt'}]
-            for lang in ['pl', 'en', 'de', 'fr', 'es', 'it']
+            for lang in ['pl', 'en', 'de', 'fr', 'es', 'it', 'ja']
         }
         result = get_available_subtitles(sample_video_info)
-        assert len(result['auto']) == 4
+        assert set(result['auto'].keys()) == {'pl', 'en', 'ja'}
 
     def test_none_info(self):
         """Handles None info gracefully."""
