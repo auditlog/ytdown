@@ -69,8 +69,19 @@ def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
     Returns:
         List of InlineKeyboardButton rows for InlineKeyboardMarkup.
     """
-    hide_flac = platform == 'tiktok'
-    hide_time_range = platform == 'tiktok'
+    is_podcast = platform == 'castbox'
+    hide_flac = platform in ('tiktok', 'castbox')
+    hide_time_range = platform in ('tiktok', 'castbox')
+
+    if is_podcast:
+        # Audio-only platform — no video options, no format list
+        keyboard = [
+            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        ]
+        return keyboard
 
     if large_file:
         keyboard = [
@@ -188,7 +199,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in authorized_users:
         await update.message.reply_text(
             f"Witaj, {user_name}!\n\n"
-            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox) "
             "aby pobrać film lub audio."
         )
         return
@@ -278,7 +289,7 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await update.message.reply_text(
                     "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-                    "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+                    "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox) "
                     "aby pobrać film lub audio."
                 )
 
@@ -380,7 +391,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- Vimeo (vimeo.com)\n"
         "- TikTok (tiktok.com)\n"
         "- Instagram (instagram.com)\n"
-        "- LinkedIn (linkedin.com)\n\n"
+        "- LinkedIn (linkedin.com)\n"
+        "- Castbox (castbox.fm)\n\n"
         "Komendy administracyjne:\n"
         "- /status - sprawdź przestrzeń dyskową\n"
         "- /cleanup - usuń stare pliki (>24h)",
@@ -619,7 +631,8 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             "- Vimeo (vimeo.com)\n"
             "- TikTok (tiktok.com)\n"
             "- Instagram (instagram.com)\n"
-            "- LinkedIn (linkedin.com)"
+            "- LinkedIn (linkedin.com)\n"
+            "- Castbox (castbox.fm)"
         )
         return
 
@@ -707,6 +720,15 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     # Detect and store platform for conditional UI
     platform = detect_platform(url) or 'youtube'
     context.user_data['platform'] = platform
+
+    # Castbox: channel URLs are not supported, only episode URLs
+    if platform == 'castbox' and '/channel/' in url:
+        await update.message.reply_text(
+            "Castbox: link do kanału nie jest obsługiwany.\n\n"
+            "Wyślij link do konkretnego odcinka podcastu\n"
+            "(np. castbox.fm/episode/...)."
+        )
+        return
 
     # Playlist detection — offer choice or go straight to playlist view
     if is_playlist_url(url):

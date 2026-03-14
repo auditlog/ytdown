@@ -65,7 +65,7 @@ class TestStart:
         assert "awaiting_pin" not in context.user_data
         update.message.reply_text.assert_awaited_once_with(
             "Witaj, User!\n\n"
-            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox) "
             "aby pobrać film lub audio."
         )
 
@@ -108,7 +108,7 @@ class TestHandlePin:
         assert called["url"] == "https://youtube.com/watch?v=abc"
         update.message.reply_text.assert_awaited_once_with(
             "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-            "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+            "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox) "
             "aby pobrać film lub audio."
         )
 
@@ -1062,3 +1062,43 @@ class TestMultiPlatformUI:
         ]
         assert "Audio (FLAC)" in buttons
         assert "✂️ Zakres czasowy" in buttons
+
+    def test_process_youtube_link_shows_audio_only_for_castbox(self, monkeypatch):
+        update = _make_update(user_id=444, chat_id=444)
+        context = _make_context()
+        progress_message = Mock()
+        progress_message.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=progress_message)
+
+        monkeypatch.setattr(tc, "get_video_info", lambda *_: {
+            "title": "Podcast Episode",
+            "duration": 0,
+        })
+        monkeypatch.setattr(tc, "estimate_file_size", lambda *_: 10)
+        monkeypatch.setattr(tc, "detect_platform", lambda *_: "castbox")
+
+        _async(tc.process_youtube_link(update, context, "https://castbox.fm/episode/Test-id123"))
+
+        buttons = [
+            button.text
+            for row in progress_message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        assert "Audio (MP3)" in buttons
+        assert "Transkrypcja audio" in buttons
+        # Podcast: no video, no FLAC, no time range, no formats list
+        assert "Najlepsza jakość video" not in buttons
+        assert "Audio (FLAC)" not in buttons
+        assert "✂️ Zakres czasowy" not in buttons
+        assert "Lista formatów" not in buttons
+
+    def test_castbox_channel_url_rejected(self, monkeypatch):
+        update = _make_update(user_id=444, chat_id=444)
+        context = _make_context()
+
+        monkeypatch.setattr(tc, "detect_platform", lambda *_: "castbox")
+
+        _async(tc.process_youtube_link(update, context, "https://castbox.fm/channel/Podcast-id123"))
+
+        call_text = update.message.reply_text.await_args.args[0]
+        assert "kanału nie jest obsługiwany" in call_text

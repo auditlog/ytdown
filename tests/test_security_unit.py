@@ -124,6 +124,16 @@ def test_detect_platform_linkedin():
     assert security.detect_platform("https://linkedin.com/posts/user") == "linkedin"
 
 
+def test_validate_url_castbox():
+    assert security.validate_url("https://castbox.fm/episode/Some-Episode-id123-id456") is True
+    assert security.validate_url("https://www.castbox.fm/episode/id123-id456") is True
+
+
+def test_detect_platform_castbox():
+    assert security.detect_platform("https://castbox.fm/episode/id123-id456") == "castbox"
+    assert security.detect_platform("https://www.castbox.fm/episode/id123") == "castbox"
+
+
 def test_detect_platform_unknown():
     assert security.detect_platform("https://example.com/video") is None
     assert security.detect_platform("") is None

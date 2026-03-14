@@ -51,6 +51,7 @@ _DOMAIN_TO_PLATFORM = {
     'vm.tiktok.com': 'tiktok',
     'instagram.com': 'instagram',
     'linkedin.com': 'linkedin',
+    'castbox.fm': 'castbox',
 }
 
 # Generated from _DOMAIN_TO_PLATFORM + www. variants for base domains (name.tld)
