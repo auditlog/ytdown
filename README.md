@@ -5,7 +5,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 ## Funkcje
 
 ### Podstawowe
-- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp)
+- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp), Spotify podcasty (via iTunes/YouTube)
 - Pobieranie video w różnych formatach (1080p, 720p, 480p, 360p)
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
@@ -26,11 +26,12 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 | TikTok | tiktok.com, vm.tiktok.com, m.tiktok.com | Uproszczone menu (krótkie video) |
 | Instagram | instagram.com | Reels, Stories, posty video. Wymaga cookies.txt |
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
+| Spotify | open.spotify.com | Odcinki podcastów. Wymaga SPOTIFY_CLIENT_ID/SECRET. Audio z iTunes lub YouTube |
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik
 - Limit rozmiaru plików - max 1GB
-- Walidacja URL - whitelist domen (YouTube, Vimeo, TikTok, Instagram, LinkedIn), wymagany HTTPS
+- Walidacja URL - whitelist domen (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Spotify), wymagany HTTPS
 - Blokada po 3 nieudanych próbach PIN (15 minut)
 - Logowanie nieudanych prób PIN + powiadomienia Telegram do admina
 - Walidacja format_id przed przekazaniem do yt-dlp
@@ -126,7 +127,11 @@ GROQ_API_KEY=twój_klucz_groq
 CLAUDE_API_KEY=twój_klucz_claude
 PIN_CODE=12345678
 ADMIN_CHAT_ID=twój_telegram_user_id
+SPOTIFY_CLIENT_ID=twój_spotify_client_id
+SPOTIFY_CLIENT_SECRET=twój_spotify_client_secret
 ```
+
+Klucze Spotify uzyskasz na [Spotify Developer Dashboard](https://developer.spotify.com/) — utwórz aplikację z Web API.
 
 **UWAGA**: Plik `api_key.md` jest ignorowany przez git - nie commituj go do repozytorium!
 
@@ -139,6 +144,8 @@ export GROQ_API_KEY="twój_klucz"
 export CLAUDE_API_KEY="twój_klucz"
 export PIN_CODE="12345678"
 export ADMIN_CHAT_ID="twój_telegram_user_id"
+export SPOTIFY_CLIENT_ID="twój_spotify_client_id"
+export SPOTIFY_CLIENT_SECRET="twój_spotify_client_secret"
 ```
 
 **Windows (PowerShell):**
@@ -148,6 +155,8 @@ $env:GROQ_API_KEY="twój_klucz"
 $env:CLAUDE_API_KEY="twój_klucz"
 $env:PIN_CODE="12345678"
 $env:ADMIN_CHAT_ID="twój_telegram_user_id"
+$env:SPOTIFY_CLIENT_ID="twój_spotify_client_id"
+$env:SPOTIFY_CLIENT_SECRET="twój_spotify_client_secret"
 ```
 
 ### Jak uzyskać ADMIN_CHAT_ID?
@@ -256,10 +265,16 @@ python -m pytest tests/test_subtitles.py -v
 1. Znajdź swojego bota na Telegramie
 2. Wyślij `/start`
 3. Wprowadź kod PIN
-4. Wyślij link z obsługiwanej platformy (YouTube, Vimeo, TikTok, Instagram, LinkedIn)
+4. Wyślij link z obsługiwanej platformy (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Spotify)
 5. Wybierz format i jakość
 6. Opcjonalnie: wybierz transkrypcję lub streszczenie
    - Jeśli film ma napisy YouTube — możesz wybrać gotowe napisy (natychmiastowo, 0 tokenów) lub transkrypcję AI (minuty, tokeny Groq/Claude)
+
+### Podcasty Spotify
+1. Wyślij link do odcinka podcastu ze Spotify (`open.spotify.com/episode/...`)
+2. Bot automatycznie wyszuka audio w iTunes (priorytet — bezpośredni MP3) lub na YouTube (fallback)
+3. Wybierz opcję: Audio (MP3), Transkrypcja lub Transkrypcja + Podsumowanie
+4. Wymaga skonfigurowania `SPOTIFY_CLIENT_ID` i `SPOTIFY_CLIENT_SECRET`
 
 ### Transkrypcja plików audio
 1. Wyślij wiadomość głosową, plik audio lub dokument audio (np. notatkę głosową z WhatsApp)
@@ -294,6 +309,7 @@ ytdown/
 │   ├── cleanup.py                  # Czyszczenie plików i monitoring dysku
 │   ├── transcription.py            # Transkrypcja (Groq) i podsumowania (Claude)
 │   ├── downloader.py               # Pobieranie mediów z platform (yt-dlp)
+│   ├── spotify.py                  # Rozwiązywanie Spotify podcastów (iTunes/YouTube)
 │   ├── cli.py                      # Interfejs wiersza poleceń
 │   ├── telegram_commands.py        # Handlery komend Telegram (/start, /help, etc.)
 │   └── telegram_callbacks.py       # Handlery callbacków (przyciski, pobieranie)
@@ -304,6 +320,7 @@ ytdown/
 │   ├── test_security_unit.py       # Testy PIN, blokowania, logowania
 │   ├── test_telegram_commands.py   # Testy komend, powiadomień admina
 │   ├── test_telegram_callbacks.py  # Testy callbacków, pobierania
+│   ├── test_spotify.py             # Testy Spotify podcastów
 │   ├── test_downloader.py          # Testy downloadera, walidacji czasu
 │   ├── test_download_history.py    # Testy historii pobrań
 │   ├── test_cli.py                 # Testy CLI

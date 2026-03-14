@@ -173,13 +173,21 @@ async def send_long_message(bot, chat_id, text, header="", parse_mode='Markdown'
         parts.append(current)
 
     for part in parts:
-        await bot.send_message(
-            chat_id=chat_id,
-            text=part,
-            parse_mode=parse_mode,
-            read_timeout=60,
-            write_timeout=60,
-        )
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=part,
+                parse_mode=parse_mode,
+                read_timeout=60,
+                write_timeout=60,
+            )
+        except BadRequest:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=part,
+                read_timeout=60,
+                write_timeout=60,
+            )
 
 
 def parse_download_callback(data):
@@ -1254,28 +1262,65 @@ async def download_spotify_resolved(
                 return
 
             loop = asyncio.get_event_loop()
-            transcript_text = await loop.run_in_executor(
-                _executor,
-                lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, language=None)
-            )
 
-            if not transcript_text or transcript_text.strip() == "":
-                await update_status("Transkrypcja nie zwróciła tekstu.")
+            current_status = {"text": ""}
+            def progress_callback(status_text):
+                current_status["text"] = status_text
+
+            async def run_transcription_with_progress():
+                future = loop.run_in_executor(
+                    _executor,
+                    lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, progress_callback, language=None)
+                )
+                while not future.done():
+                    await asyncio.sleep(3)
+                    if current_status["text"]:
+                        await update_status(current_status["text"])
+                return await future
+
+            transcript_path = await run_transcription_with_progress()
+
+            if not transcript_path or not os.path.exists(transcript_path):
+                await update_status("Wystąpił błąd podczas transkrypcji.")
                 return
 
-            # Send transcription
-            header = f"*Transkrypcja: {escape_md(title)}*\n\n"
-            await send_long_message(context.bot, chat_id, transcript_text, header=header)
+            with open(transcript_path, 'r', encoding='utf-8') as f:
+                transcript_text = f.read()
+
+            # Strip markdown header if present
+            if transcript_text.startswith('# '):
+                lines = transcript_text.split('\n')
+                for i in range(1, len(lines)):
+                    if lines[i].strip():
+                        transcript_text = '\n'.join(lines[i:])
+                        break
 
             if summary and summary_type:
-                await update_status("Generowanie podsumowania...")
-                summary_text = await loop.run_in_executor(
-                    _executor,
-                    lambda: generate_summary(transcript_text, summary_type)
+                if is_text_too_long_for_summary(transcript_text):
+                    await update_status(
+                        "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
+                        "Wysyłam samą transkrypcję."
+                    )
+                else:
+                    await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
+                    summary_text = await loop.run_in_executor(
+                        _executor,
+                        lambda: generate_summary(transcript_text, summary_type)
+                    )
+                    if summary_text:
+                        summary_header = f"*Podsumowanie: {escape_md(title)}*\n\n"
+                        await send_long_message(context.bot, chat_id, summary_text, header=summary_header)
+
+            await update_status("Wysyłanie pliku z transkrypcją...")
+            with open(transcript_path, 'rb') as tf:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=tf,
+                    filename=os.path.basename(transcript_path),
+                    caption=f"Transkrypcja: {title}"[:200],
+                    read_timeout=60,
+                    write_timeout=60,
                 )
-                if summary_text:
-                    summary_header = f"*Podsumowanie: {escape_md(title)}*\n\n"
-                    await send_long_message(context.bot, chat_id, summary_text, header=summary_header)
 
             add_download_record(chat_id, title, user_urls.get(chat_id, ''),
                               "spotify_transcribe", file_size_mb)
