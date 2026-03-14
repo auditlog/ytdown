@@ -28,6 +28,7 @@ from bot.security import (
     RATE_LIMIT_REQUESTS,
     RATE_LIMIT_WINDOW,
     MAX_FILE_SIZE_MB,
+    FFMPEG_TIMEOUT,
     failed_attempts,
     block_until,
     user_urls,
@@ -53,6 +54,50 @@ from bot.downloader import get_video_info
 def escape_md(text: str) -> str:
     """Escapes Markdown v1 special characters in text."""
     return escape_markdown(text, version=1)
+
+
+def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
+    """Builds the main format selection keyboard, conditional on platform.
+
+    Args:
+        platform: Detected platform ('youtube', 'tiktok', etc.)
+        large_file: If True, shows resolution options instead of "best quality"
+
+    Returns:
+        List of InlineKeyboardButton rows for InlineKeyboardMarkup.
+    """
+    hide_flac = platform == 'tiktok'
+    hide_time_range = platform == 'tiktok'
+
+    if large_file:
+        keyboard = [
+            [InlineKeyboardButton("Video 1080p (Full HD)", callback_data="dl_video_1080p")],
+            [InlineKeyboardButton("Video 720p (HD)", callback_data="dl_video_720p")],
+            [InlineKeyboardButton("Video 480p (SD)", callback_data="dl_video_480p")],
+            [InlineKeyboardButton("Video 360p (Niska jakość)", callback_data="dl_video_360p")],
+            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        ]
+    else:
+        keyboard = [
+            [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
+            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+        ]
+        if not hide_flac:
+            keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
+        keyboard.extend([
+            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        ])
+
+    if not hide_time_range:
+        keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
+    keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
+
+    return keyboard
 
 
 def _is_admin(user_id: int) -> bool:
@@ -217,7 +262,7 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Check if waiting for PIN from this user
     if context.user_data.get("awaiting_pin", False) or not (user_id in authorized_users):
         # Check if message looks like a PIN attempt (digits only)
-        if message_text.isdigit():
+        if message_text and message_text.isdigit():
             if message_text == PIN_CODE:
                 # Reset failed attempts counter
                 clear_failed_attempts(user_id, attempts=failed_attempts)
@@ -526,21 +571,8 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                 user_time_ranges[chat_id] = time_range
 
                 # Send confirmation and show main menu with updated time range
-                # Respect platform for conditional buttons
                 cur_platform = context.user_data.get('platform', 'youtube')
-                keyboard = [
-                    [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
-                    [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-                    [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-                ]
-                if cur_platform != 'tiktok':
-                    keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
-                keyboard.extend([
-                    [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-                    [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-                    [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
-                    [InlineKeyboardButton("Lista formatów", callback_data="formats")]
-                ])
+                keyboard = _build_main_keyboard(cur_platform)
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await update.message.reply_text(
@@ -616,41 +648,11 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     estimated_size = estimate_file_size(info)
     size_warning = ""
 
-    # TikTok: short videos, no time range or FLAC needed
-    hide_time_range = platform == 'tiktok'
-    hide_flac = platform == 'tiktok'
-
     if estimated_size and estimated_size > MAX_FILE_SIZE_MB:
         size_warning = f"\n*Uwaga:* Szacowany rozmiar najlepszej jakości: {estimated_size:.1f} MB (limit: {MAX_FILE_SIZE_MB} MB)\n"
-
-        keyboard = [
-            [InlineKeyboardButton("Video 1080p (Full HD)", callback_data="dl_video_1080p")],
-            [InlineKeyboardButton("Video 720p (HD)", callback_data="dl_video_720p")],
-            [InlineKeyboardButton("Video 480p (SD)", callback_data="dl_video_480p")],
-            [InlineKeyboardButton("Video 360p (Niska jakość)", callback_data="dl_video_360p")],
-            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-        ]
-        if not hide_time_range:
-            keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
-        keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
+        keyboard = _build_main_keyboard(platform, large_file=True)
     else:
-        keyboard = [
-            [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
-            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-        ]
-        if not hide_flac:
-            keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
-        keyboard.extend([
-            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-        ])
-        if not hide_time_range:
-            keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
-        keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
+        keyboard = _build_main_keyboard(platform)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -816,7 +818,7 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await progress_msg.edit_text("Konwersja do MP3...")
             result = subprocess.run(
                 ['ffmpeg', '-i', raw_path, '-vn', '-acodec', 'libmp3lame', '-q:a', '2', mp3_path],
-                capture_output=True, timeout=120
+                capture_output=True, timeout=FFMPEG_TIMEOUT
             )
             if result.returncode != 0:
                 logging.error(f"ffmpeg conversion failed: {result.stderr.decode()}")
@@ -982,7 +984,7 @@ async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         mp3_path = os.path.splitext(video_path)[0] + '.mp3'
         result = subprocess.run(
             ['ffmpeg', '-i', video_path, '-vn', '-acodec', 'libmp3lame', '-q:a', '2', mp3_path],
-            capture_output=True, timeout=180
+            capture_output=True, timeout=FFMPEG_TIMEOUT
         )
         if result.returncode != 0:
             logging.error(f"ffmpeg video audio extraction failed: {result.stderr.decode()}")

@@ -34,6 +34,7 @@ from bot.security import (
     user_urls,
     user_time_ranges,
 )
+from bot.telegram_commands import _build_main_keyboard
 from bot.transcription import (
     transcribe_mp3_file,
     generate_summary,
@@ -872,25 +873,8 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     duration = info.get('duration', 0)
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
-    # Respect platform for conditional buttons
     platform = context.user_data.get('platform', 'youtube')
-    hide_time_range = platform == 'tiktok'
-    hide_flac = platform == 'tiktok'
-
-    keyboard = [
-        [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
-        [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-        [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-    ]
-    if not hide_flac:
-        keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
-    keyboard.extend([
-        [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-        [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-    ])
-    if not hide_time_range:
-        keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
-    keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
+    keyboard = _build_main_keyboard(platform)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 

@@ -31,31 +31,10 @@ MAX_FILE_SIZE_MB = 1000  # 1GB limit
 # Groq API has 25MB limit, use 20MB for safety margin
 MAX_MP3_PART_SIZE_MB = 20
 
-# Allowed domains grouped by platform
-ALLOWED_DOMAINS = [
-    # YouTube
-    'youtube.com',
-    'www.youtube.com',
-    'youtu.be',
-    'm.youtube.com',
-    'music.youtube.com',
-    # Vimeo
-    'vimeo.com',
-    'player.vimeo.com',
-    # TikTok
-    'tiktok.com',
-    'www.tiktok.com',
-    'vm.tiktok.com',
-    'm.tiktok.com',
-    # Instagram
-    'instagram.com',
-    'www.instagram.com',
-    # LinkedIn
-    'linkedin.com',
-    'www.linkedin.com',
-]
+# Timeout for ffmpeg operations (in seconds)
+FFMPEG_TIMEOUT = 180
 
-# Domain -> platform mapping for detect_platform()
+# Domain -> platform mapping (single source of truth for supported domains)
 _DOMAIN_TO_PLATFORM = {
     'youtube.com': 'youtube',
     'youtu.be': 'youtube',
@@ -69,6 +48,12 @@ _DOMAIN_TO_PLATFORM = {
     'instagram.com': 'instagram',
     'linkedin.com': 'linkedin',
 }
+
+# Generated from _DOMAIN_TO_PLATFORM + www. variants for base domains (name.tld)
+ALLOWED_DOMAINS = sorted(
+    set(_DOMAIN_TO_PLATFORM.keys())
+    | {f'www.{d}' for d in _DOMAIN_TO_PLATFORM if d.count('.') == 1}
+)
 
 
 @dataclass

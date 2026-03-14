@@ -15,7 +15,7 @@ import requests
 from mutagen.mp3 import MP3
 
 from bot.config import CONFIG
-from bot.security import MAX_MP3_PART_SIZE_MB
+from bot.security import MAX_MP3_PART_SIZE_MB, FFMPEG_TIMEOUT
 
 # Claude Haiku 4.5 limits
 CLAUDE_MAX_OUTPUT_TOKENS = 64_000
@@ -181,7 +181,7 @@ def split_mp3(file_path, output_dir, max_size_mb=MAX_MP3_PART_SIZE_MB):
                 "-acodec", "copy", output_path
             ]
 
-            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+            subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=FFMPEG_TIMEOUT)
 
             part_size = os.path.getsize(output_path) / (1024 * 1024)
             logging.info(f"Created {output_path} ({part_size:.2f}MB, {duration:.2f} seconds)")
