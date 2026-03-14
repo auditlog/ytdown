@@ -208,7 +208,7 @@ def get_video_info(url):
             info = ydl.extract_info(url, download=False)
             return info
     except Exception as e:
-        print(f"Error getting video info: {str(e)}")
+        logging.error("Error getting video info for %s: %s", url, e)
         return None
 
 

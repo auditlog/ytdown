@@ -9,7 +9,7 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import DefaultDict
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 from bot.config import authorized_users, save_authorized_users, _auth_lock
 
@@ -272,6 +272,50 @@ def _normalize_domain(url: str) -> str | None:
         return domain
     except Exception:
         return None
+
+
+def normalize_url(url: str, _depth: int = 0) -> str:
+    """Resolves platform-specific redirect URLs to their canonical form.
+
+    Handles Castbox redirect chains:
+      d.castbox.fm/dynamic-link/redirect?link=... → extract link param
+      castbox.fm/vb/... or /ep/... → follow HTTP redirect to /episode/...
+    """
+    if _depth > 5:
+        return url
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+
+        # d.castbox.fm dynamic links — extract real URL from query param
+        if domain == 'd.castbox.fm':
+            link_param = parse_qs(parsed.query).get('link', [None])[0]
+            if link_param and 'castbox.fm' in link_param:
+                return normalize_url(link_param, _depth + 1)
+
+        # castbox.fm short links (/vb/, /ep/) — resolve to /episode/ via HTTP
+        if (domain in ('castbox.fm', 'www.castbox.fm')
+                and '/episode/' not in parsed.path
+                and parsed.path not in ('', '/')):
+            from urllib.request import Request, urlopen
+            try:
+                req = Request(url, method='HEAD',
+                              headers={'User-Agent': 'Mozilla/5.0'})
+                with urlopen(req, timeout=5) as resp:
+                    if resp.url != url:
+                        return normalize_url(resp.url, _depth + 1)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return url
+
+
+def get_media_label(platform: str | None) -> str:
+    """Returns Polish locative noun for media type ('o filmie' / 'o odcinku')."""
+    if platform == 'castbox':
+        return 'odcinku'
+    return 'filmie'
 
 
 def validate_url(url) -> bool:

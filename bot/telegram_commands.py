@@ -40,6 +40,8 @@ from bot.security import (
     validate_url,
     validate_youtube_url,
     detect_platform,
+    normalize_url,
+    get_media_label,
     manage_authorized_user,
     estimate_file_size,
     is_user_blocked,
@@ -622,6 +624,9 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # Normalize redirect URLs (e.g. Castbox dynamic links)
+    message_text = normalize_url(message_text)
+
     # Validate URL
     if not validate_url(message_text):
         await update.message.reply_text(
@@ -713,6 +718,8 @@ async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TY
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Processes a media link after PIN authorization."""
     chat_id = update.effective_chat.id
+    # Normalize redirect URLs (safety net for all entry points: PIN flow, callbacks, etc.)
+    url = normalize_url(url)
     user_urls[chat_id] = url
     # Clear any previous time range
     user_time_ranges.pop(chat_id, None)
@@ -749,11 +756,12 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
             )
             return
 
-    progress_message = await update.message.reply_text("Pobieranie informacji o filmie...")
+    media_name = get_media_label(platform)
+    progress_message = await update.message.reply_text(f"Pobieranie informacji o {media_name}...")
 
     info = get_video_info(url)
     if not info:
-        await progress_message.edit_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        await progress_message.edit_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
     title = info.get('title', 'Nieznany tytuł')

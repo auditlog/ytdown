@@ -33,9 +33,11 @@ from bot.security import (
     MAX_PLAYLIST_ITEMS,
     MAX_PLAYLIST_ITEMS_EXPANDED,
     check_rate_limit,
+    normalize_url,
     user_urls,
     user_time_ranges,
     user_playlist_data,
+    get_media_label,
 )
 from bot.telegram_commands import _build_main_keyboard, _build_playlist_message, process_playlist_link
 from bot.transcription import (
@@ -288,6 +290,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
         return
 
+    url = normalize_url(url)
+
     if data.startswith("dl_"):
         download_data = parse_download_callback(data)
         if not download_data:
@@ -372,7 +376,8 @@ async def download_file(
     async def update_status(text):
         await safe_edit_message(query, text)
 
-    await update_status("Pobieranie informacji o filmie...")
+    media_name = get_media_label(context.user_data.get('platform'))
+    await update_status(f"Pobieranie informacji o {media_name}...")
 
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
@@ -381,7 +386,7 @@ async def download_file(
 
     info = get_video_info(url)
     if not info:
-        await update_status("Wystąpił błąd podczas pobierania informacji o filmie.")
+        await update_status(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
     title = info.get('title', 'Nieznany tytuł')
@@ -794,7 +799,8 @@ async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     info = get_video_info(url)
     if not info:
-        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        media_name = get_media_label(context.user_data.get('platform'))
+        await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
     title = info.get('title', 'Nieznany tytuł')
@@ -845,7 +851,8 @@ async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYP
 
     info = get_video_info(url)
     if not info:
-        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        media_name = get_media_label(context.user_data.get('platform'))
+        await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
     title = info.get('title', 'Nieznany tytuł')
@@ -886,7 +893,8 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
             user_playlist_data.pop(chat_id, None)
             # Create a fake message-like update for process_youtube_link
             # We need to call it as if user sent the clean URL
-            await query.edit_message_text("Pobieranie informacji o filmie...")
+            media_name = get_media_label(context.user_data.get('platform'))
+            await query.edit_message_text(f"Pobieranie informacji o {media_name}...")
             from bot.telegram_commands import process_youtube_link
             # Re-assign so process_youtube_link works with the clean URL
             user_urls[chat_id] = clean_url
@@ -1101,16 +1109,18 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     query = update.callback_query
     chat_id = update.effective_chat.id
 
+    platform = context.user_data.get('platform', 'youtube')
+
     info = get_video_info(url)
     if not info:
-        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        media_name = get_media_label(platform)
+        await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
     title = info.get('title', 'Nieznany tytuł')
     duration = info.get('duration', 0)
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
-    platform = context.user_data.get('platform', 'youtube')
     keyboard = _build_main_keyboard(platform)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -1136,7 +1146,8 @@ async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_
 
     info = get_video_info(url)
     if not info:
-        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        media_name = get_media_label(context.user_data.get('platform'))
+        await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
     title = info.get('title', 'Nieznany tytuł')
@@ -1182,7 +1193,8 @@ async def apply_time_range_preset(update: Update, context: ContextTypes.DEFAULT_
 
     info = get_video_info(url)
     if not info:
-        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        media_name = get_media_label(context.user_data.get('platform'))
+        await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
     duration = info.get('duration', 0)
@@ -1449,7 +1461,8 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
 
     info = get_video_info(url)
     if not info:
-        await query.edit_message_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        media_name = get_media_label(context.user_data.get('platform'))
+        await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
     title = info.get('title', 'Nieznany tytuł')
