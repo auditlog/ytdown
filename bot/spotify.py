@@ -7,10 +7,11 @@ Spotify Web API credentials are optional — used for richer metadata only.
 """
 
 import logging
+import os
 import re
 import time
 from difflib import SequenceMatcher
-from urllib.parse import urlparse, parse_qs, quote_plus
+from urllib.parse import urlparse, parse_qs
 
 import requests
 import yt_dlp
@@ -116,20 +117,14 @@ def get_spotify_episode_info(episode_id: str) -> dict | None:
 
 
 def _extract_title_from_url(url: str) -> str | None:
-    """Extracts a readable title from Spotify URL slug as fallback.
+    """Extracts episode ID from Spotify URL for use in fallback messages.
 
-    URL path like /episode/My-Great-Episode-id123 -> "My Great Episode"
+    Spotify episode URLs use Base62 IDs (e.g. /episode/4rOoJ6Egrf8K2IrywzwOMk),
+    not human-readable slugs — so this returns None (not useful as search query).
+    The caller should use a generic fallback label instead.
     """
-    try:
-        parsed = urlparse(url)
-        parts = parsed.path.strip('/').split('/')
-        if len(parts) >= 2 and parts[0] == 'episode':
-            slug = parts[1]
-            # Remove the ID suffix (last segment after last dash if it looks like an ID)
-            # Spotify IDs are alphanumeric, slugs have words separated by dashes
-            return slug.replace('-', ' ').strip() or None
-    except Exception:
-        pass
+    # Spotify IDs are pure alphanumeric Base62, not readable titles
+    # Return None to signal caller should use a generic label
     return None
 
 
@@ -369,7 +364,8 @@ def download_direct_audio(audio_url: str, output_path: str) -> str | None:
     Returns path to downloaded file, or None on error.
     """
     try:
-        resp = requests.get(audio_url, stream=True, timeout=30)
+        # Timeout: 15s for connection, no limit for reading (large podcast files)
+        resp = requests.get(audio_url, stream=True, timeout=(15, None))
         resp.raise_for_status()
 
         # Determine extension from content type or URL
@@ -394,6 +390,3 @@ def download_direct_audio(audio_url: str, output_path: str) -> str | None:
     except Exception as e:
         logging.error("Error downloading audio from %s: %s", audio_url, e)
         return None
-
-
-import os

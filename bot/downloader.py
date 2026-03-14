@@ -609,7 +609,7 @@ def get_playlist_info(url: str, max_items: int = 10) -> dict | None:
         }
 
     except Exception as e:
-        logging.error(f"Error getting playlist info: {e}")
+        logging.error("Error getting playlist info: %s", e)
         return None
 
 

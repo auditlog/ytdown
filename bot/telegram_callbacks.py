@@ -299,7 +299,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
         return
 
-    url = normalize_url(url)
+    # normalize_url may do HTTP HEAD for Castbox short links — run in executor
+    url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
 
     if data.startswith("dl_"):
         download_data = parse_download_callback(data)
@@ -928,23 +929,34 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
         return
 
     if data == "pl_single":
-        # Strip playlist params, process as single video
+        # Strip playlist params, download as single video
         url = user_urls.get(chat_id)
         if url:
             clean_url = strip_playlist_params(url)
             user_playlist_data.pop(chat_id, None)
-            # Create a fake message-like update for process_youtube_link
-            # We need to call it as if user sent the clean URL
+            user_urls[chat_id] = clean_url
+
             media_name = get_media_label(context.user_data.get('platform'))
             await query.edit_message_text(f"Pobieranie informacji o {media_name}...")
-            from bot.telegram_commands import process_youtube_link
-            # Re-assign so process_youtube_link works with the clean URL
-            user_urls[chat_id] = clean_url
-            # Use a wrapper that makes query act like a message reply context
-            fake_update = update
-            fake_update.message = query.message
-            fake_update.message.reply_text = lambda text, **kw: query.edit_message_text(text, **kw)
-            await process_youtube_link(fake_update, context, clean_url)
+
+            info = get_video_info(clean_url)
+            if not info:
+                await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
+                return
+
+            from bot.telegram_commands import _build_main_keyboard, escape_md
+            title = info.get('title', 'Nieznany tytuł')
+            duration = info.get('duration', 0)
+            duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
+            platform = context.user_data.get('platform', 'youtube')
+            keyboard = _build_main_keyboard(platform)
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+            await query.edit_message_text(
+                f"*{escape_md(title)}*\nCzas trwania: {duration_str}\n\nWybierz format do pobrania:",
+                reply_markup=reply_markup,
+                parse_mode='Markdown'
+            )
         return
 
     if data == "pl_full":
@@ -1122,6 +1134,12 @@ async def _download_single_playlist_item(
 
     file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
 
+    # Telegram Bot API limit: 50MB for file upload
+    if file_size_mb > 50:
+        raise RuntimeError(
+            f"Plik za duży do wysłania ({file_size_mb:.0f} MB, limit Telegram: 50 MB)"
+        )
+
     try:
         with open(downloaded_file_path, 'rb') as f:
             if media_type == "audio":
@@ -1205,6 +1223,22 @@ async def download_spotify_resolved(
                 _executor,
                 lambda: download_direct_audio(resolved['audio_url'], output_path)
             )
+
+            # Convert to requested format if not MP3 (iTunes returns MP3)
+            if downloaded_file_path and audio_format != 'mp3' and audio_format in ('m4a', 'flac', 'wav', 'ogg', 'opus'):
+                import subprocess
+                from bot.security import FFMPEG_TIMEOUT
+                converted_path = os.path.splitext(downloaded_file_path)[0] + f'.{audio_format}'
+                try:
+                    result = subprocess.run(
+                        ['ffmpeg', '-i', downloaded_file_path, '-y', converted_path],
+                        capture_output=True, timeout=FFMPEG_TIMEOUT
+                    )
+                    if result.returncode == 0:
+                        os.remove(downloaded_file_path)
+                        downloaded_file_path = converted_path
+                except Exception as e:
+                    logging.warning("Format conversion failed, using original MP3: %s", e)
         elif source == 'youtube':
             # Download via yt-dlp from YouTube
             youtube_url = resolved['youtube_url']

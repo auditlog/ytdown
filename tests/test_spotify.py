@@ -75,12 +75,10 @@ class TestParseSpotifyEpisodeUrl:
 
 
 class TestExtractTitleFromUrl:
-    def test_extracts_readable_title(self):
-        url = "https://open.spotify.com/episode/My-Great-Episode-abc123"
-        title = _extract_title_from_url(url)
-        assert title is not None
-        assert "My" in title
-        assert "Great" in title
+    def test_returns_none_for_base62_id(self):
+        # Spotify episode URLs use Base62 IDs, not human-readable slugs
+        url = "https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk"
+        assert _extract_title_from_url(url) is None
 
     def test_returns_none_for_invalid(self):
         assert _extract_title_from_url("https://open.spotify.com/show/abc") is None

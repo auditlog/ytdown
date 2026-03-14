@@ -638,7 +638,10 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # Normalize redirect URLs (e.g. Castbox dynamic links)
-    message_text = normalize_url(message_text)
+    # normalize_url may do HTTP HEAD for short links — run in executor to avoid blocking
+    import asyncio
+    loop = asyncio.get_event_loop()
+    message_text = await loop.run_in_executor(None, normalize_url, message_text)
 
     # Validate URL
     if not validate_url(message_text):
@@ -786,7 +789,9 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     """Processes a media link after PIN authorization."""
     chat_id = update.effective_chat.id
     # Normalize redirect URLs (safety net for all entry points: PIN flow, callbacks, etc.)
-    url = normalize_url(url)
+    # May do HTTP HEAD for Castbox short links — run in executor to avoid blocking
+    import asyncio
+    url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
     user_urls[chat_id] = url
     # Clear any previous time range
     user_time_ranges.pop(chat_id, None)
