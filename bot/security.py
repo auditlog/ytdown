@@ -34,6 +34,10 @@ MAX_MP3_PART_SIZE_MB = 20
 # Timeout for ffmpeg operations (in seconds)
 FFMPEG_TIMEOUT = 180
 
+# Maximum number of playlist items to download (default / expanded)
+MAX_PLAYLIST_ITEMS = 10
+MAX_PLAYLIST_ITEMS_EXPANDED = 50
+
 # Domain -> platform mapping (single source of truth for supported domains)
 _DOMAIN_TO_PLATFORM = {
     'youtube.com': 'youtube',
@@ -71,6 +75,9 @@ user_urls = {}
 
 # Dictionary to store time ranges (key: chat_id, value: {"start": "0:30", "end": "5:45"})
 user_time_ranges = {}
+
+# Playlist session data (key: chat_id, value: playlist info dict)
+user_playlist_data = {}
 
 
 def _new_state() -> SecurityState:

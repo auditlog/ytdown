@@ -22,6 +22,8 @@ from bot.security import (
     manage_authorized_user,
     estimate_file_size,
     user_urls,
+    user_playlist_data,
+    MAX_PLAYLIST_ITEMS,
 )
 
 from bot.cleanup import (
@@ -55,6 +57,9 @@ try:
         get_available_subtitles,
         download_subtitles,
         parse_subtitle_file,
+        is_playlist_url,
+        get_playlist_info,
+        strip_playlist_params,
     )
 except ImportError:
     get_video_info = None
@@ -63,6 +68,9 @@ except ImportError:
     get_available_subtitles = None
     download_subtitles = None
     parse_subtitle_file = None
+    is_playlist_url = None
+    get_playlist_info = None
+    strip_playlist_params = None
 
 try:
     from bot.telegram_commands import (
@@ -74,6 +82,7 @@ try:
         handle_youtube_link,
         handle_pin,
         process_youtube_link,
+        process_playlist_link,
         handle_audio_upload,
         handle_video_upload,
     )
@@ -86,6 +95,7 @@ except ImportError:
     handle_youtube_link = None
     handle_pin = None
     process_youtube_link = None
+    process_playlist_link = None
     handle_audio_upload = None
     handle_video_upload = None
 
@@ -93,6 +103,7 @@ try:
     from bot.telegram_callbacks import (
         handle_callback,
         download_file,
+        download_playlist,
         handle_formats_list,
         show_summary_options,
         back_to_main_menu,
@@ -105,6 +116,7 @@ try:
 except ImportError:
     handle_callback = None
     download_file = None
+    download_playlist = None
     handle_formats_list = None
     show_summary_options = None
     back_to_main_menu = None
@@ -145,6 +157,9 @@ __all__ = [
     'get_available_subtitles',
     'download_subtitles',
     'parse_subtitle_file',
+    'is_playlist_url',
+    'get_playlist_info',
+    'strip_playlist_params',
     # Telegram commands
     'start',
     'help_command',
@@ -154,11 +169,13 @@ __all__ = [
     'handle_youtube_link',
     'handle_pin',
     'process_youtube_link',
+    'process_playlist_link',
     'handle_audio_upload',
     'handle_video_upload',
     # Telegram callbacks
     'handle_callback',
     'download_file',
+    'download_playlist',
     'handle_formats_list',
     'show_summary_options',
     'back_to_main_menu',

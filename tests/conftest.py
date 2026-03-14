@@ -111,6 +111,7 @@ def reset_module_state():
         security.user_requests.clear()
         security.user_urls.clear()
         security.user_time_ranges.clear()
+        security.user_playlist_data.clear()
     except ImportError:
         pass
 
@@ -124,6 +125,7 @@ def reset_module_state():
         security.user_requests.clear()
         security.user_urls.clear()
         security.user_time_ranges.clear()
+        security.user_playlist_data.clear()
     except ImportError:
         pass
 

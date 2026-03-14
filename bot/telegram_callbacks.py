@@ -30,11 +30,14 @@ from bot.config import (
 )
 from bot.security import (
     MAX_FILE_SIZE_MB,
+    MAX_PLAYLIST_ITEMS,
+    MAX_PLAYLIST_ITEMS_EXPANDED,
     check_rate_limit,
     user_urls,
     user_time_ranges,
+    user_playlist_data,
 )
-from bot.telegram_commands import _build_main_keyboard
+from bot.telegram_commands import _build_main_keyboard, _build_playlist_message, process_playlist_link
 from bot.transcription import (
     transcribe_mp3_file,
     generate_summary,
@@ -51,6 +54,7 @@ from bot.downloader import (
     get_available_subtitles,
     download_subtitles,
     parse_subtitle_file,
+    strip_playlist_params,
     COOKIES_FILE,
 )
 
@@ -256,6 +260,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Rate limit callbacks to prevent abuse
     if not check_rate_limit(user_id):
         await query.edit_message_text("Przekroczono limit requestów. Spróbuj ponownie za chwilę.")
+        return
+
+    # Playlist callbacks
+    if data.startswith("pl_"):
+        await handle_playlist_callback(update, context, data)
         return
 
     # Audio upload callbacks — no YouTube URL required
@@ -857,6 +866,234 @@ async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYP
         reply_markup=reply_markup,
         parse_mode='Markdown'
     )
+
+
+async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Handles all playlist-related callbacks."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    if data == "pl_cancel":
+        user_playlist_data.pop(chat_id, None)
+        await query.edit_message_text("Pobieranie playlisty anulowane.")
+        return
+
+    if data == "pl_single":
+        # Strip playlist params, process as single video
+        url = user_urls.get(chat_id)
+        if url:
+            clean_url = strip_playlist_params(url)
+            user_playlist_data.pop(chat_id, None)
+            # Create a fake message-like update for process_youtube_link
+            # We need to call it as if user sent the clean URL
+            await query.edit_message_text("Pobieranie informacji o filmie...")
+            from bot.telegram_commands import process_youtube_link
+            # Re-assign so process_youtube_link works with the clean URL
+            user_urls[chat_id] = clean_url
+            # Use a wrapper that makes query act like a message reply context
+            fake_update = update
+            fake_update.message = query.message
+            fake_update.message.reply_text = lambda text, **kw: query.edit_message_text(text, **kw)
+            await process_youtube_link(fake_update, context, clean_url)
+        return
+
+    if data == "pl_full":
+        # Fetch and show full playlist
+        url = user_urls.get(chat_id)
+        if url:
+            await query.edit_message_text("Pobieranie informacji o playliście...")
+            from bot.downloader import get_playlist_info
+            playlist_info = get_playlist_info(url, max_items=MAX_PLAYLIST_ITEMS)
+            if not playlist_info or not playlist_info['entries']:
+                await query.edit_message_text(
+                    "Nie udało się pobrać informacji o playliście."
+                )
+                return
+            user_playlist_data[chat_id] = playlist_info
+            msg, reply_markup = _build_playlist_message(playlist_info)
+            await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        return
+
+    if data == "pl_more":
+        # Re-fetch playlist with expanded limit
+        url = user_urls.get(chat_id)
+        if url:
+            await query.edit_message_text("Pobieranie rozszerzonej listy...")
+            from bot.downloader import get_playlist_info
+            playlist_info = get_playlist_info(url, max_items=MAX_PLAYLIST_ITEMS_EXPANDED)
+            if not playlist_info or not playlist_info['entries']:
+                await query.edit_message_text(
+                    "Nie udało się pobrać rozszerzonej listy."
+                )
+                return
+            user_playlist_data[chat_id] = playlist_info
+            msg, reply_markup = _build_playlist_message(playlist_info)
+            await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+        return
+
+    if data.startswith("pl_dl_"):
+        await download_playlist(update, context, data)
+        return
+
+
+async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, callback_data: str):
+    """Downloads all items from playlist sequentially."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    playlist = user_playlist_data.get(chat_id)
+    if not playlist:
+        await query.edit_message_text("Sesja playlisty wygasła. Wyślij link ponownie.")
+        return
+
+    entries = playlist['entries']
+
+    # Parse format: pl_dl_audio_mp3, pl_dl_video_best, pl_dl_video_720p
+    format_part = callback_data.replace("pl_dl_", "")
+    parts = format_part.split("_", 1)
+    media_type = parts[0]  # 'audio' or 'video'
+    format_choice = parts[1] if len(parts) > 1 else 'best'
+
+    total = len(entries)
+    succeeded = 0
+    failed_titles = []
+
+    await query.edit_message_text(
+        f"Rozpoczynam pobieranie playlisty ({total} filmów)...\n"
+        f"Format: {media_type} {format_choice}"
+    )
+
+    for i, entry in enumerate(entries, 1):
+        entry_url = entry['url']
+        entry_title = entry.get('title', f'Film {i}')
+
+        try:
+            status_msg = await context.bot.send_message(
+                chat_id=chat_id,
+                text=f"[{i}/{total}] Pobieranie: {entry_title}..."
+            )
+
+            await _download_single_playlist_item(
+                context, chat_id, entry_url, entry_title,
+                media_type, format_choice, status_msg
+            )
+            succeeded += 1
+
+        except Exception as e:
+            failed_titles.append(entry_title)
+            logging.error(f"Playlist item {i}/{total} failed: {e}")
+            try:
+                await status_msg.edit_text(
+                    f"[{i}/{total}] Błąd: {entry_title}\n{str(e)[:100]}"
+                )
+            except Exception:
+                pass
+
+        # Small delay between items to avoid Telegram rate limits
+        if i < total:
+            await asyncio.sleep(1)
+
+    # Summary message
+    failed = len(failed_titles)
+    summary = f"Playlista zakończona!\n\nPobrano: {succeeded}/{total}\n"
+    if failed:
+        summary += f"Błędy: {failed}\n"
+        for title in failed_titles[:5]:
+            summary += f"  - {title[:40]}\n"
+
+    await context.bot.send_message(chat_id=chat_id, text=summary)
+
+    # Cleanup session
+    user_playlist_data.pop(chat_id, None)
+
+
+async def _download_single_playlist_item(
+    context, chat_id, url, title, media_type, format_choice, status_msg
+):
+    """Downloads and sends a single playlist item."""
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    sanitized_title = sanitize_filename(title)
+    output_path = os.path.join(chat_download_path, f"{current_date} {sanitized_title}")
+
+    ydl_opts = {
+        'outtmpl': f"{output_path}.%(ext)s",
+        'quiet': True,
+        'no_warnings': True,
+        'noplaylist': True,
+        'socket_timeout': 30,
+        'retries': 3,
+        'fragment_retries': 3,
+    }
+    if os.path.exists(COOKIES_FILE):
+        ydl_opts['cookiefile'] = COOKIES_FILE
+
+    if media_type == "audio":
+        codec = format_choice if format_choice in ('mp3', 'm4a', 'flac', 'wav', 'ogg', 'opus') else 'mp3'
+        ydl_opts.update({
+            'format': 'bestaudio/best',
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': codec,
+                'preferredquality': '192',
+            }],
+        })
+    elif media_type == "video":
+        if format_choice == "best":
+            ydl_opts['format'] = 'best'
+        elif format_choice in ("1080p", "720p", "480p", "360p"):
+            height = format_choice.replace('p', '')
+            ydl_opts['format'] = f'best[height<={height}]/bestvideo[height<={height}]+bestaudio/best[height<={height}]'
+        else:
+            ydl_opts['format'] = 'best'
+
+    # Download in thread pool
+    loop = asyncio.get_event_loop()
+    await loop.run_in_executor(
+        _executor,
+        lambda: yt_dlp.YoutubeDL(ydl_opts).download([url])
+    )
+
+    # Find and send downloaded file
+    _artifact_suffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
+    downloaded_file_path = None
+    for file in os.listdir(chat_download_path):
+        full_path = os.path.join(chat_download_path, file)
+        if sanitized_title in file and full_path.startswith(output_path):
+            if any(file.endswith(s) for s in _artifact_suffixes):
+                continue
+            downloaded_file_path = full_path
+            break
+
+    if not downloaded_file_path:
+        raise FileNotFoundError(f"Downloaded file not found for: {title}")
+
+    file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
+
+    try:
+        with open(downloaded_file_path, 'rb') as f:
+            if media_type == "audio":
+                await context.bot.send_audio(
+                    chat_id=chat_id, audio=f, title=title,
+                    caption=title[:200],
+                    read_timeout=120, write_timeout=120,
+                )
+            else:
+                await context.bot.send_video(
+                    chat_id=chat_id, video=f, caption=title[:200],
+                    read_timeout=120, write_timeout=120,
+                )
+    finally:
+        # Always clean up the file
+        try:
+            os.remove(downloaded_file_path)
+        except OSError:
+            pass
+
+    add_download_record(chat_id, title, url, f"{media_type}_{format_choice}", file_size_mb)
+    await status_msg.edit_text(f"[✅] {title}")
 
 
 async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, url):

@@ -8,6 +8,7 @@ import logging
 import os
 import re
 from datetime import datetime
+from urllib.parse import urlparse, parse_qs
 
 import yt_dlp
 
@@ -202,6 +203,7 @@ def get_video_info(url):
     """
     try:
         ydl_opts = get_basic_ydl_opts()
+        ydl_opts['noplaylist'] = True  # Always fetch single video info, never full playlist
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             return info
@@ -507,6 +509,108 @@ def parse_subtitle_file(file_path: str) -> str:
         text_lines.append(cleaned)
 
     return '\n'.join(text_lines)
+
+
+def is_playlist_url(url: str) -> bool:
+    """Detects if URL contains a YouTube playlist parameter.
+
+    Returns True for:
+    - youtube.com/playlist?list=XXX (pure playlist)
+    - youtube.com/watch?v=XXX&list=XXX (video in playlist context)
+    - youtu.be/XXX?list=XXX
+    """
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        hostname = (parsed.hostname or '').lower()
+
+        # Only YouTube supports playlists in this bot
+        youtube_hosts = {'youtube.com', 'www.youtube.com', 'm.youtube.com',
+                         'music.youtube.com', 'youtu.be'}
+        if hostname not in youtube_hosts:
+            return False
+
+        return 'list' in params
+    except Exception:
+        return False
+
+
+def is_pure_playlist_url(url: str) -> bool:
+    """Returns True if URL is a pure playlist (no single video selected)."""
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        return 'list' in params and 'v' not in params and parsed.path in ('/', '/playlist')
+    except Exception:
+        return False
+
+
+def strip_playlist_params(url: str) -> str:
+    """Removes playlist parameters from URL, keeping only the video."""
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        params.pop('list', None)
+        params.pop('index', None)
+
+        # Rebuild query string
+        new_query = '&'.join(f'{k}={v[0]}' for k, v in params.items() if v)
+        return parsed._replace(query=new_query).geturl()
+    except Exception:
+        return url
+
+
+def get_playlist_info(url: str, max_items: int = 10) -> dict | None:
+    """Fetches playlist metadata using flat extraction.
+
+    Args:
+        url: YouTube playlist URL.
+        max_items: Maximum number of entries to fetch.
+
+    Returns:
+        Dict with title, playlist_count, entries list, or None on error.
+    """
+    try:
+        ydl_opts = {
+            'extract_flat': 'in_playlist',
+            'quiet': True,
+            'no_warnings': True,
+            'playlistend': max_items,
+        }
+        if os.path.exists(COOKIES_FILE):
+            ydl_opts['cookiefile'] = COOKIES_FILE
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        if not info:
+            return None
+
+        # yt-dlp returns _type='playlist' for playlists
+        if info.get('_type') != 'playlist':
+            return None
+
+        entries = []
+        for entry in (info.get('entries') or []):
+            if entry is None:
+                continue
+            video_id = entry.get('id', '')
+            entries.append({
+                'url': f"https://www.youtube.com/watch?v={video_id}" if video_id else entry.get('url', ''),
+                'title': entry.get('title', 'Nieznany tytuł'),
+                'duration': entry.get('duration'),
+                'id': video_id,
+            })
+
+        return {
+            'title': info.get('title', 'Playlista'),
+            'playlist_count': info.get('playlist_count') or len(entries),
+            'entries': entries,
+        }
+
+    except Exception as e:
+        logging.error(f"Error getting playlist info: {e}")
+        return None
 
 
 def validate_url(url):

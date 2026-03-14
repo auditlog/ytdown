@@ -28,11 +28,14 @@ from bot.security import (
     RATE_LIMIT_REQUESTS,
     RATE_LIMIT_WINDOW,
     MAX_FILE_SIZE_MB,
+    MAX_PLAYLIST_ITEMS,
+    MAX_PLAYLIST_ITEMS_EXPANDED,
     FFMPEG_TIMEOUT,
     failed_attempts,
     block_until,
     user_urls,
     user_time_ranges,
+    user_playlist_data,
     check_rate_limit,
     validate_url,
     validate_youtube_url,
@@ -48,7 +51,7 @@ from bot.cleanup import (
     cleanup_old_files,
     get_disk_usage,
 )
-from bot.downloader import get_video_info
+from bot.downloader import get_video_info, is_playlist_url, is_pure_playlist_url, get_playlist_info, strip_playlist_params
 
 
 def escape_md(text: str) -> str:
@@ -623,6 +626,77 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     await process_youtube_link(update, context, message_text)
 
 
+def _build_playlist_message(playlist_info: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Builds playlist listing message and keyboard.
+
+    Returns:
+        Tuple of (message_text, reply_markup).
+    """
+    entries = playlist_info['entries']
+    total = playlist_info.get('playlist_count', len(entries))
+
+    msg = f"*{escape_md(playlist_info['title'])}*\n"
+    msg += f"Filmów: {len(entries)}"
+    if total > len(entries):
+        msg += f" (z {total})"
+    msg += "\n\n"
+
+    for i, entry in enumerate(entries, 1):
+        title = entry.get('title', 'Nieznany')[:50]
+        duration = entry.get('duration')
+        if duration:
+            dur_str = f"{duration // 60}:{duration % 60:02d}"
+        else:
+            dur_str = "?"
+        msg += f"{i}. {escape_md(title)} ({dur_str})\n"
+
+    keyboard = [
+        [InlineKeyboardButton("Pobierz wszystkie — Audio MP3", callback_data="pl_dl_audio_mp3")],
+        [InlineKeyboardButton("Pobierz wszystkie — Audio M4A", callback_data="pl_dl_audio_m4a")],
+        [InlineKeyboardButton("Pobierz wszystkie — Video (najlepsza)", callback_data="pl_dl_video_best")],
+        [InlineKeyboardButton("Pobierz wszystkie — Video 720p", callback_data="pl_dl_video_720p")],
+    ]
+
+    # Show "load more" button when playlist has more items than currently displayed
+    if total > len(entries) and len(entries) < MAX_PLAYLIST_ITEMS_EXPANDED:
+        more_count = min(total, MAX_PLAYLIST_ITEMS_EXPANDED)
+        keyboard.append([InlineKeyboardButton(
+            f"Pokaż więcej (do {more_count})", callback_data="pl_more"
+        )])
+
+    keyboard.append([InlineKeyboardButton("Anuluj", callback_data="pl_cancel")])
+
+    return msg, InlineKeyboardMarkup(keyboard)
+
+
+async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    """Handles playlist URL — fetches info and shows playlist menu."""
+    chat_id = update.effective_chat.id
+
+    progress_message = await update.message.reply_text(
+        "Wykryto playlistę! Pobieranie informacji..."
+    )
+
+    playlist_info = get_playlist_info(url, max_items=MAX_PLAYLIST_ITEMS)
+
+    if not playlist_info:
+        await progress_message.edit_text(
+            "Nie udało się pobrać informacji o playliście."
+        )
+        return
+
+    if not playlist_info['entries']:
+        await progress_message.edit_text("Playlista jest pusta.")
+        return
+
+    # Store playlist data in session
+    user_playlist_data[chat_id] = playlist_info
+    user_urls[chat_id] = url
+
+    msg, reply_markup = _build_playlist_message(playlist_info)
+    await progress_message.edit_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+
+
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Processes a media link after PIN authorization."""
     chat_id = update.effective_chat.id
@@ -633,6 +707,25 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     # Detect and store platform for conditional UI
     platform = detect_platform(url) or 'youtube'
     context.user_data['platform'] = platform
+
+    # Playlist detection — offer choice or go straight to playlist view
+    if is_playlist_url(url):
+        if is_pure_playlist_url(url):
+            await process_playlist_link(update, context, url)
+            return
+        else:
+            # URL has both video and playlist — let user choose
+            keyboard = [
+                [InlineKeyboardButton("Pojedynczy film", callback_data="pl_single")],
+                [InlineKeyboardButton("Cała playlista", callback_data="pl_full")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "Ten link zawiera zarówno film jak i playlistę.\n\n"
+                "Co chcesz pobrać?",
+                reply_markup=reply_markup
+            )
+            return
 
     progress_message = await update.message.reply_text("Pobieranie informacji o filmie...")
 
