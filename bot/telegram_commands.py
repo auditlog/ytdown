@@ -397,6 +397,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- LinkedIn (linkedin.com)\n"
         "- Castbox (castbox.fm)\n"
         "- Spotify podcasty (open.spotify.com/episode)\n\n"
+        "🔒 *Platformy wymagające logowania:*\n"
+        "TikTok, Instagram i LinkedIn mogą wymagać pliku cookies.txt\n"
+        "do pobierania treści z ograniczonym dostępem.\n\n"
         "Komendy administracyjne:\n"
         "- /status - sprawdź przestrzeń dyskową\n"
         "- /cleanup - usuń stare pliki (>24h)",
@@ -441,6 +444,14 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if free_gb < 5:
         status_msg += "**KRYTYCZNIE mało miejsca!**\n"
+
+    # Show cookies.txt status
+    from bot.downloader import COOKIES_FILE
+    if os.path.exists(COOKIES_FILE):
+        cookie_size = os.path.getsize(COOKIES_FILE)
+        status_msg += f"\n**cookies.txt:** ✅ ({cookie_size} B)\n"
+    else:
+        status_msg += "\n**cookies.txt:** ❌ brak (TikTok/Instagram/LinkedIn mogą wymagać)\n"
 
     await update.message.reply_text(status_msg, parse_mode='Markdown')
 

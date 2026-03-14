@@ -817,7 +817,11 @@ async def download_file(
         if any(kw in error_str for kw in ('login', 'sign in', 'cookie', 'authentication')):
             await update_status(
                 "Ta platforma wymaga zalogowania.\n\n"
-                "Umieść plik cookies.txt w katalogu bota i spróbuj ponownie."
+                "Aby pobrać treści z ograniczonym dostępem:\n"
+                "1. Zaloguj się na platformę w przeglądarce\n"
+                "2. Wyeksportuj cookies (rozszerzenie 'Get cookies.txt LOCALLY')\n"
+                "3. Umieść plik cookies.txt w katalogu bota\n"
+                "4. Spróbuj ponownie"
             )
         else:
             await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
