@@ -65,7 +65,7 @@ class TestStart:
         assert "awaiting_pin" not in context.user_data
         update.message.reply_text.assert_awaited_once_with(
             "Witaj, User!\n\n"
-            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox) "
+            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
             "aby pobrać film lub audio."
         )
 
@@ -108,7 +108,7 @@ class TestHandlePin:
         assert called["url"] == "https://youtube.com/watch?v=abc"
         update.message.reply_text.assert_awaited_once_with(
             "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-            "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox) "
+            "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
             "aby pobrać film lub audio."
         )
 

@@ -134,6 +134,14 @@ def test_detect_platform_castbox():
     assert security.detect_platform("https://www.castbox.fm/episode/id123") == "castbox"
 
 
+def test_validate_url_spotify():
+    assert security.validate_url("https://open.spotify.com/episode/4rOoJ6Egrf8K2IrywzwOMk") is True
+
+
+def test_detect_platform_spotify():
+    assert security.detect_platform("https://open.spotify.com/episode/abc123") == "spotify"
+
+
 def test_detect_platform_unknown():
     assert security.detect_platform("https://example.com/video") is None
     assert security.detect_platform("") is None

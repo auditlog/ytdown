@@ -59,6 +59,7 @@ from bot.downloader import (
     strip_playlist_params,
     COOKIES_FILE,
 )
+from bot.spotify import download_direct_audio
 
 
 def escape_md(text: str) -> str:
@@ -302,6 +303,18 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         mode = download_data["mode"]
         selected_format = download_data["format"]
 
+        # Spotify: use resolved audio source instead of yt-dlp
+        if context.user_data.get('platform') == 'spotify':
+            resolved = context.user_data.get('spotify_resolved')
+            if not resolved:
+                await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
+                return
+            await download_spotify_resolved(
+                update, context, resolved, selected_format,
+                transcribe=False
+            )
+            return
+
         if media_type == "audio" and mode == "format_id":
             if not is_valid_ytdlp_format_id(selected_format):
                 await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
@@ -321,15 +334,32 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
             return
     elif data == "transcribe_summary":
-        await show_subtitle_source_menu(update, context, url, with_summary=True)
+        if context.user_data.get('platform') == 'spotify':
+            await _show_spotify_summary_options(update, context)
+        else:
+            await show_subtitle_source_menu(update, context, url, with_summary=True)
     elif data.startswith("summary_option_"):
         option = parse_summary_option(data)
         if option is None:
             await query.edit_message_text("Nieobsługiwana opcja podsumowania.")
             return
-        await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=option)
+        if context.user_data.get('platform') == 'spotify':
+            resolved = context.user_data.get('spotify_resolved')
+            if resolved:
+                await download_spotify_resolved(update, context, resolved, "mp3", transcribe=True, summary=True, summary_type=option)
+            else:
+                await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
+        else:
+            await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=option)
     elif data == "transcribe":
-        await show_subtitle_source_menu(update, context, url, with_summary=False)
+        if context.user_data.get('platform') == 'spotify':
+            resolved = context.user_data.get('spotify_resolved')
+            if resolved:
+                await download_spotify_resolved(update, context, resolved, "mp3", transcribe=True)
+            else:
+                await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
+        else:
+            await show_subtitle_source_menu(update, context, url, with_summary=False)
     elif data == "sub_src_ai":
         await download_file(update, context, "audio", "mp3", url, transcribe=True)
     elif data == "sub_src_ai_sum":
@@ -1102,6 +1132,173 @@ async def _download_single_playlist_item(
 
     add_download_record(chat_id, title, url, f"{media_type}_{format_choice}", file_size_mb)
     await status_msg.edit_text(f"[✅] {title}")
+
+
+async def _show_spotify_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows summary type options for Spotify episodes."""
+    query = update.callback_query
+    resolved = context.user_data.get('spotify_resolved', {})
+    title = resolved.get('title', 'Odcinek podcastu')
+
+    keyboard = [
+        [InlineKeyboardButton("1. Krótkie podsumowanie", callback_data="summary_option_1")],
+        [InlineKeyboardButton("2. Szczegółowe podsumowanie", callback_data="summary_option_2")],
+        [InlineKeyboardButton("3. Podsumowanie w punktach", callback_data="summary_option_3")],
+        [InlineKeyboardButton("4. Podział na zadania", callback_data="summary_option_4")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await safe_edit_message(
+        query,
+        f"*{escape_md(title)}*\n\nWybierz rodzaj podsumowania:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
+async def download_spotify_resolved(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    resolved: dict,
+    audio_format: str = "mp3",
+    transcribe: bool = False,
+    summary: bool = False,
+    summary_type: int | None = None,
+):
+    """Downloads audio from resolved Spotify source (iTunes direct or YouTube)."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    title = resolved.get('title', 'Podcast episode')
+
+    async def update_status(text):
+        await safe_edit_message(query, text)
+
+    await update_status("Pobieranie odcinka podcastu...")
+
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    current_date = datetime.now().strftime("%Y-%m-%d")
+    sanitized_title = sanitize_filename(title)
+    output_path = os.path.join(chat_download_path, f"{current_date} {sanitized_title}")
+
+    source = resolved['source']
+    downloaded_file_path = None
+
+    try:
+        if source == 'itunes':
+            # Direct MP3 download from iTunes
+            await update_status("Pobieranie audio z iTunes...")
+            loop = asyncio.get_event_loop()
+            downloaded_file_path = await loop.run_in_executor(
+                _executor,
+                lambda: download_direct_audio(resolved['audio_url'], output_path)
+            )
+        elif source == 'youtube':
+            # Download via yt-dlp from YouTube
+            youtube_url = resolved['youtube_url']
+            await update_status("Pobieranie audio z YouTube...")
+
+            ydl_opts = {
+                'outtmpl': f"{output_path}.%(ext)s",
+                'quiet': True,
+                'no_warnings': True,
+                'noplaylist': True,
+                'socket_timeout': 30,
+                'retries': 3,
+                'format': 'bestaudio/best',
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': audio_format,
+                    'preferredquality': '192',
+                }],
+            }
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                _executor,
+                lambda: yt_dlp.YoutubeDL(ydl_opts).download([youtube_url])
+            )
+
+            # Find downloaded file
+            _artifact_suffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
+            for file in os.listdir(chat_download_path):
+                full_path = os.path.join(chat_download_path, file)
+                if sanitized_title in file and full_path.startswith(output_path):
+                    if any(file.endswith(s) for s in _artifact_suffixes):
+                        continue
+                    downloaded_file_path = full_path
+                    break
+
+        if not downloaded_file_path:
+            await update_status("Nie udało się pobrać pliku audio.")
+            return
+
+        file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
+
+        if transcribe:
+            await update_status(
+                f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\n"
+                f"Rozpoczynanie transkrypcji audio...\n"
+                f"To może potrwać kilka minut."
+            )
+
+            if not CONFIG["GROQ_API_KEY"]:
+                await update_status(
+                    "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
+                    "Skontaktuj się z administratorem."
+                )
+                return
+
+            loop = asyncio.get_event_loop()
+            transcript_text = await loop.run_in_executor(
+                _executor,
+                lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, language=None)
+            )
+
+            if not transcript_text or transcript_text.strip() == "":
+                await update_status("Transkrypcja nie zwróciła tekstu.")
+                return
+
+            # Send transcription
+            header = f"*Transkrypcja: {escape_md(title)}*\n\n"
+            await send_long_message(context.bot, chat_id, transcript_text, header=header)
+
+            if summary and summary_type:
+                await update_status("Generowanie podsumowania...")
+                summary_text = await loop.run_in_executor(
+                    _executor,
+                    lambda: generate_summary(transcript_text, summary_type)
+                )
+                if summary_text:
+                    summary_header = f"*Podsumowanie: {escape_md(title)}*\n\n"
+                    await send_long_message(context.bot, chat_id, summary_text, header=summary_header)
+
+            add_download_record(chat_id, title, user_urls.get(chat_id, ''),
+                              "spotify_transcribe", file_size_mb)
+        else:
+            # Send audio file
+            await update_status(f"Wysyłanie pliku ({file_size_mb:.1f} MB)...")
+            with open(downloaded_file_path, 'rb') as f:
+                await context.bot.send_audio(
+                    chat_id=chat_id, audio=f, title=title,
+                    caption=title[:200],
+                    read_timeout=120, write_timeout=120,
+                )
+            add_download_record(chat_id, title, user_urls.get(chat_id, ''),
+                              f"spotify_audio_{audio_format}", file_size_mb)
+
+        await update_status(f"Gotowe: {title}")
+
+    except Exception as e:
+        logging.error("Error downloading Spotify episode: %s", e)
+        await update_status(f"Błąd pobierania: {str(e)[:200]}")
+    finally:
+        # Cleanup downloaded file
+        if downloaded_file_path and os.path.exists(downloaded_file_path):
+            try:
+                os.remove(downloaded_file_path)
+            except OSError:
+                pass
 
 
 async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, url):

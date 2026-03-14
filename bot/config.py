@@ -26,7 +26,9 @@ DEFAULT_CONFIG = {
     "GROQ_API_KEY": "",
     "PIN_CODE": "12345678",
     "CLAUDE_API_KEY": "",
-    "ADMIN_CHAT_ID": ""
+    "ADMIN_CHAT_ID": "",
+    "SPOTIFY_CLIENT_ID": "",
+    "SPOTIFY_CLIENT_SECRET": "",
 }
 
 # Download directory (absolute path based on project root)

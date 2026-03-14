@@ -54,6 +54,7 @@ from bot.cleanup import (
     get_disk_usage,
 )
 from bot.downloader import get_video_info, is_playlist_url, is_pure_playlist_url, get_playlist_info, strip_playlist_params
+from bot.spotify import resolve_spotify_episode, parse_spotify_episode_url
 
 
 def escape_md(text: str) -> str:
@@ -71,9 +72,9 @@ def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
     Returns:
         List of InlineKeyboardButton rows for InlineKeyboardMarkup.
     """
-    is_podcast = platform == 'castbox'
-    hide_flac = platform in ('tiktok', 'castbox')
-    hide_time_range = platform in ('tiktok', 'castbox')
+    is_podcast = platform in ('castbox', 'spotify')
+    hide_flac = platform in ('tiktok', 'castbox', 'spotify')
+    hide_time_range = platform in ('tiktok', 'castbox', 'spotify')
 
     if is_podcast:
         # Audio-only platform — no video options, no format list
@@ -201,7 +202,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if user_id in authorized_users:
         await update.message.reply_text(
             f"Witaj, {user_name}!\n\n"
-            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox) "
+            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
             "aby pobrać film lub audio."
         )
         return
@@ -291,7 +292,7 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
                 await update.message.reply_text(
                     "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-                    "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox) "
+                    "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
                     "aby pobrać film lub audio."
                 )
 
@@ -394,7 +395,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- TikTok (tiktok.com)\n"
         "- Instagram (instagram.com)\n"
         "- LinkedIn (linkedin.com)\n"
-        "- Castbox (castbox.fm)\n\n"
+        "- Castbox (castbox.fm)\n"
+        "- Spotify podcasty (open.spotify.com/episode)\n\n"
         "Komendy administracyjne:\n"
         "- /status - sprawdź przestrzeń dyskową\n"
         "- /cleanup - usuń stare pliki (>24h)",
@@ -637,7 +639,8 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             "- TikTok (tiktok.com)\n"
             "- Instagram (instagram.com)\n"
             "- LinkedIn (linkedin.com)\n"
-            "- Castbox (castbox.fm)"
+            "- Castbox (castbox.fm)\n"
+            "- Spotify podcasty (open.spotify.com/episode)"
         )
         return
 
@@ -715,6 +718,59 @@ async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TY
     await progress_message.edit_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
 
 
+async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    """Resolves a Spotify episode URL and shows download options."""
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    chat_id = update.effective_chat.id
+    progress_message = await update.message.reply_text(
+        "Spotify: wyszukiwanie odcinka podcastu..."
+    )
+
+    # Resolve in thread pool (network calls)
+    loop = asyncio.get_event_loop()
+    resolved = await loop.run_in_executor(
+        None, lambda: resolve_spotify_episode(url)
+    )
+
+    if not resolved:
+        await progress_message.edit_text(
+            "Nie udało się znaleźć tego odcinka podcastu.\n\n"
+            "Możliwe przyczyny:\n"
+            "- Odcinek jest dostępny wyłącznie na Spotify\n"
+            "- Nieprawidłowy link do odcinka\n\n"
+            "Spróbuj wyszukać ten podcast na YouTube lub innej platformie."
+        )
+        return
+
+    # Store resolved info for callback handlers
+    context.user_data['spotify_resolved'] = resolved
+    user_urls[chat_id] = url
+
+    title = resolved.get('title', 'Nieznany odcinek')
+    show_name = resolved.get('show_name') or resolved.get('channel', '')
+    duration = resolved.get('duration')
+    source = resolved['source']
+
+    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
+    source_label = "iTunes" if source == 'itunes' else "YouTube"
+
+    show_info = f"\nPodcast: {escape_md(show_name)}" if show_name else ""
+
+    keyboard = _build_main_keyboard('spotify')
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await progress_message.edit_text(
+        f"*{escape_md(title)}*{show_info}\n"
+        f"Czas trwania: {duration_str}\n"
+        f"Źródło audio: {source_label}\n\n"
+        f"Wybierz opcję:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Processes a media link after PIN authorization."""
     chat_id = update.effective_chat.id
@@ -735,6 +791,18 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
             "Wyślij link do konkretnego odcinka podcastu\n"
             "(np. castbox.fm/episode/...)."
         )
+        return
+
+    # Spotify: only episode URLs, not show/playlist/track
+    if platform == 'spotify':
+        if not parse_spotify_episode_url(url):
+            await update.message.reply_text(
+                "Spotify: obsługiwane są tylko linki do odcinków podcastów.\n\n"
+                "Wyślij link w formacie:\n"
+                "open.spotify.com/episode/..."
+            )
+            return
+        await _process_spotify_episode(update, context, url)
         return
 
     # Playlist detection — offer choice or go straight to playlist view

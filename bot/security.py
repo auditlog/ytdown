@@ -52,6 +52,7 @@ _DOMAIN_TO_PLATFORM = {
     'instagram.com': 'instagram',
     'linkedin.com': 'linkedin',
     'castbox.fm': 'castbox',
+    'open.spotify.com': 'spotify',
 }
 
 # Generated from _DOMAIN_TO_PLATFORM + www. variants for base domains (name.tld)
@@ -313,7 +314,7 @@ def normalize_url(url: str, _depth: int = 0) -> str:
 
 def get_media_label(platform: str | None) -> str:
     """Returns Polish locative noun for media type ('o filmie' / 'o odcinku')."""
-    if platform == 'castbox':
+    if platform in ('castbox', 'spotify'):
         return 'odcinku'
     return 'filmie'
 

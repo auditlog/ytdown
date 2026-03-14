@@ -627,5 +627,5 @@ def validate_url(url):
 
     valid = _validate_url(url)
     if not valid:
-        print("Error: Invalid URL. Supported: YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox.")
+        print("Error: Invalid URL. Supported: YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify.")
     return valid
