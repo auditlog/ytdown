@@ -1330,7 +1330,13 @@ async def download_spotify_resolved(
                         break
 
             if summary and summary_type:
-                if is_text_too_long_for_summary(transcript_text):
+                if not CONFIG.get("CLAUDE_API_KEY"):
+                    await update_status(
+                        "Transkrypcja zakończona.\n\n"
+                        "Podsumowanie niedostępne — brak klucza CLAUDE_API_KEY.\n"
+                        "Wysyłam samą transkrypcję."
+                    )
+                elif is_text_too_long_for_summary(transcript_text):
                     await update_status(
                         "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
                         "Wysyłam samą transkrypcję."
