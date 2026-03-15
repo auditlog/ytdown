@@ -29,6 +29,8 @@ DEFAULT_CONFIG = {
     "ADMIN_CHAT_ID": "",
     "SPOTIFY_CLIENT_ID": "",
     "SPOTIFY_CLIENT_SECRET": "",
+    "TELEGRAM_API_ID": "",
+    "TELEGRAM_API_HASH": "",
 }
 
 # Download directory (absolute path based on project root)
@@ -107,6 +109,8 @@ def load_config(
         "CLAUDE_API_KEY": environment.get("CLAUDE_API_KEY"),
         "PIN_CODE": environment.get("PIN_CODE"),
         "ADMIN_CHAT_ID": environment.get("ADMIN_CHAT_ID"),
+        "TELEGRAM_API_ID": environment.get("TELEGRAM_API_ID"),
+        "TELEGRAM_API_HASH": environment.get("TELEGRAM_API_HASH"),
     }
 
     for key, value in overrides.items():

@@ -4,6 +4,11 @@ mutagen>=1.47.0
 python-telegram-bot>=21.0
 requests>=2.31.0
 python-dotenv>=1.0.0
+Pillow>=10.0.0
+
+# Optional dependencies (enhanced functionality)
+# pyrogram>=2.0.100        # MTProto large file downloads (>20 MB)
+# instaloader>=4.10        # Instagram photo/carousel downloads
 
 # Development dependencies (optional)
 # pytest>=8.0.0

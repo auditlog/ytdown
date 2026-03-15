@@ -17,6 +17,7 @@ from datetime import datetime
 
 from bot.config import (
     ADMIN_CHAT_ID,
+    CONFIG,
     DOWNLOAD_PATH,
     PIN_CODE,
     authorized_users,
@@ -980,8 +981,11 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
-# Telegram Bot API download limit (bots can download files up to 20MB)
+# Telegram Bot API download limit (bots can download files up to 20MB via getFile)
 TELEGRAM_DOWNLOAD_LIMIT_MB = 20
+
+# Maximum file size for MTProto downloads (reasonable limit for transcription)
+MTPROTO_MAX_FILE_SIZE_MB = 200
 
 
 def _extract_audio_info(message) -> dict | None:
@@ -1078,23 +1082,36 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     file_size = audio_info.get('file_size') or 0
     file_size_mb = file_size / (1024 * 1024) if file_size else 0
+    use_mtproto = file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB
 
-    if file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB:
-        await message.reply_text(
-            f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
-            f"Rozmiar: {file_size_mb:.1f} MB\n"
-            f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB"
-        )
-        return
+    if use_mtproto:
+        from bot.mtproto import is_mtproto_available
+        if not is_mtproto_available():
+            await message.reply_text(
+                f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
+                f"Rozmiar: {file_size_mb:.1f} MB\n"
+                f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB\n\n"
+                f"Aby pobierać większe pliki, skonfiguruj TELEGRAM_API_ID "
+                f"i TELEGRAM_API_HASH (z my.telegram.org) oraz zainstaluj pyrogram."
+            )
+            return
+        if file_size_mb > MTPROTO_MAX_FILE_SIZE_MB:
+            await message.reply_text(
+                f"Plik jest zbyt duży.\n\n"
+                f"Rozmiar: {file_size_mb:.1f} MB\n"
+                f"Limit: {MTPROTO_MAX_FILE_SIZE_MB} MB"
+            )
+            return
 
-    progress_msg = await message.reply_text("Pobieranie pliku audio...")
+    progress_msg = await message.reply_text(
+        f"Pobieranie pliku audio ({file_size_mb:.1f} MB)..."
+        + (" (MTProto)" if use_mtproto else "")
+    )
 
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
     try:
-        tg_file = await context.bot.get_file(audio_info['file_id'])
-
         # Determine extension from MIME type
         mime_to_ext = {
             'audio/ogg': '.ogg',
@@ -1119,7 +1136,20 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         raw_path = os.path.join(chat_download_path, f"{timestamp}_{safe_title}{ext}")
 
-        await tg_file.download_to_drive(raw_path)
+        if use_mtproto:
+            from bot.mtproto import download_file_mtproto
+            success = await download_file_mtproto(
+                bot_token=CONFIG["TELEGRAM_BOT_TOKEN"],
+                chat_id=chat_id,
+                message_id=message.message_id,
+                dest_path=raw_path,
+            )
+            if not success:
+                await progress_msg.edit_text("Błąd pobierania pliku przez MTProto.")
+                return
+        else:
+            tg_file = await context.bot.get_file(audio_info['file_id'])
+            await tg_file.download_to_drive(raw_path)
 
         # Convert to MP3 if not already
         if ext == '.mp3':
@@ -1263,23 +1293,36 @@ async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     file_size = video_info.get('file_size') or 0
     file_size_mb = file_size / (1024 * 1024) if file_size else 0
+    use_mtproto = file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB
 
-    if file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB:
-        await message.reply_text(
-            f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
-            f"Rozmiar: {file_size_mb:.1f} MB\n"
-            f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB"
-        )
-        return
+    if use_mtproto:
+        from bot.mtproto import is_mtproto_available
+        if not is_mtproto_available():
+            await message.reply_text(
+                f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
+                f"Rozmiar: {file_size_mb:.1f} MB\n"
+                f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB\n\n"
+                f"Aby pobierać większe pliki, skonfiguruj TELEGRAM_API_ID "
+                f"i TELEGRAM_API_HASH (z my.telegram.org) oraz zainstaluj pyrogram."
+            )
+            return
+        if file_size_mb > MTPROTO_MAX_FILE_SIZE_MB:
+            await message.reply_text(
+                f"Plik jest zbyt duży.\n\n"
+                f"Rozmiar: {file_size_mb:.1f} MB\n"
+                f"Limit: {MTPROTO_MAX_FILE_SIZE_MB} MB"
+            )
+            return
 
-    progress_msg = await message.reply_text("Pobieranie pliku video...")
+    progress_msg = await message.reply_text(
+        f"Pobieranie pliku video ({file_size_mb:.1f} MB)..."
+        + (" (MTProto)" if use_mtproto else "")
+    )
 
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
     try:
-        tg_file = await context.bot.get_file(video_info['file_id'])
-
         title = video_info['title']
         ext = video_info['ext']
 
@@ -1288,7 +1331,20 @@ async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         video_path = os.path.join(chat_download_path, f"{timestamp}_{safe_title}{ext}")
 
-        await tg_file.download_to_drive(video_path)
+        if use_mtproto:
+            from bot.mtproto import download_file_mtproto
+            success = await download_file_mtproto(
+                bot_token=CONFIG["TELEGRAM_BOT_TOKEN"],
+                chat_id=chat_id,
+                message_id=message.message_id,
+                dest_path=video_path,
+            )
+            if not success:
+                await progress_msg.edit_text("Błąd pobierania pliku przez MTProto.")
+                return
+        else:
+            tg_file = await context.bot.get_file(video_info['file_id'])
+            await tg_file.download_to_drive(video_path)
 
         # Extract audio from video
         await progress_msg.edit_text("Ekstrakcja audio z video...")
