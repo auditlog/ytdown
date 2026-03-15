@@ -8,9 +8,12 @@ import logging
 import os
 import re
 from datetime import datetime
+from io import BytesIO
 from urllib.parse import urlparse, parse_qs
 
+import requests
 import yt_dlp
+from PIL import Image
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
 
@@ -610,6 +613,59 @@ def get_playlist_info(url: str, max_items: int = 10) -> dict | None:
 
     except Exception as e:
         logging.error("Error getting playlist info: %s", e)
+        return None
+
+
+def download_thumbnail(info: dict, output_dir: str, embed: bool = False) -> str | None:
+    """Downloads video thumbnail from yt-dlp info dict.
+
+    For embed=True, converts to JPEG and scales to max 320x320
+    (Telegram Bot API thumbnail requirement).
+    For embed=False, downloads full-resolution image.
+
+    Args:
+        info: yt-dlp info dictionary containing 'thumbnail' or 'thumbnails'.
+        output_dir: Directory to save the thumbnail file.
+        embed: If True, resize for Telegram embed (max 320x320 JPEG).
+
+    Returns:
+        Path to downloaded thumbnail file, or None on error.
+    """
+    # Pick best thumbnail URL
+    thumb_url = None
+    thumbnails = info.get('thumbnails') or []
+    if thumbnails:
+        # yt-dlp lists thumbnails in ascending quality — last is best
+        thumb_url = thumbnails[-1].get('url')
+    if not thumb_url:
+        thumb_url = info.get('thumbnail')
+    if not thumb_url:
+        return None
+
+    try:
+        resp = requests.get(thumb_url, timeout=15)
+        resp.raise_for_status()
+
+        img = Image.open(BytesIO(resp.content))
+
+        if embed:
+            # Telegram requires JPEG, max 320x320
+            img.thumbnail((320, 320), Image.LANCZOS)
+            suffix = "_thumb_embed.jpg"
+        else:
+            suffix = "_thumb_full.jpg"
+
+        # Convert to RGB (handles PNG with alpha, WebP, etc.)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        safe_title = sanitize_filename(info.get('title', 'thumbnail'))
+        thumb_path = os.path.join(output_dir, f"{safe_title}{suffix}")
+        img.save(thumb_path, 'JPEG', quality=85)
+        return thumb_path
+
+    except Exception as e:
+        logging.warning("Failed to download thumbnail: %s", e)
         return None
 
 

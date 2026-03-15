@@ -57,6 +57,7 @@ from bot.downloader import (
     download_subtitles,
     parse_subtitle_file,
     strip_playlist_params,
+    download_thumbnail,
     COOKIES_FILE,
 )
 from bot.spotify import download_direct_audio
@@ -379,6 +380,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _handle_subtitle_summary_callback(update, context, url, data)
     elif data == "formats":
         await handle_formats_list(update, context, url)
+    elif data == "thumbnail":
+        await _handle_thumbnail_download(update, context, url)
     elif data == "time_range":
         await show_time_range_options(update, context, url)
     elif data == "time_range_clear":
@@ -390,6 +393,47 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await apply_time_range_preset(update, context, url, preset)
     elif data == "back":
         await back_to_main_menu(update, context, url)
+
+
+async def _handle_thumbnail_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    """Downloads and sends full-resolution thumbnail as a photo."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    await safe_edit_message(query, "Pobieranie miniaturki...")
+
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    loop = asyncio.get_event_loop()
+    info = await loop.run_in_executor(_executor, get_video_info, url)
+    if not info:
+        await safe_edit_message(query, "Nie udało się pobrać informacji o wideo.")
+        return
+
+    title = info.get('title', 'Miniaturka')
+    thumb_path = await loop.run_in_executor(
+        _executor, download_thumbnail, info, chat_download_path, False
+    )
+
+    if not thumb_path:
+        await safe_edit_message(query, "Brak dostępnej miniaturki dla tego wideo.")
+        return
+
+    try:
+        with open(thumb_path, 'rb') as f:
+            await context.bot.send_photo(
+                chat_id=chat_id,
+                photo=f,
+                caption=title[:200],
+            )
+        await safe_edit_message(query, "Miniaturka została wysłana!")
+    except Exception as e:
+        logging.error("Error sending thumbnail: %s", e)
+        await safe_edit_message(query, "Błąd podczas wysyłania miniaturki.")
+    finally:
+        if os.path.exists(thumb_path):
+            os.remove(thumb_path)
 
 
 async def download_file(
@@ -783,24 +827,40 @@ async def download_file(
         else:
             await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie pliku do Telegram...")
 
-            with open(downloaded_file_path, 'rb') as f:
-                if media_type == "audio":
-                    await context.bot.send_audio(
-                        chat_id=chat_id,
-                        audio=f,
-                        title=title,
-                        caption=f"{title}",
-                        read_timeout=60,
-                        write_timeout=60,
-                    )
-                else:
-                    await context.bot.send_video(
-                        chat_id=chat_id,
-                        video=f,
-                        caption=f"{title}",
-                        read_timeout=60,
-                        write_timeout=60,
-                    )
+            # Download thumbnail for embed
+            thumb_path = await asyncio.get_event_loop().run_in_executor(
+                _executor, download_thumbnail, info, chat_download_path, True
+            )
+
+            try:
+                with open(downloaded_file_path, 'rb') as f:
+                    thumb_file = open(thumb_path, 'rb') if thumb_path else None
+                    try:
+                        if media_type == "audio":
+                            await context.bot.send_audio(
+                                chat_id=chat_id,
+                                audio=f,
+                                title=title,
+                                caption=f"{title}",
+                                thumbnail=thumb_file,
+                                read_timeout=60,
+                                write_timeout=60,
+                            )
+                        else:
+                            await context.bot.send_video(
+                                chat_id=chat_id,
+                                video=f,
+                                caption=f"{title}",
+                                thumbnail=thumb_file,
+                                read_timeout=60,
+                                write_timeout=60,
+                            )
+                    finally:
+                        if thumb_file:
+                            thumb_file.close()
+            finally:
+                if thumb_path and os.path.exists(thumb_path):
+                    os.remove(thumb_path)
 
             os.remove(downloaded_file_path)
 
@@ -1165,20 +1225,43 @@ async def _download_single_playlist_item(
             f"Plik za duży do wysłania ({file_size_mb:.0f} MB, limit Telegram: 50 MB)"
         )
 
+    # Download thumbnail for embed
+    item_info = await loop.run_in_executor(
+        _executor, get_video_info, url
+    )
+    thumb_path = None
+    if item_info:
+        thumb_path = await loop.run_in_executor(
+            _executor, download_thumbnail, item_info, chat_download_path, True
+        )
+
     try:
         with open(downloaded_file_path, 'rb') as f:
-            if media_type == "audio":
-                await context.bot.send_audio(
-                    chat_id=chat_id, audio=f, title=title,
-                    caption=title[:200],
-                    read_timeout=120, write_timeout=120,
-                )
-            else:
-                await context.bot.send_video(
-                    chat_id=chat_id, video=f, caption=title[:200],
-                    read_timeout=120, write_timeout=120,
-                )
+            thumb_file = open(thumb_path, 'rb') if thumb_path else None
+            try:
+                if media_type == "audio":
+                    await context.bot.send_audio(
+                        chat_id=chat_id, audio=f, title=title,
+                        caption=title[:200],
+                        thumbnail=thumb_file,
+                        read_timeout=120, write_timeout=120,
+                    )
+                else:
+                    await context.bot.send_video(
+                        chat_id=chat_id, video=f, caption=title[:200],
+                        thumbnail=thumb_file,
+                        read_timeout=120, write_timeout=120,
+                    )
+            finally:
+                if thumb_file:
+                    thumb_file.close()
     finally:
+        # Always clean up thumbnail and the file
+        if thumb_path and os.path.exists(thumb_path):
+            try:
+                os.remove(thumb_path)
+            except OSError:
+                pass
         # Always clean up the file
         try:
             os.remove(downloaded_file_path)

@@ -112,7 +112,10 @@ def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
 
     if not hide_time_range:
         keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
-    keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
+    keyboard.append([
+        InlineKeyboardButton("Lista formatów", callback_data="formats"),
+        InlineKeyboardButton("Miniaturka", callback_data="thumbnail"),
+    ])
 
     return keyboard
 
