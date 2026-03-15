@@ -319,11 +319,14 @@ def resolve_spotify_episode(url: str) -> dict | None:
         show_name = spotify_info['show_name']
         duration_sec = spotify_info['duration_ms'] // 1000 if spotify_info['duration_ms'] else None
     else:
-        # Fallback: extract title from URL slug
-        title = _extract_title_from_url(url) or f"Spotify episode {episode_id}"
-        show_name = ""
-        duration_sec = None
-        logging.info("No Spotify API credentials — using URL slug as search query")
+        # Without Spotify API credentials we cannot get episode metadata
+        # (Spotify pages are SPA, no server-side rendering of titles).
+        # Return a special marker so the caller can show a clear error.
+        logging.warning("Cannot resolve Spotify episode without API credentials")
+        return {
+            'source': 'no_credentials',
+            'episode_id': episode_id,
+        }
 
     # Phase 2a: Search iTunes (priority — direct MP3 URL)
     itunes = search_itunes_episode(title, show_name, duration_sec)

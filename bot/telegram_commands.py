@@ -758,6 +758,16 @@ async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT
         )
         return
 
+    if resolved.get('source') == 'no_credentials':
+        await progress_message.edit_text(
+            "Spotify wymaga skonfigurowania kluczy API.\n\n"
+            "Dodaj do konfiguracji:\n"
+            "- SPOTIFY_CLIENT_ID\n"
+            "- SPOTIFY_CLIENT_SECRET\n\n"
+            "Klucze uzyskasz na developer.spotify.com (utwórz aplikację z Web API)."
+        )
+        return
+
     # Store resolved info for callback handlers
     context.user_data['spotify_resolved'] = resolved
     user_urls[chat_id] = url

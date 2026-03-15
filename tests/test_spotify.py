@@ -243,7 +243,12 @@ class TestResolveSpotifyEpisode:
         assert result['audio_url'] == 'https://cdn.example.com/ep.mp3'
 
     def test_youtube_fallback(self, monkeypatch):
-        monkeypatch.setattr("bot.spotify.get_spotify_episode_info", lambda eid: None)
+        monkeypatch.setattr("bot.spotify.get_spotify_episode_info", lambda eid: {
+            'title': 'Fallback Episode',
+            'show_name': 'Some Show',
+            'duration_ms': 1800000,
+            'description': '', 'release_date': '', 'language': '',
+        })
         monkeypatch.setattr("bot.spotify.search_itunes_episode", lambda *a, **kw: None)
         monkeypatch.setattr("bot.spotify.search_youtube_episode", lambda t, s, d: {
             'url': 'https://www.youtube.com/watch?v=xyz',
@@ -259,8 +264,19 @@ class TestResolveSpotifyEpisode:
         assert result['source'] == 'youtube'
         assert 'xyz' in result['youtube_url']
 
-    def test_returns_none_when_not_found(self, monkeypatch):
+    def test_returns_no_credentials_when_no_api_keys(self, monkeypatch):
         monkeypatch.setattr("bot.spotify.get_spotify_episode_info", lambda eid: None)
+
+        result = resolve_spotify_episode("https://open.spotify.com/episode/abc123")
+        assert result is not None
+        assert result['source'] == 'no_credentials'
+        assert result['episode_id'] == 'abc123'
+
+    def test_returns_none_when_not_found_with_credentials(self, monkeypatch):
+        monkeypatch.setattr("bot.spotify.get_spotify_episode_info", lambda eid: {
+            'title': 'Test', 'show_name': 'Show', 'duration_ms': 60000,
+            'description': '', 'release_date': '', 'language': '',
+        })
         monkeypatch.setattr("bot.spotify.search_itunes_episode", lambda *a, **kw: None)
         monkeypatch.setattr("bot.spotify.search_youtube_episode", lambda *a, **kw: None)
 
