@@ -577,6 +577,8 @@ async def _download_and_send_ig_videos(
     query = update.callback_query
     chat_id = update.effective_chat.id
 
+    sent_count = 0
+
     for i, entry in enumerate(video_entries):
         video_url = entry.get('url') or entry.get('webpage_url', '')
         if not video_url:
@@ -632,11 +634,18 @@ async def _download_and_send_ig_videos(
                         read_timeout=120, write_timeout=120,
                     )
                 os.remove(downloaded)
+                sent_count += 1
 
         except Exception as e:
             logging.error("Error downloading Instagram video %d: %s", i + 1, e)
 
-    await safe_edit_message(query, f"Wysłano {len(video_entries)} filmów!")
+    total = len(video_entries)
+    if sent_count == total:
+        await safe_edit_message(query, f"Wysłano {total} filmów!")
+    elif sent_count > 0:
+        await safe_edit_message(query, f"Wysłano {sent_count} z {total} filmów.")
+    else:
+        await safe_edit_message(query, "Nie udało się wysłać żadnego filmu.")
 
 
 async def download_file(
@@ -1548,8 +1557,14 @@ async def download_spotify_resolved(
                     if result.returncode == 0:
                         os.remove(downloaded_file_path)
                         downloaded_file_path = converted_path
+                    else:
+                        logging.warning("ffmpeg conversion returned %d, using original MP3", result.returncode)
+                        if os.path.exists(converted_path):
+                            os.remove(converted_path)
                 except Exception as e:
                     logging.warning("Format conversion failed, using original MP3: %s", e)
+                    if os.path.exists(converted_path):
+                        os.remove(converted_path)
         elif source == 'youtube':
             # Download via yt-dlp from YouTube
             youtube_url = resolved['youtube_url']

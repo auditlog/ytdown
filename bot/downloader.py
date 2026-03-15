@@ -13,7 +13,6 @@ from urllib.parse import urlparse, parse_qs
 
 import requests
 import yt_dlp
-from PIL import Image
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
 
@@ -720,6 +719,8 @@ def download_thumbnail(info: dict, output_dir: str, embed: bool = False) -> str 
         return None
 
     try:
+        from PIL import Image
+
         resp = requests.get(thumb_url, timeout=15)
         resp.raise_for_status()
 
