@@ -17,6 +17,7 @@ from PIL import Image
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
 
+IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
 
 FORMAT_ID_PATTERN = re.compile(r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$")
 SUPPORTED_AUDIO_FORMATS = ("mp3", "m4a", "wav", "flac", "ogg", "opus")
@@ -613,6 +614,82 @@ def get_playlist_info(url: str, max_items: int = 10) -> dict | None:
 
     except Exception as e:
         logging.error("Error getting playlist info: %s", e)
+        return None
+
+
+def get_instagram_post_info(url):
+    """Fetches full Instagram post info, including carousel entries.
+
+    Unlike get_video_info(), does NOT set noplaylist=True,
+    allowing yt-dlp to return all carousel items.
+
+    Args:
+        url: Instagram post URL.
+
+    Returns:
+        dict or None: Post info dictionary or None on error.
+    """
+    try:
+        ydl_opts = get_basic_ydl_opts()
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            return info
+    except Exception as e:
+        logging.error("Error getting Instagram post info for %s: %s", url, e)
+        return None
+
+
+def is_photo_entry(info: dict) -> bool:
+    """Returns True if yt-dlp info dict represents a photo (not video).
+
+    Checks file extension and absence of video/audio streams.
+
+    Args:
+        info: Single entry info dict from yt-dlp.
+
+    Returns:
+        True if the entry is a photo.
+    """
+    if not info:
+        return False
+    ext = (info.get('ext') or '').lower()
+    if ext in IMAGE_EXTENSIONS:
+        return True
+    # No formats and no duration — likely a photo
+    if not info.get('formats') and not info.get('duration'):
+        url = info.get('url', '')
+        return any(url.lower().endswith(f'.{e}') for e in IMAGE_EXTENSIONS)
+    return False
+
+
+def download_photo(url: str, output_path: str) -> str | None:
+    """Downloads a photo from direct URL.
+
+    Args:
+        url: Direct image URL.
+        output_path: File path without extension.
+
+    Returns:
+        Path to downloaded file, or None on error.
+    """
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+
+        content_type = resp.headers.get('content-type', '')
+        if 'png' in content_type:
+            ext = 'png'
+        elif 'webp' in content_type:
+            ext = 'webp'
+        else:
+            ext = 'jpg'
+
+        file_path = f"{output_path}.{ext}"
+        with open(file_path, 'wb') as f:
+            f.write(resp.content)
+        return file_path
+    except Exception as e:
+        logging.error("Error downloading photo: %s", e)
         return None
 
 

@@ -60,6 +60,9 @@ try:
         is_playlist_url,
         get_playlist_info,
         strip_playlist_params,
+        get_instagram_post_info,
+        is_photo_entry,
+        download_photo,
     )
 except ImportError:
     get_video_info = None
@@ -71,6 +74,9 @@ except ImportError:
     is_playlist_url = None
     get_playlist_info = None
     strip_playlist_params = None
+    get_instagram_post_info = None
+    is_photo_entry = None
+    download_photo = None
 
 try:
     from bot.telegram_commands import (
@@ -160,6 +166,9 @@ __all__ = [
     'is_playlist_url',
     'get_playlist_info',
     'strip_playlist_params',
+    'get_instagram_post_info',
+    'is_photo_entry',
+    'download_photo',
     # Telegram commands
     'start',
     'help_command',

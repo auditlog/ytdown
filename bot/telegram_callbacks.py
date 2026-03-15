@@ -12,7 +12,7 @@ from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
 import yt_dlp
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 from telegram.error import BadRequest
 from telegram.helpers import escape_markdown
@@ -58,6 +58,7 @@ from bot.downloader import (
     parse_subtitle_file,
     strip_playlist_params,
     download_thumbnail,
+    download_photo,
     COOKIES_FILE,
 )
 from bot.spotify import download_direct_audio
@@ -303,6 +304,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # normalize_url may do HTTP HEAD for Castbox short links — run in executor
     url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
 
+    # Instagram photo/carousel callbacks
+    if data.startswith("dl_ig_"):
+        await _handle_instagram_download(update, context, url, data)
+        return
+
     if data.startswith("dl_"):
         download_data = parse_download_callback(data)
         if not download_data:
@@ -434,6 +440,203 @@ async def _handle_thumbnail_download(update: Update, context: ContextTypes.DEFAU
     finally:
         if os.path.exists(thumb_path):
             os.remove(thumb_path)
+
+
+async def _handle_instagram_download(
+    update: Update, context: ContextTypes.DEFAULT_TYPE, url: str, callback_data: str
+):
+    """Routes Instagram photo/carousel download callbacks."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    carousel = context.user_data.get('ig_carousel')
+    if not carousel:
+        await safe_edit_message(query, "Sesja wygasła. Wyślij link ponownie.")
+        return
+
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    title = carousel.get('title', 'Instagram post')
+    photos = carousel.get('photos', [])
+    videos = carousel.get('videos', [])
+
+    if callback_data == "dl_ig_photos":
+        await _download_and_send_ig_photos(
+            update, context, photos, title, chat_download_path
+        )
+    elif callback_data == "dl_ig_videos":
+        await _download_and_send_ig_videos(
+            update, context, videos, title, url, chat_download_path
+        )
+    elif callback_data == "dl_ig_all":
+        if photos:
+            await _download_and_send_ig_photos(
+                update, context, photos, title, chat_download_path
+            )
+        if videos:
+            await _download_and_send_ig_videos(
+                update, context, videos, title, url, chat_download_path
+            )
+
+
+async def _download_and_send_ig_photos(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+    photo_entries: list, title: str, download_path: str,
+):
+    """Downloads and sends Instagram photos, using media groups for multiple."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    count = len(photo_entries)
+
+    await safe_edit_message(
+        query,
+        f"Pobieranie {'zdjęcia' if count == 1 else f'{count} zdjęć'}..."
+    )
+
+    downloaded_paths = []
+    loop = asyncio.get_event_loop()
+    current_date = datetime.now().strftime("%Y-%m-%d")
+
+    for i, entry in enumerate(photo_entries):
+        photo_url = entry.get('url', '')
+        if not photo_url:
+            # Fallback: use thumbnail as photo source
+            thumbs = entry.get('thumbnails', [])
+            if thumbs:
+                photo_url = thumbs[-1].get('url', '')
+        if not photo_url:
+            logging.warning("No URL for Instagram photo entry %d", i)
+            continue
+
+        safe_title = sanitize_filename(f"{title}_{i + 1}")
+        output = os.path.join(download_path, f"{current_date} {safe_title}")
+
+        path = await loop.run_in_executor(_executor, download_photo, photo_url, output)
+        if path:
+            downloaded_paths.append(path)
+
+    if not downloaded_paths:
+        await safe_edit_message(query, "Nie udało się pobrać zdjęć.")
+        return
+
+    try:
+        if len(downloaded_paths) == 1:
+            with open(downloaded_paths[0], 'rb') as f:
+                await context.bot.send_photo(
+                    chat_id=chat_id, photo=f,
+                    caption=title[:200],
+                    read_timeout=60, write_timeout=60,
+                )
+        else:
+            # Telegram media group limit: 10 items per batch
+            for batch_start in range(0, len(downloaded_paths), 10):
+                batch = downloaded_paths[batch_start:batch_start + 10]
+                file_handles = []
+                media_group = []
+
+                for j, path in enumerate(batch):
+                    fh = open(path, 'rb')
+                    file_handles.append(fh)
+                    caption = title[:200] if (batch_start + j) == 0 else None
+                    media_group.append(InputMediaPhoto(media=fh, caption=caption))
+
+                try:
+                    await context.bot.send_media_group(
+                        chat_id=chat_id, media=media_group,
+                        read_timeout=120, write_timeout=120,
+                    )
+                finally:
+                    for fh in file_handles:
+                        fh.close()
+
+                if batch_start + 10 < len(downloaded_paths):
+                    await asyncio.sleep(1)
+
+        from bot.config import add_download_record
+        total_size = sum(os.path.getsize(p) for p in downloaded_paths) / (1024 * 1024)
+        add_download_record(chat_id, title, user_urls.get(chat_id, ''), "photo", total_size)
+        await safe_edit_message(query, f"Wysłano {len(downloaded_paths)} zdjęć!")
+
+    except Exception as e:
+        logging.error("Error sending Instagram photos: %s", e)
+        await safe_edit_message(query, "Błąd podczas wysyłania zdjęć.")
+    finally:
+        for path in downloaded_paths:
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
+
+async def _download_and_send_ig_videos(
+    update: Update, context: ContextTypes.DEFAULT_TYPE,
+    video_entries: list, title: str, url: str, download_path: str,
+):
+    """Downloads and sends Instagram videos from carousel using yt-dlp."""
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    for i, entry in enumerate(video_entries):
+        video_url = entry.get('url') or entry.get('webpage_url', '')
+        if not video_url:
+            continue
+
+        status = f"Pobieranie filmu {i + 1}/{len(video_entries)}..."
+        await safe_edit_message(query, status)
+
+        safe_title = sanitize_filename(f"{title}_video_{i + 1}")
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        output_path = os.path.join(download_path, f"{current_date} {safe_title}")
+
+        ydl_opts = {
+            'outtmpl': f"{output_path}.%(ext)s",
+            'format': 'best',
+            'quiet': True,
+            'no_warnings': True,
+            'noplaylist': True,
+        }
+        from bot.downloader import COOKIES_FILE as _cookies
+        if os.path.exists(_cookies):
+            ydl_opts['cookiefile'] = _cookies
+
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                _executor,
+                lambda opts=ydl_opts, u=video_url: yt_dlp.YoutubeDL(opts).download([u])
+            )
+
+            # Find downloaded file
+            downloaded = None
+            for f in os.listdir(download_path):
+                full = os.path.join(download_path, f)
+                if f.startswith(f"{current_date} {safe_title}") and os.path.isfile(full):
+                    downloaded = full
+                    break
+
+            if downloaded:
+                file_size = os.path.getsize(downloaded) / (1024 * 1024)
+                if file_size > 50:
+                    await safe_edit_message(
+                        query,
+                        f"Film {i + 1} za duży ({file_size:.0f} MB, limit: 50 MB)."
+                    )
+                    os.remove(downloaded)
+                    continue
+
+                with open(downloaded, 'rb') as f:
+                    await context.bot.send_video(
+                        chat_id=chat_id, video=f,
+                        caption=f"{title} ({i + 1}/{len(video_entries)})"[:200],
+                        read_timeout=120, write_timeout=120,
+                    )
+                os.remove(downloaded)
+
+        except Exception as e:
+            logging.error("Error downloading Instagram video %d: %s", i + 1, e)
+
+    await safe_edit_message(query, f"Wysłano {len(video_entries)} filmów!")
 
 
 async def download_file(

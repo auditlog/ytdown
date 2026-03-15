@@ -53,7 +53,15 @@ from bot.cleanup import (
     cleanup_old_files,
     get_disk_usage,
 )
-from bot.downloader import get_video_info, is_playlist_url, is_pure_playlist_url, get_playlist_info, strip_playlist_params
+from bot.downloader import (
+    get_video_info,
+    is_playlist_url,
+    is_pure_playlist_url,
+    get_playlist_info,
+    strip_playlist_params,
+    get_instagram_post_info,
+    is_photo_entry,
+)
 from bot.spotify import resolve_spotify_episode, parse_spotify_episode_url
 
 
@@ -116,6 +124,32 @@ def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
         InlineKeyboardButton("Lista formatów", callback_data="formats"),
         InlineKeyboardButton("Miniaturka", callback_data="thumbnail"),
     ])
+
+    return keyboard
+
+
+def _build_instagram_photo_keyboard(photos: list, videos: list) -> list:
+    """Builds keyboard for Instagram photo/carousel posts.
+
+    Args:
+        photos: List of photo entries from yt-dlp.
+        videos: List of video entries from yt-dlp.
+
+    Returns:
+        List of InlineKeyboardButton rows.
+    """
+    keyboard = []
+
+    if photos:
+        label = f"Pobierz zdjęcia ({len(photos)})" if len(photos) > 1 else "Pobierz zdjęcie"
+        keyboard.append([InlineKeyboardButton(label, callback_data="dl_ig_photos")])
+
+    if videos:
+        label = f"Pobierz filmy ({len(videos)})" if len(videos) > 1 else "Pobierz film"
+        keyboard.append([InlineKeyboardButton(label, callback_data="dl_ig_videos")])
+
+    if photos and videos:
+        keyboard.append([InlineKeyboardButton("Pobierz wszystko", callback_data="dl_ig_all")])
 
     return keyboard
 
@@ -833,6 +867,63 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
             return
         await _process_spotify_episode(update, context, url)
         return
+
+    # Instagram: detect photo/carousel posts before standard video flow
+    if platform == 'instagram':
+        progress_message = await update.message.reply_text("Pobieranie informacji o poście...")
+        import asyncio
+        ig_info = await asyncio.get_event_loop().run_in_executor(
+            None, get_instagram_post_info, url
+        )
+        if ig_info:
+            # Carousel post — multiple entries (photos and/or videos)
+            if ig_info.get('_type') == 'playlist' and ig_info.get('entries'):
+                entries = [e for e in ig_info.get('entries', []) if e]
+                photos = [e for e in entries if is_photo_entry(e)]
+                videos = [e for e in entries if not is_photo_entry(e)]
+
+                if photos:
+                    context.user_data['ig_carousel'] = {
+                        'photos': photos,
+                        'videos': videos,
+                        'title': ig_info.get('title', 'Instagram post'),
+                    }
+                    keyboard = _build_instagram_photo_keyboard(photos, videos)
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    title = escape_md(ig_info.get('title', 'Instagram post'))
+                    parts = []
+                    if photos:
+                        parts.append(f"{len(photos)} zdjęć" if len(photos) > 1 else "1 zdjęcie")
+                    if videos:
+                        parts.append(f"{len(videos)} filmów" if len(videos) > 1 else "1 film")
+                    await progress_message.edit_text(
+                        f"*{title}*\nKaruzela: {', '.join(parts)}\n\nWybierz co pobrać:",
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
+                    return
+                # Carousel with only videos — fall through to normal flow
+
+            # Single photo post
+            elif is_photo_entry(ig_info):
+                context.user_data['ig_carousel'] = {
+                    'photos': [ig_info],
+                    'videos': [],
+                    'title': ig_info.get('title', 'Instagram photo'),
+                }
+                keyboard = [[InlineKeyboardButton("Pobierz zdjęcie", callback_data="dl_ig_photos")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                title = escape_md(ig_info.get('title', 'Instagram photo'))
+                await progress_message.edit_text(
+                    f"*{title}*\nTyp: zdjęcie\n\nWybierz opcję:",
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
+                return
+
+        # Video post or failed info — fall through to standard flow
+        # Delete progress message to avoid duplicate
+        await progress_message.delete()
 
     # Playlist detection — offer choice or go straight to playlist view
     if is_playlist_url(url):
