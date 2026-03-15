@@ -1111,8 +1111,33 @@ async def _download_single_playlist_item(
         else:
             ydl_opts['format'] = 'best'
 
-    # Download in thread pool
+    # Pre-download size check (same guard as download_file)
     loop = asyncio.get_event_loop()
+    try:
+        check_opts = ydl_opts.copy()
+        check_opts['simulate'] = True
+        format_info = await loop.run_in_executor(
+            _executor,
+            lambda: yt_dlp.YoutubeDL(check_opts).extract_info(url, download=False)
+        )
+        if format_info:
+            file_size = 0
+            if 'requested_formats' in format_info:
+                file_size = sum(f.get('filesize', 0) or 0 for f in format_info['requested_formats'])
+            else:
+                file_size = format_info.get('filesize', 0) or 0
+            if file_size > 0:
+                size_mb = file_size / (1024 * 1024)
+                if size_mb > MAX_FILE_SIZE_MB:
+                    raise RuntimeError(
+                        f"Plik za duży ({size_mb:.0f} MB, limit: {MAX_FILE_SIZE_MB} MB)"
+                    )
+    except RuntimeError:
+        raise
+    except Exception:
+        pass  # Size check is best-effort, proceed with download
+
+    # Download in thread pool
     await loop.run_in_executor(
         _executor,
         lambda: yt_dlp.YoutubeDL(ydl_opts).download([url])
