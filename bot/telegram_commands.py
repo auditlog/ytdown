@@ -622,7 +622,7 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             # Get video info to validate time range against duration
             info = get_video_info(current_url)
             if info:
-                duration = info.get('duration', 0)
+                duration = int(info.get('duration') or 0)
                 title = info.get('title', 'Nieznany tytuł')
                 duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
                 
@@ -811,7 +811,7 @@ async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT
 
     title = resolved.get('title', 'Nieznany odcinek')
     show_name = resolved.get('show_name') or resolved.get('channel', '')
-    duration = resolved.get('duration')
+    duration = int(resolved.get('duration') or 0)
     source = resolved['source']
 
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
@@ -953,7 +953,7 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
         return
 
     title = info.get('title', 'Nieznany tytuł')
-    duration = info.get('duration', 0)
+    duration = int(info.get('duration') or 0)
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
     estimated_size = estimate_file_size(info)

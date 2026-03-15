@@ -18,7 +18,7 @@ COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 
 IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
 
-FORMAT_ID_PATTERN = re.compile(r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$")
+FORMAT_ID_PATTERN = re.compile(r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$|^(?:dash-[\da-zA-Z]+)$|^(?:[\da-zA-Z]+-\d+)$")
 SUPPORTED_AUDIO_FORMATS = ("mp3", "m4a", "wav", "flac", "ogg", "opus")
 AUDIO_FORMATS = set(SUPPORTED_AUDIO_FORMATS)
 
@@ -616,11 +616,61 @@ def get_playlist_info(url: str, max_items: int = 10) -> dict | None:
         return None
 
 
-def get_instagram_post_info(url):
-    """Fetches full Instagram post info, including carousel entries.
+def _load_instagram_cookies():
+    """Loads Instagram session cookies from the cookies file.
 
-    Unlike get_video_info(), does NOT set noplaylist=True,
-    allowing yt-dlp to return all carousel items.
+    Returns:
+        dict: Cookie name-value pairs, or empty dict on error.
+    """
+    cookies = {}
+    if not os.path.exists(COOKIES_FILE):
+        return cookies
+    try:
+        with open(COOKIES_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    parts = line.split('\t')
+                    if len(parts) >= 7 and 'instagram' in parts[0]:
+                        cookies[parts[5]] = parts[6]
+    except Exception as e:
+        logging.error("Error loading Instagram cookies: %s", e)
+    return cookies
+
+
+def _get_instaloader_context():
+    """Creates an instaloader context with session cookies.
+
+    Returns:
+        instaloader.Instaloader or None: Configured instance, or None on error.
+    """
+    try:
+        import instaloader
+    except ImportError:
+        logging.error("instaloader not installed")
+        return None
+
+    cookies = _load_instagram_cookies()
+    session_id = cookies.get('sessionid', '')
+    if not session_id:
+        logging.warning("No Instagram sessionid in cookies")
+        return None
+
+    loader = instaloader.Instaloader(max_connection_attempts=1)
+    for name in ('sessionid', 'ds_user_id', 'csrftoken', 'ig_did', 'mid', 'rur'):
+        if cookies.get(name):
+            loader.context._session.cookies.set(name, cookies[name], domain='.instagram.com')
+    loader.context.username = cookies.get('ds_user_id', '')
+    return loader
+
+
+def get_instagram_post_info(url):
+    """Fetches full Instagram post info using instaloader.
+
+    Returns a dict compatible with the rest of the bot code:
+    - For carousels: {'_type': 'playlist', 'entries': [...], 'title': ...}
+    - For single photos: {'ext': 'jpg', 'url': ..., 'title': ...}
+    - For videos: falls through to yt-dlp (returns None)
 
     Args:
         url: Instagram post URL.
@@ -628,29 +678,87 @@ def get_instagram_post_info(url):
     Returns:
         dict or None: Post info dictionary or None on error.
     """
+    # Extract shortcode from URL
+    match = re.search(r'/(?:p|reel)/([A-Za-z0-9_-]+)', url)
+    if not match:
+        return None
+    shortcode = match.group(1)
+
+    loader = _get_instaloader_context()
+    if not loader:
+        return _get_instagram_post_info_ytdlp(url)
+
+    try:
+        import instaloader
+        post = instaloader.Post.from_shortcode(loader.context, shortcode)
+        title = f"Post by {post.owner_username}"
+
+        if post.typename == 'GraphSidecar':
+            entries = []
+            for node in post.get_sidecar_nodes():
+                entry = {
+                    'title': title,
+                    'url': node.display_url,
+                    'is_video': node.is_video,
+                }
+                if node.is_video:
+                    entry['video_url'] = node.video_url
+                else:
+                    entry['ext'] = 'jpg'
+                entries.append(entry)
+            return {
+                '_type': 'playlist',
+                'entries': entries,
+                'title': title,
+                'playlist_count': len(entries),
+            }
+
+        if not post.is_video:
+            return {
+                'ext': 'jpg',
+                'url': post.url,
+                'title': title,
+            }
+
+        # Video post — let yt-dlp handle it
+        return None
+
+    except Exception as e:
+        logging.error("instaloader error for %s: %s", url, e)
+        # Fallback to yt-dlp only for photo detection;
+        # if yt-dlp returns video data, return None to let standard flow handle it
+        info = _get_instagram_post_info_ytdlp(url)
+        if info and (info.get('formats') or info.get('duration')):
+            return None  # Video — let yt-dlp standard flow handle it
+        return info
+
+
+def _get_instagram_post_info_ytdlp(url):
+    """Fallback: fetches Instagram post info via yt-dlp."""
     try:
         ydl_opts = get_basic_ydl_opts()
+        ydl_opts['ignore_no_formats_error'] = True
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info
+            return ydl.extract_info(url, download=False)
     except Exception as e:
         logging.error("Error getting Instagram post info for %s: %s", url, e)
         return None
 
 
 def is_photo_entry(info: dict) -> bool:
-    """Returns True if yt-dlp info dict represents a photo (not video).
-
-    Checks file extension and absence of video/audio streams.
+    """Returns True if an info dict represents a photo (not video).
 
     Args:
-        info: Single entry info dict from yt-dlp.
+        info: Single entry info dict.
 
     Returns:
         True if the entry is a photo.
     """
     if not info:
         return False
+    # Explicit is_video flag from instaloader
+    if 'is_video' in info:
+        return not info['is_video']
     ext = (info.get('ext') or '').lower()
     if ext in IMAGE_EXTENSIONS:
         return True

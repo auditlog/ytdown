@@ -685,7 +685,7 @@ async def download_file(
         return
 
     title = info.get('title', 'Nieznany tytuł')
-    duration = info.get('duration', 0)
+    duration = int(info.get('duration') or 0)
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
     sanitized_title = sanitize_filename(title)
@@ -1730,7 +1730,7 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
         return
 
     title = info.get('title', 'Nieznany tytuł')
-    duration = info.get('duration', 0)
+    duration = int(info.get('duration') or 0)
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
     keyboard = _build_main_keyboard(platform)
@@ -1763,7 +1763,7 @@ async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_
         return
 
     title = info.get('title', 'Nieznany tytuł')
-    duration = info.get('duration', 0)
+    duration = int(info.get('duration') or 0)
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
     # Current time range

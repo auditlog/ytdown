@@ -5,7 +5,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 ## Funkcje
 
 ### Podstawowe
-- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp), Spotify podcasty (via iTunes/YouTube)
+- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp + instaloader), Spotify podcasty (via iTunes/YouTube)
 - Pobieranie video w różnych formatach (1080p, 720p, 480p, 360p)
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
@@ -24,7 +24,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 | YouTube | youtube.com, youtu.be, music.youtube.com | Pełne wsparcie (video, audio, napisy, zakres czasowy) |
 | Vimeo | vimeo.com, player.vimeo.com | Video, audio, transkrypcja |
 | TikTok | tiktok.com, vm.tiktok.com, m.tiktok.com | Uproszczone menu (krótkie video) |
-| Instagram | instagram.com | Reels, Stories, posty video. Wymaga cookies.txt |
+| Instagram | instagram.com | Reels, posty video, zdjęcia i karuzele. Wymaga cookies.txt + instaloader |
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
 | Spotify | open.spotify.com | Odcinki podcastów. Wymaga SPOTIFY_CLIENT_ID/SECRET. Audio z iTunes lub YouTube |
 
@@ -353,6 +353,7 @@ ytdown/
 - Podsumowanie AI: do ~14h materiału audio (powyżej automatycznie pomijane)
 - Sama transkrypcja (Whisper) i napisy YouTube działają bez limitu długości
 - Instagram, LinkedIn, TikTok mogą wymagać cookies.txt do pobierania
+- Instagram zdjęcia/karuzele wymagają instaloader z ważną sesją w cookies.txt
 
 ## Rozwiązywanie problemów
 
@@ -388,6 +389,7 @@ Ten projekt jest dostępny na licencji MIT.
 ## Podziękowania
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - pobieranie mediów z platform (YouTube, Vimeo, TikTok, Instagram, LinkedIn)
+- [instaloader](https://github.com/instaloader/instaloader) - pobieranie zdjęć i karuzel z Instagrama
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - API Telegram
 - [Groq](https://groq.com/) - transkrypcja audio (Whisper)
 - [Anthropic Claude](https://www.anthropic.com/) - generowanie podsumowań (Haiku 4.5)
