@@ -7,6 +7,7 @@ Handles audio transcription via Groq API and summarization via Claude API.
 import os
 import re
 import math
+import time
 import shutil
 import logging
 import subprocess
@@ -30,6 +31,10 @@ SUMMARY_MAX_INPUT_TOKENS = 175_000       # ~700k chars, ~14h speech
 # Approximate speech duration thresholds (minutes) for user-facing warnings
 CORRECTION_DURATION_LIMIT_MIN = 270      # ~4.5h
 SUMMARY_DURATION_LIMIT_MIN = 840         # ~14h
+
+# Retry settings for Claude API calls
+CLAUDE_API_MAX_RETRIES = 3
+CLAUDE_API_RETRY_BASE_DELAY = 10         # seconds, doubles each retry
 
 
 def estimate_token_count(text: str) -> int:
@@ -298,8 +303,6 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None, language=
     Returns:
         str or None: Path to transcription file or None on error
     """
-    import time as time_module
-
     api_key = get_api_key()
     if not api_key:
         logging.error("Cannot read API key from api_key.md.")
@@ -320,7 +323,7 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None, language=
     transcriptions = []
     total_parts = len(part_files)
     total_characters = 0
-    start_time = time_module.time()
+    start_time = time.time()
     previous_text = ""
     logging.info(f"Found {total_parts} part files to transcribe.")
 
@@ -332,7 +335,7 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None, language=
         logging.info(f"Transcribing file {part_num}/{total_parts}: {part_path}")
 
         # Calculate estimated time remaining
-        elapsed = time_module.time() - start_time
+        elapsed = time.time() - start_time
         if i > 0:
             avg_time_per_part = elapsed / i
             remaining_parts = total_parts - i
@@ -374,7 +377,7 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None, language=
 
     # Final progress update
     if progress_callback:
-        elapsed_total = time_module.time() - start_time
+        elapsed_total = time.time() - start_time
         elapsed_str = f"{int(elapsed_total // 60)}m {int(elapsed_total % 60)}s" if elapsed_total >= 60 else f"{int(elapsed_total)}s"
         progress_callback(
             f"Łączenie transkrypcji...\n"
@@ -472,8 +475,8 @@ def post_process_transcript(text):
 
     # Dynamic max_tokens: output ≈ input length + small buffer for prompt overhead
     dynamic_max_tokens = min(input_tokens + 2000, CLAUDE_MAX_OUTPUT_TOKENS)
-    # Dynamic timeout: ~200 tokens/sec generation, minimum 180s
-    dynamic_timeout = max(180, dynamic_max_tokens // 150)
+    # Dynamic timeout: ~200 tokens/sec generation, minimum 300s
+    dynamic_timeout = max(300, dynamic_max_tokens // 100)
 
     url = "https://api.anthropic.com/v1/messages"
     headers = {
@@ -504,27 +507,46 @@ def post_process_transcript(text):
         ]
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=data, timeout=dynamic_timeout)
+    for attempt in range(1, CLAUDE_API_MAX_RETRIES + 1):
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=dynamic_timeout)
 
-        if response.status_code == 200:
-            result = response.json()
-            corrected = ""
-            if "content" in result:
-                for item in result["content"]:
-                    if item.get("type") == "text":
-                        corrected += item.get("text", "")
-            if corrected.strip():
-                return corrected.strip()
-            logging.warning("Post-processing returned empty result, using original text")
+            if response.status_code == 200:
+                result = response.json()
+                corrected = ""
+                if "content" in result:
+                    for item in result["content"]:
+                        if item.get("type") == "text":
+                            corrected += item.get("text", "")
+                if corrected.strip():
+                    return corrected.strip()
+                logging.warning("Post-processing returned empty result, using original text")
+                return None
+            elif response.status_code in (429, 500, 502, 503, 529):
+                logging.warning(
+                    f"Claude API post-processing attempt {attempt}/{CLAUDE_API_MAX_RETRIES} "
+                    f"failed with status {response.status_code}"
+                )
+            else:
+                logging.error(f"Claude API error during post-processing: {response.status_code}")
+                logging.error(f"Response: {response.text[:500]}")
+                return None
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            logging.warning(
+                f"Claude API post-processing attempt {attempt}/{CLAUDE_API_MAX_RETRIES} "
+                f"failed: {e}"
+            )
+        except Exception as e:
+            logging.error(f"Error during transcript post-processing: {e}")
             return None
-        else:
-            logging.error(f"Claude API error during post-processing: {response.status_code}")
-            logging.error(f"Response: {response.text[:500]}")
-            return None
-    except Exception as e:
-        logging.error(f"Error during transcript post-processing: {e}")
-        return None
+
+        if attempt < CLAUDE_API_MAX_RETRIES:
+            delay = CLAUDE_API_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            logging.info(f"Retrying post-processing in {delay}s...")
+            time.sleep(delay)
+
+    logging.error(f"Post-processing failed after {CLAUDE_API_MAX_RETRIES} attempts")
+    return None
 
 
 def generate_summary(transcript_text, summary_type):
@@ -573,8 +595,8 @@ def generate_summary(transcript_text, summary_type):
         4: 8192,    # task division
     }
     dynamic_max_tokens = summary_max_tokens.get(summary_type, 8192)
-    # Dynamic timeout: scale with input size, minimum 120s
-    dynamic_timeout = max(120, input_tokens // 500)
+    # Dynamic timeout: scale with input size, minimum 240s
+    dynamic_timeout = max(240, input_tokens // 300)
 
     url = "https://api.anthropic.com/v1/messages"
     headers = {
@@ -594,23 +616,42 @@ def generate_summary(transcript_text, summary_type):
         ]
     }
 
-    try:
-        response = requests.post(url, headers=headers, json=data, timeout=dynamic_timeout)
+    for attempt in range(1, CLAUDE_API_MAX_RETRIES + 1):
+        try:
+            response = requests.post(url, headers=headers, json=data, timeout=dynamic_timeout)
 
-        if response.status_code == 200:
-            result = response.json()
+            if response.status_code == 200:
+                result = response.json()
 
-            summary = ""
-            if "content" in result:
-                for content_item in result["content"]:
-                    if content_item.get("type") == "text":
-                        summary += content_item.get("text", "")
+                summary = ""
+                if "content" in result:
+                    for content_item in result["content"]:
+                        if content_item.get("type") == "text":
+                            summary += content_item.get("text", "")
 
-            return summary
-        else:
-            logging.error(f"Claude API error: {response.status_code}")
-            logging.error(f"Response: {response.text[:500]}")
+                return summary
+            elif response.status_code in (429, 500, 502, 503, 529):
+                logging.warning(
+                    f"Claude API summary attempt {attempt}/{CLAUDE_API_MAX_RETRIES} "
+                    f"failed with status {response.status_code}"
+                )
+            else:
+                logging.error(f"Claude API error: {response.status_code}")
+                logging.error(f"Response: {response.text[:500]}")
+                return None
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            logging.warning(
+                f"Claude API summary attempt {attempt}/{CLAUDE_API_MAX_RETRIES} "
+                f"failed: {e}"
+            )
+        except Exception as e:
+            logging.error(f"Error generating summary: {e}")
             return None
-    except Exception as e:
-        logging.error(f"Error generating summary: {e}")
-        return None
+
+        if attempt < CLAUDE_API_MAX_RETRIES:
+            delay = CLAUDE_API_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+            logging.info(f"Retrying summary in {delay}s...")
+            time.sleep(delay)
+
+    logging.error(f"Summary generation failed after {CLAUDE_API_MAX_RETRIES} attempts")
+    return None
