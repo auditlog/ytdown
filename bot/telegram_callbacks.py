@@ -68,6 +68,13 @@ from bot.services.download_service import (
     execute_download,
     prepare_download_plan,
 )
+from bot.services.transcription_service import (
+    cleanup_transcription_artifacts,
+    generate_summary_artifact,
+    load_transcript_result,
+    run_transcription_with_progress,
+    transcript_too_long_for_summary,
+)
 
 
 def escape_md(text: str) -> str:
@@ -756,37 +763,18 @@ async def download_file(
                 )
                 return
 
-            # Create progress callback for transcription
-            current_status = {"text": ""}
-
-            def progress_callback(status_text):
-                current_status["text"] = status_text
-
-            # Run transcription in thread pool with progress updates
-            async def run_transcription_with_progress():
-                loop = asyncio.get_event_loop()
-
-                # Start transcription in background
-                future = loop.run_in_executor(
-                    _executor,
-                    lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, progress_callback, language=None)
-                )
-
-                # Update status while transcription is running
-                last_status = ""
-                while not future.done():
-                    if current_status["text"] and current_status["text"] != last_status:
-                        last_status = current_status["text"]
-                        await update_status(f"Transkrypcja w toku...\n\n{last_status}")
-                    await asyncio.sleep(2)
-
-                return await future
-
-            transcript_path = await run_transcription_with_progress()
+            transcript_path = await run_transcription_with_progress(
+                source_path=downloaded_file_path,
+                output_dir=chat_download_path,
+                executor=_executor,
+                status_callback=lambda status: update_status(f"Transkrypcja w toku...\n\n{status}"),
+            )
 
             if not transcript_path or not os.path.exists(transcript_path):
                 await update_status("Wystąpił błąd podczas transkrypcji.")
                 return
+
+            transcript_result = load_transcript_result(transcript_path)
 
             if summary:
                 if not CONFIG["CLAUDE_API_KEY"]:
@@ -796,19 +784,9 @@ async def download_file(
                     )
                     return
 
-                with open(transcript_path, 'r', encoding='utf-8') as f:
-                    transcript_text = f.read()
+                transcript_text = transcript_result.display_text
 
-                if transcript_text.startswith('# '):
-                    lines = transcript_text.split('\n')
-                    for i in range(1, len(lines)):
-                        if lines[i].strip():
-                            transcript_text = '\n'.join(lines[i:])
-                            break
-                    else:
-                        logging.warning("Transcription contains only header, using original text")
-
-                if is_text_too_long_for_summary(transcript_text):
+                if transcript_too_long_for_summary(transcript_text):
                     await update_status(
                         "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
                         "Wysyłam samą transkrypcję."
@@ -829,34 +807,24 @@ async def download_file(
 
                 await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
 
-                # Run summary generation in thread pool
-                loop = asyncio.get_event_loop()
-                summary_text = await loop.run_in_executor(
-                    _executor,
-                    lambda: generate_summary(transcript_text, summary_type)
+                summary_result = await generate_summary_artifact(
+                    transcript_text=transcript_text,
+                    summary_type=summary_type,
+                    title=title,
+                    sanitized_title=sanitized_title,
+                    output_dir=chat_download_path,
+                    executor=_executor,
                 )
 
-                if not summary_text:
+                if not summary_result:
                     await update_status("Wystąpił błąd podczas generowania podsumowania.")
                     return
 
                 await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
 
-                summary_path = os.path.join(chat_download_path, f"{sanitized_title}_summary.md")
-                with open(summary_path, 'w', encoding='utf-8') as f:
-                    summary_types = {
-                        1: "Krótkie podsumowanie",
-                        2: "Szczegółowe podsumowanie",
-                        3: "Podsumowanie w punktach",
-                        4: "Podział zadań na osoby"
-                    }
-                    summary_type_name = summary_types.get(summary_type, "Podsumowanie")
-                    f.write(f"# {title} - {summary_type_name}\n\n")
-                    f.write(summary_text)
-
                 await send_long_message(
-                    context.bot, chat_id, summary_text,
-                    header=f"*{escape_md(title)} - {summary_type_name}*\n\n"
+                    context.bot, chat_id, summary_result.summary_text,
+                    header=f"*{escape_md(title)} - {summary_result.summary_type_name}*\n\n"
                 )
 
                 await update_status("Wysyłanie pliku z pełną transkrypcją...")
@@ -879,18 +847,7 @@ async def download_file(
 
             else:
                 await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
-
-                with open(transcript_path, 'r', encoding='utf-8') as f:
-                    transcript_text = f.read()
-
-                # Strip markdown header if present
-                display_text = transcript_text
-                if display_text.startswith('# '):
-                    lines = display_text.split('\n')
-                    for i in range(1, len(lines)):
-                        if lines[i].strip():
-                            display_text = '\n'.join(lines[i:])
-                            break
+                display_text = transcript_result.display_text
 
                 # Send transcript in chat if short enough, otherwise file only
                 if len(display_text) <= 30000:
@@ -912,10 +869,11 @@ async def download_file(
                     )
 
                 try:
-                    os.remove(downloaded_file_path)
-                    for f in os.listdir(chat_download_path):
-                        if f.startswith(f"{sanitized_title}_part") and f.endswith("_transcript.txt"):
-                            os.remove(os.path.join(chat_download_path, f))
+                    cleanup_transcription_artifacts(
+                        source_media_path=downloaded_file_path,
+                        output_dir=chat_download_path,
+                        transcript_prefix=sanitized_title,
+                    )
                 except Exception as e:
                     logging.error(f"Error deleting files: {e}")
 
