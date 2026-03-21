@@ -293,6 +293,12 @@ def test_validate_url():
     assert not validate_url("https://example.com/watch?v=test")
 
 
+def test_validate_url_has_no_stdout_side_effect(capsys):
+    assert not validate_url("https://example.com/watch?v=test")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
 class TestDurationValidation:
     """Tests for video_duration parameter in download_youtube_video."""
 

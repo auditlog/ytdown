@@ -867,7 +867,4 @@ def validate_url(url):
     """
     from bot.security import validate_url as _validate_url
 
-    valid = _validate_url(url)
-    if not valid:
-        print("Error: Invalid URL. Supported: YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify.")
-    return valid
+    return _validate_url(url)

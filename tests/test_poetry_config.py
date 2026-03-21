@@ -132,7 +132,8 @@ class TestPoetryConfiguration:
         assert "black" in tool_config
         assert "ruff" in tool_config
         assert "mypy" in tool_config
-        assert "pytest" in tool_config
+        # pytest config lives in pytest.ini (source of truth), not pyproject.toml
+        assert "pytest" not in tool_config
 
         # Verify Black configuration
         black_config = tool_config["black"]
@@ -144,19 +145,19 @@ class TestPoetryConfiguration:
         assert ruff_config["line-length"] == 100
         assert ruff_config["target-version"] == "py312"
 
-    def test_pytest_configuration(self):
-        """Test pytest configuration in pyproject.toml."""
+    def test_pytest_configuration_in_ini(self):
+        """Test pytest configuration lives in pytest.ini (not pyproject.toml)."""
         project_root = Path(__file__).parent.parent
-        pyproject_path = project_root / "pyproject.toml"
 
+        # pytest.ini should exist as the source of truth
+        pytest_ini = project_root / "pytest.ini"
+        assert pytest_ini.exists(), "pytest.ini should be the pytest config source of truth"
+
+        # pyproject.toml should NOT have [tool.pytest]
+        pyproject_path = project_root / "pyproject.toml"
         with open(pyproject_path, "rb") as f:
             config = tomllib.load(f)
-
-        pytest_config = config["tool"]["pytest"]["ini_options"]
-
-        assert "tests" in pytest_config["testpaths"]
-        assert "test_*.py" in pytest_config["python_files"]
-        assert pytest_config["asyncio_mode"] == "auto"
+        assert "pytest" not in config.get("tool", {})
 
     def test_coverage_configuration(self):
         """Test coverage configuration."""

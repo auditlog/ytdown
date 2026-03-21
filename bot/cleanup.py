@@ -65,8 +65,8 @@ def cleanup_old_files(directory, max_age_hours=24):
                 if not os.listdir(root):
                     os.rmdir(root)
                     logging.info(f"Deleted empty directory: {root}")
-            except:
-                pass
+            except OSError as e:
+                logging.debug("Skipping empty-directory cleanup for %s: %s", root, e)
 
     except Exception as e:
         logging.error(f"Error cleaning directory {directory}: {e}")

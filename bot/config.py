@@ -123,7 +123,7 @@ def load_config(
         logging.error("ERROR: Missing TELEGRAM_BOT_TOKEN! Set in api_key.md or as environment variable.")
 
     # Validate configuration
-    validate_config(config)
+    validate_config(config, config_file_path=config_file_path)
 
     if ensure_downloads_dir:
         ensure_download_path()
@@ -138,19 +138,23 @@ def ensure_download_path(path: str = DOWNLOAD_PATH) -> str:
     return path
 
 
-def validate_config(config):
+def validate_config(config, *, config_file_path: str = CONFIG_FILE_PATH):
     """
     Validates configuration and displays warnings.
 
     Args:
         config: Configuration dictionary to validate
     """
-    # Check PIN format (any length, digits only)
+    # Check PIN format (exactly 8 digits)
     pin = config.get("PIN_CODE", "")
     if not pin:
         logging.error("ERROR: Missing PIN_CODE in configuration!")
-    elif not pin.isdigit():
-        logging.error("ERROR: PIN_CODE format invalid (length=%d, digits_only=%s)", len(pin), pin.isdigit())
+    elif not pin.isdigit() or len(pin) != 8:
+        logging.error(
+            "ERROR: PIN_CODE format invalid (length=%d, digits_only=%s, expected=8 digits)",
+            len(pin),
+            pin.isdigit(),
+        )
     elif pin == "12345678":
         logging.error("SECURITY: Using default PIN_CODE! Change it immediately for production use.")
 
@@ -171,19 +175,19 @@ def validate_config(config):
         logging.warning("WARNING: CLAUDE_API_KEY should start with 'sk-'!")
 
     # Check config file permissions (Unix only) and auto-fix if possible
-    if os.path.exists(CONFIG_FILE_PATH) and hasattr(os, 'stat'):
+    if os.path.exists(config_file_path) and hasattr(os, 'stat'):
         try:
-            file_stats = os.stat(CONFIG_FILE_PATH)
+            file_stats = os.stat(config_file_path)
             file_mode = oct(file_stats.st_mode)[-3:]
             if file_mode != '600':
-                logging.warning("Config file %s has permissions %s, expected 600", CONFIG_FILE_PATH, file_mode)
+                logging.warning("Config file %s has permissions %s, expected 600", config_file_path, file_mode)
                 try:
-                    os.chmod(CONFIG_FILE_PATH, 0o600)
-                    logging.info("Fixed %s permissions to 600", CONFIG_FILE_PATH)
+                    os.chmod(config_file_path, 0o600)
+                    logging.info("Fixed %s permissions to 600", config_file_path)
                 except OSError as e:
-                    logging.warning("Could not fix permissions for %s: %s", CONFIG_FILE_PATH, e)
+                    logging.warning("Could not fix permissions for %s: %s", config_file_path, e)
         except Exception:
-            logging.debug("Unable to verify config file permissions for %s", CONFIG_FILE_PATH)
+            logging.debug("Unable to verify config file permissions for %s", config_file_path)
 
 
 def load_authorized_users():
@@ -223,7 +227,7 @@ def save_authorized_users(authorized_users_set):
 
         # Write to temp file then move (atomic write)
         temp_file = AUTHORIZED_USERS_FILE + '.tmp'
-        with open(temp_file, 'w') as f:
+        with open(temp_file, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=2)
 
         shutil.move(temp_file, AUTHORIZED_USERS_FILE)
@@ -328,7 +332,7 @@ def add_download_record(
         'status': status,
     }
 
-    if file_size_mb:
+    if file_size_mb is not None:
         record['file_size_mb'] = round(file_size_mb, 2)
 
     if time_range:

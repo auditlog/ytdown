@@ -205,17 +205,15 @@ class TestPinValidation:
                 log_msg = str(call)
                 assert 'abc123' not in log_msg, "PIN value should not appear in logs"
 
-    def test_pin_validation_accepts_any_length_digits(self):
-        """Verify PIN validation accepts any length numeric PIN."""
+    def test_pin_validation_rejects_non_8_digit_numeric_pin(self):
+        """Verify PIN validation requires exactly 8 numeric digits."""
         import logging
         from bot.config import validate_config
 
         with patch.object(logging, 'error') as mock_log:
             validate_config({'PIN_CODE': '1234', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''})
-            # Should NOT log an error about format (4-digit PIN is valid)
-            for call in mock_log.call_args_list:
-                log_msg = str(call)
-                assert 'format invalid' not in log_msg
+            error_msgs = [str(call) for call in mock_log.call_args_list]
+            assert any('format invalid' in msg for msg in error_msgs)
 
     def test_default_pin_raises_error_level(self):
         """Verify default PIN triggers error-level log, not just warning."""
@@ -245,6 +243,24 @@ class TestConfigFilePermissions:
             mock_stat.return_value.st_mode = 0o100644  # 644 permissions
             validate_config({'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''})
             mock_chmod.assert_called_once()
+
+    def test_validate_config_uses_provided_config_path(self):
+        """Verify config permission checks use the explicit config path."""
+        from bot.config import validate_config
+
+        with patch('bot.config.os.path.exists', return_value=True), \
+             patch('bot.config.os.stat') as mock_stat, \
+             patch('bot.config.os.chmod') as mock_chmod:
+            mock_stat.return_value = Mock()
+            mock_stat.return_value.st_mode = 0o100644
+
+            validate_config(
+                {'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''},
+                config_file_path='/tmp/custom_api_key.md',
+            )
+
+            mock_stat.assert_called_once_with('/tmp/custom_api_key.md')
+            mock_chmod.assert_called_once_with('/tmp/custom_api_key.md', 0o600)
 
 
 # --- Fix 7: authorized users lock ---
