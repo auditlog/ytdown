@@ -15,7 +15,7 @@ import requests
 
 from mutagen.mp3 import MP3
 
-from bot.config import CONFIG
+from bot.config import get_runtime_value
 from bot.security import MAX_MP3_PART_SIZE_MB, FFMPEG_TIMEOUT
 
 # Claude Haiku 4.5 limits
@@ -60,12 +60,12 @@ def is_text_too_long_for_summary(text: str) -> bool:
 
 def get_api_key():
     """Returns Groq API key from configuration."""
-    return CONFIG["GROQ_API_KEY"]
+    return get_runtime_value("GROQ_API_KEY", "")
 
 
 def get_claude_api_key():
     """Returns Claude API key from configuration."""
-    return CONFIG["CLAUDE_API_KEY"]
+    return get_runtime_value("CLAUDE_API_KEY", "")
 
 
 def find_silence_points(file_path, num_parts, min_duration=0.5):

@@ -12,12 +12,12 @@ These are free credentials from https://my.telegram.org
 import logging
 import os
 
-from bot.config import CONFIG
+from bot.config import get_runtime_value
 
 
 def is_mtproto_available() -> bool:
     """Checks if pyrogram is installed and API credentials are configured."""
-    if not CONFIG.get("TELEGRAM_API_ID") or not CONFIG.get("TELEGRAM_API_HASH"):
+    if not get_runtime_value("TELEGRAM_API_ID") or not get_runtime_value("TELEGRAM_API_HASH"):
         return False
     try:
         import pyrogram  # noqa: F401
@@ -47,8 +47,8 @@ async def download_file_mtproto(bot_token: str, chat_id: int, message_id: int, d
         logging.error("pyrogram not installed — cannot download large files")
         return False
 
-    api_id = CONFIG.get("TELEGRAM_API_ID", "")
-    api_hash = CONFIG.get("TELEGRAM_API_HASH", "")
+    api_id = get_runtime_value("TELEGRAM_API_ID", "")
+    api_hash = get_runtime_value("TELEGRAM_API_HASH", "")
     if not api_id or not api_hash:
         logging.error("TELEGRAM_API_ID/TELEGRAM_API_HASH not configured")
         return False

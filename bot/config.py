@@ -427,5 +427,17 @@ def initialize_runtime(
     return CONFIG
 
 
+def get_runtime_config() -> dict:
+    """Return the active runtime configuration mapping."""
+
+    return CONFIG
+
+
+def get_runtime_value(key: str, default=None):
+    """Return one value from the active runtime configuration."""
+
+    return CONFIG.get(key, default)
+
+
 # Initialize runtime state on module load for backward compatibility.
 initialize_runtime()

@@ -21,9 +21,9 @@ from telegram.helpers import escape_markdown
 _executor = ThreadPoolExecutor(max_workers=2)
 
 from bot.config import (
-    CONFIG,
     DOWNLOAD_PATH,
     add_download_record,
+    get_runtime_value,
 )
 from bot.security import (
     MAX_FILE_SIZE_MB,
@@ -757,7 +757,7 @@ async def download_file(
         if transcribe:
             await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nRozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut.")
 
-            if not CONFIG["GROQ_API_KEY"]:
+            if not get_runtime_value("GROQ_API_KEY", ""):
                 await update_status(
                     "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
                     "Skontaktuj się z administratorem."
@@ -778,7 +778,7 @@ async def download_file(
             transcript_result = load_transcript_result(transcript_path)
 
             if summary:
-                if not CONFIG["CLAUDE_API_KEY"]:
+                if not get_runtime_value("CLAUDE_API_KEY", ""):
                     await update_status(
                         "Funkcja niedostępna — brak klucza API do podsumowań.\n"
                         "Skontaktuj się z administratorem."
@@ -1330,7 +1330,7 @@ async def download_spotify_resolved(
                 f"To może potrwać kilka minut."
             )
 
-            if not CONFIG["GROQ_API_KEY"]:
+            if not get_runtime_value("GROQ_API_KEY", ""):
                 await update_status(
                     "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
                     "Skontaktuj się z administratorem."
@@ -1353,7 +1353,7 @@ async def download_spotify_resolved(
             sanitized_title = os.path.splitext(os.path.basename(downloaded_file_path))[0]
 
             if summary and summary_type:
-                if not CONFIG.get("CLAUDE_API_KEY"):
+                if not get_runtime_value("CLAUDE_API_KEY", ""):
                     await update_status(
                         "Transkrypcja zakończona.\n\n"
                         "Podsumowanie niedostępne — brak klucza CLAUDE_API_KEY.\n"
@@ -1581,7 +1581,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
 
     await update_status("Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut.")
 
-    if not CONFIG["GROQ_API_KEY"]:
+    if not get_runtime_value("GROQ_API_KEY", ""):
         await update_status(
             "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
             "Skontaktuj się z administratorem."
@@ -1617,7 +1617,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if summary:
-        if not CONFIG["CLAUDE_API_KEY"]:
+        if not get_runtime_value("CLAUDE_API_KEY", ""):
             await update_status(
                 "Funkcja niedostępna — brak klucza API do podsumowań.\n"
                 "Skontaktuj się z administratorem."
@@ -2006,7 +2006,7 @@ async def handle_subtitle_download(
         summary = False
 
     if summary:
-        if not CONFIG["CLAUDE_API_KEY"]:
+        if not get_runtime_value("CLAUDE_API_KEY", ""):
             await update_status(
                 "Funkcja niedostępna — brak klucza API do podsumowań.\n"
                 "Skontaktuj się z administratorem."

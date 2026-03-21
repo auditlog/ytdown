@@ -14,6 +14,9 @@ from unittest.mock import Mock, AsyncMock
 from bot import telegram_commands as tc
 
 
+def _set_runtime_values(monkeypatch, **values):
+    monkeypatch.setattr(tc, "get_runtime_value", lambda key, default=None: values.get(key, default))
+
 
 def _async(coro):
     return asyncio.run(coro)
@@ -88,7 +91,7 @@ class TestHandlePin:
         context = _make_context()
         context.user_data.update({"awaiting_pin": True, "pending_url": "https://youtube.com/watch?v=abc"})
 
-        monkeypatch.setattr(tc, "PIN_CODE", "12345678")
+        _set_runtime_values(monkeypatch, PIN_CODE="12345678")
         monkeypatch.setattr(tc, "authorized_users", set())
         monkeypatch.setattr(tc, "failed_attempts", defaultdict(int))
         monkeypatch.setattr(tc, "manage_authorized_user", lambda *args, **kwargs: True)
@@ -117,7 +120,7 @@ class TestHandlePin:
         context = _make_context()
         context.user_data.update({"awaiting_pin": True})
 
-        monkeypatch.setattr(tc, "PIN_CODE", "12345678")
+        _set_runtime_values(monkeypatch, PIN_CODE="12345678")
         monkeypatch.setattr(tc, "authorized_users", set())
         monkeypatch.setattr(tc, "failed_attempts", defaultdict(int))
 
@@ -133,7 +136,7 @@ class TestHandlePin:
         context = _make_context()
         context.user_data.update({"awaiting_pin": True})
 
-        monkeypatch.setattr(tc, "PIN_CODE", "12345678")
+        _set_runtime_values(monkeypatch, PIN_CODE="12345678")
         monkeypatch.setattr(tc, "MAX_ATTEMPTS", 1)
         monkeypatch.setattr(tc, "authorized_users", set())
         attempts = defaultdict(int)
@@ -512,7 +515,7 @@ class TestStatusAndStatsCommands:
         context = _make_context()
 
         monkeypatch.setattr(tc, "authorized_users", {1, 2, 111})
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "111")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
 
         _async(tc.users_command(update, context))
 
@@ -678,7 +681,7 @@ class TestUsersCommand:
         context = _make_context()
 
         monkeypatch.setattr(tc, "authorized_users", {user_id, *range(1, 11)})
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "111")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
 
         _async(tc.users_command(update, context))
 
@@ -698,7 +701,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Test"
         user.language_code = "pl"
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "12345")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="12345")
 
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=2, blocked=False))
 
@@ -718,7 +721,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Test"
         user.language_code = "pl"
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="")
 
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=1, blocked=False))
 
@@ -734,7 +737,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Test"
         user.language_code = "pl"
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "12345")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="12345")
 
         # Should not raise
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=1, blocked=False))
@@ -749,7 +752,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Test"
         user.language_code = "pl"
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "not_a_number")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="not_a_number")
 
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=1, blocked=False))
 
@@ -765,7 +768,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Blocked"
         user.language_code = None
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "12345")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="12345")
 
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=3, blocked=True))
 

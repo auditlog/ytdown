@@ -10,7 +10,11 @@ from bot import transcription as tr
 
 
 def test_get_api_key_reads_from_config(monkeypatch):
-    monkeypatch.setattr(tr, "CONFIG", {"GROQ_API_KEY": "groq", "CLAUDE_API_KEY": "claude"})
+    monkeypatch.setattr(
+        tr,
+        "get_runtime_value",
+        lambda key, default=None: {"GROQ_API_KEY": "groq", "CLAUDE_API_KEY": "claude"}.get(key, default),
+    )
     assert tr.get_api_key() == "groq"
     assert tr.get_claude_api_key() == "claude"
 

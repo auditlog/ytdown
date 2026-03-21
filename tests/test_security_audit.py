@@ -87,22 +87,22 @@ class TestIsAdmin:
 
     def test_admin_matches(self):
         from bot.telegram_commands import _is_admin
-        with patch('bot.telegram_commands.ADMIN_CHAT_ID', '12345'):
+        with patch('bot.telegram_commands.get_runtime_value', lambda key, default=None: '12345' if key == 'ADMIN_CHAT_ID' else default):
             assert _is_admin(12345) is True
 
     def test_admin_does_not_match(self):
         from bot.telegram_commands import _is_admin
-        with patch('bot.telegram_commands.ADMIN_CHAT_ID', '12345'):
+        with patch('bot.telegram_commands.get_runtime_value', lambda key, default=None: '12345' if key == 'ADMIN_CHAT_ID' else default):
             assert _is_admin(99999) is False
 
     def test_no_admin_configured_all_are_admin(self):
         from bot.telegram_commands import _is_admin
-        with patch('bot.telegram_commands.ADMIN_CHAT_ID', ''):
+        with patch('bot.telegram_commands.get_runtime_value', lambda key, default=None: '' if key == 'ADMIN_CHAT_ID' else default):
             assert _is_admin(99999) is True
 
     def test_invalid_admin_chat_id(self):
         from bot.telegram_commands import _is_admin
-        with patch('bot.telegram_commands.ADMIN_CHAT_ID', 'not_a_number'):
+        with patch('bot.telegram_commands.get_runtime_value', lambda key, default=None: 'not_a_number' if key == 'ADMIN_CHAT_ID' else default):
             assert _is_admin(12345) is False
 
 

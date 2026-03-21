@@ -492,7 +492,7 @@ def test_transcribe_audio_file_requires_groq_api_key(tmp_path, monkeypatch):
     context.user_data["audio_file_path"] = str(audio_file)
     context.user_data["audio_file_title"] = "Recording"
 
-    monkeypatch.setitem(tc.CONFIG, "GROQ_API_KEY", "")
+    monkeypatch.setattr(tc, "get_runtime_value", lambda key, default=None: "" if key == "GROQ_API_KEY" else default)
     asyncio.run(tc.transcribe_audio_file(update, context))
 
     messages = [call.args[0] for call in update.callback_query.edit_message_text.await_args_list]

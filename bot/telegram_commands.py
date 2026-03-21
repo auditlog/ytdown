@@ -17,12 +17,10 @@ from telegram.helpers import escape_markdown
 from datetime import datetime
 
 from bot.config import (
-    ADMIN_CHAT_ID,
-    CONFIG,
     DOWNLOAD_PATH,
-    PIN_CODE,
     authorized_users,
     get_download_stats,
+    get_runtime_value,
 )
 from bot.security import (
     MAX_ATTEMPTS,
@@ -168,10 +166,11 @@ def _build_instagram_photo_keyboard(photos: list, videos: list) -> list:
 
 def _is_admin(user_id: int) -> bool:
     """Returns True if user_id matches ADMIN_CHAT_ID."""
-    if not ADMIN_CHAT_ID:
+    admin_chat_id = get_runtime_value("ADMIN_CHAT_ID", "")
+    if not admin_chat_id:
         return True  # No admin configured — all authorized users are admin
     try:
-        return user_id == int(ADMIN_CHAT_ID)
+        return user_id == int(admin_chat_id)
     except (ValueError, TypeError):
         return False
 
@@ -249,13 +248,14 @@ async def notify_admin_pin_failure(bot, user, attempt_count: int, blocked: bool)
 
     Non-blocking: any error is silently logged so the auth flow is never interrupted.
     """
-    if not ADMIN_CHAT_ID:
+    admin_chat_id = get_runtime_value("ADMIN_CHAT_ID", "")
+    if not admin_chat_id:
         return
 
     try:
-        admin_id = int(ADMIN_CHAT_ID)
+        admin_id = int(admin_chat_id)
     except (ValueError, TypeError):
-        logging.warning("ADMIN_CHAT_ID is not a valid integer: %s", ADMIN_CHAT_ID)
+        logging.warning("ADMIN_CHAT_ID is not a valid integer: %s", admin_chat_id)
         return
 
     try:
@@ -287,7 +287,7 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id=user_id,
         message_text=message_text,
         user_data=context.user_data,
-        pin_code=PIN_CODE,
+        pin_code=get_runtime_value("PIN_CODE", ""),
         authorized_user_ids=authorized_users,
         attempts=failed_attempts,
         block_map=block_until,
@@ -1014,7 +1014,7 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if use_mtproto:
             from bot.mtproto import download_file_mtproto
             success = await download_file_mtproto(
-                bot_token=CONFIG["TELEGRAM_BOT_TOKEN"],
+                bot_token=get_runtime_value("TELEGRAM_BOT_TOKEN", ""),
                 chat_id=chat_id,
                 message_id=message.message_id,
                 dest_path=raw_path,
@@ -1208,7 +1208,7 @@ async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         if use_mtproto:
             from bot.mtproto import download_file_mtproto
             success = await download_file_mtproto(
-                bot_token=CONFIG["TELEGRAM_BOT_TOKEN"],
+                bot_token=get_runtime_value("TELEGRAM_BOT_TOKEN", ""),
                 chat_id=chat_id,
                 message_id=message.message_id,
                 dest_path=video_path,

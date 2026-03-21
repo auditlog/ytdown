@@ -16,7 +16,7 @@ from urllib.parse import urlparse, parse_qs
 import requests
 import yt_dlp
 
-from bot.config import CONFIG
+from bot.config import get_runtime_value
 
 
 # Spotify API token cache
@@ -51,8 +51,8 @@ def _get_spotify_token() -> str | None:
     """
     global _spotify_token, _spotify_token_expires
 
-    client_id = CONFIG.get('SPOTIFY_CLIENT_ID', '')
-    client_secret = CONFIG.get('SPOTIFY_CLIENT_SECRET', '')
+    client_id = get_runtime_value('SPOTIFY_CLIENT_ID', '')
+    client_secret = get_runtime_value('SPOTIFY_CLIENT_SECRET', '')
     if not client_id or not client_secret:
         return None
 
