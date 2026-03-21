@@ -129,6 +129,17 @@ class SessionStore:
                 setattr(session, field_name, None)
                 self._cleanup_if_empty(chat_id)
 
+    def clear_fields(self, chat_id: int, *field_names: str) -> None:
+        """Clear multiple fields from one chat session atomically."""
+
+        with self._lock:
+            session = self._sessions.get(chat_id)
+            if session is None:
+                return
+            for field_name in field_names:
+                setattr(session, field_name, None)
+            self._cleanup_if_empty(chat_id)
+
     def _cleanup_if_empty(self, chat_id: int) -> None:
         session = self._sessions.get(chat_id)
         if session is None:

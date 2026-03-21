@@ -367,6 +367,24 @@ def _clear_session_context_value(
     context.user_data.pop(legacy_key, None)
 
 
+def _clear_uploaded_audio_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> None:
+    """Clear temporary uploaded-audio state from runtime and legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.clear_fields(
+            chat_id,
+            "audio_file_path",
+            "audio_file_title",
+        )
+
+    context.user_data.pop("audio_file_path", None)
+    context.user_data.pop("audio_file_title", None)
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all callback queries."""
     query = update.callback_query
@@ -1679,8 +1697,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     title = _get_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title", default='Plik audio')
 
     if not mp3_path or not os.path.exists(mp3_path):
-        _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
-        _clear_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title")
+        _clear_uploaded_audio_state(context, chat_id)
         await query.edit_message_text("Plik audio nie został znaleziony. Wyślij go ponownie.")
         return
 
@@ -1753,8 +1770,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                     write_timeout=60,
             )
             record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
-            _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
-            _clear_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title")
+            _clear_uploaded_audio_state(context, chat_id)
             return
 
         await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
@@ -1796,8 +1812,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             f"audio_upload_transcription_summary_{summary_type}",
             file_size_mb, None,
         )
-        _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
-        _clear_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title")
+        _clear_uploaded_audio_state(context, chat_id)
         await update_status("Transkrypcja i podsumowanie zostały wysłane!")
 
     else:
@@ -1836,8 +1851,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             logging.error(f"Error deleting audio files: {e}")
 
         record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
-        _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
-        _clear_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title")
+        _clear_uploaded_audio_state(context, chat_id)
         await update_status("Transkrypcja została wysłana!")
 
 

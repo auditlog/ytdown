@@ -26,6 +26,26 @@ def test_session_store_updates_and_clears_fields():
     assert store.get_field(123, "time_range") is None
 
 
+def test_session_store_can_clear_multiple_fields_at_once():
+    store = SessionStore()
+
+    store.update_session(
+        123,
+        current_url="https://youtube.com/watch?v=abc",
+        time_range={"start": "0:10", "end": "0:20"},
+        platform="youtube",
+    )
+
+    store.clear_fields(123, "current_url", "time_range")
+
+    assert store.get_field(123, "current_url") is None
+    assert store.get_field(123, "time_range") is None
+    assert store.get_field(123, "platform") == "youtube"
+
+    store.clear_fields(123, "platform")
+    assert store.get_field(123, "platform") is None
+
+
 def test_field_maps_proxy_shared_session_store():
     session_store.reset()
 
