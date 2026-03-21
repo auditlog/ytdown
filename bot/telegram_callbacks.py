@@ -42,8 +42,6 @@ from bot.security import (
 from bot.telegram_commands import _build_main_keyboard, _build_playlist_message, process_playlist_link
 from bot.transcription import (
     transcribe_mp3_file,
-    generate_summary,
-    is_text_too_long_for_summary,
     CORRECTION_DURATION_LIMIT_MIN,
     SUMMARY_DURATION_LIMIT_MIN,
 )
@@ -70,6 +68,7 @@ from bot.services.transcription_service import (
     generate_summary_artifact,
     load_transcript_result,
     run_transcription_with_progress,
+    save_transcript_markdown,
     transcript_too_long_for_summary,
 )
 from bot.services.spotify_service import download_resolved_audio
@@ -1627,20 +1626,10 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             )
             return
 
-        with open(transcript_path, 'r', encoding='utf-8') as f:
-            transcript_text = f.read()
+        transcript_result = load_transcript_result(transcript_path)
+        transcript_text = transcript_result.display_text
 
-        # Strip markdown header if present
-        if transcript_text.startswith('# '):
-            lines = transcript_text.split('\n')
-            for i in range(1, len(lines)):
-                if lines[i].strip():
-                    transcript_text = '\n'.join(lines[i:])
-                    break
-            else:
-                logging.warning("Transcription contains only header, using original text")
-
-        if is_text_too_long_for_summary(transcript_text):
+        if transcript_too_long_for_summary(transcript_text):
             await update_status(
                 "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
                 "Wysyłam samą transkrypcję."
@@ -1658,37 +1647,25 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             return
 
         await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
-
-        loop = asyncio.get_event_loop()
-        summary_text = await loop.run_in_executor(
-            _executor,
-            lambda: generate_summary(transcript_text, summary_type)
+        safe_title = sanitize_filename(title)
+        summary_result = await generate_summary_artifact(
+            transcript_text=transcript_text,
+            summary_type=summary_type,
+            title=title,
+            sanitized_title=safe_title,
+            output_dir=chat_download_path,
+            executor=_executor,
         )
-
-        if not summary_text:
+        if not summary_result:
             await update_status("Wystąpił błąd podczas generowania podsumowania.")
             return
 
         await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
 
-        # Save summary file
-        safe_title = "".join(c if c.isalnum() or c in ' -_' else '_' for c in title)[:80]
-        summary_path = os.path.join(chat_download_path, f"{safe_title}_summary.md")
-        with open(summary_path, 'w', encoding='utf-8') as f:
-            summary_types = {
-                1: "Krótkie podsumowanie",
-                2: "Szczegółowe podsumowanie",
-                3: "Podsumowanie w punktach",
-                4: "Podział zadań na osoby"
-            }
-            summary_type_name = summary_types.get(summary_type, "Podsumowanie")
-            f.write(f"# {title} - {summary_type_name}\n\n")
-            f.write(summary_text)
-
         # Send summary as message(s)
         await send_long_message(
-            context.bot, chat_id, summary_text,
-            header=f"*{escape_md(title)} - {summary_type_name}*\n\n"
+            context.bot, chat_id, summary_result.summary_text,
+            header=f"*{escape_md(title)} - {summary_result.summary_type_name}*\n\n"
         )
 
         await update_status("Wysyłanie pliku z pełną transkrypcją...")
@@ -1709,17 +1686,8 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     else:
         await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
 
-        with open(transcript_path, 'r', encoding='utf-8') as f:
-            transcript_text = f.read()
-
-        # Strip markdown header if present
-        display_text = transcript_text
-        if display_text.startswith('# '):
-            lines = display_text.split('\n')
-            for i in range(1, len(lines)):
-                if lines[i].strip():
-                    display_text = '\n'.join(lines[i:])
-                    break
+        transcript_result = load_transcript_result(transcript_path)
+        display_text = transcript_result.display_text
 
         # Send transcript in chat if short enough, otherwise file only
         if len(display_text) <= 30000:
@@ -1742,10 +1710,11 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
 
         # Clean up source MP3 and chunk transcripts
         try:
-            os.remove(mp3_path)
-            for fname in os.listdir(chat_download_path):
-                if fname.endswith("_transcript.txt") and "_part" in fname:
-                    os.remove(os.path.join(chat_download_path, fname))
+            cleanup_transcription_artifacts(
+                source_media_path=mp3_path,
+                output_dir=chat_download_path,
+                transcript_prefix=os.path.splitext(os.path.basename(mp3_path))[0],
+            )
         except Exception as e:
             logging.error(f"Error deleting audio files: {e}")
 
@@ -2021,19 +1990,17 @@ async def handle_subtitle_download(
         await update_status("Napisy są puste. Spróbuj transkrypcji AI.")
         return
 
-    # Save as _transcript.md
     sanitized_title = sanitize_filename(title)
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    transcript_path = os.path.join(
-        chat_download_path,
-        f"{current_date} {sanitized_title}_transcript.md"
+    transcript_path = save_transcript_markdown(
+        title=title,
+        transcript_text=transcript_text,
+        sanitized_title=sanitized_title,
+        output_dir=chat_download_path,
+        dated=True,
     )
-    with open(transcript_path, 'w', encoding='utf-8') as f:
-        f.write(f"# {title}\n\n")
-        f.write(transcript_text)
 
     # Check if summary was requested but text is too long
-    if summary and is_text_too_long_for_summary(transcript_text):
+    if summary and transcript_too_long_for_summary(transcript_text):
         await update_status(
             "Napisy pobrane, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
             "Wysyłam samą transkrypcję z napisów."
@@ -2050,36 +2017,23 @@ async def handle_subtitle_download(
 
         await update_status("Napisy pobrane.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
 
-        summary_text = await loop.run_in_executor(
-            _executor,
-            lambda: generate_summary(transcript_text, summary_type)
+        summary_result = await generate_summary_artifact(
+            transcript_text=transcript_text,
+            summary_type=summary_type,
+            title=title,
+            sanitized_title=f"{datetime.now().strftime('%Y-%m-%d')} {sanitized_title}",
+            output_dir=chat_download_path,
+            executor=_executor,
         )
-
-        if not summary_text:
+        if not summary_result:
             await update_status("Wystąpił błąd podczas generowania podsumowania.")
             return
 
         await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
 
-        summary_types = {
-            1: "Krótkie podsumowanie",
-            2: "Szczegółowe podsumowanie",
-            3: "Podsumowanie w punktach",
-            4: "Podział zadań na osoby"
-        }
-        summary_type_name = summary_types.get(summary_type, "Podsumowanie")
-
-        summary_path = os.path.join(
-            chat_download_path,
-            f"{current_date} {sanitized_title}_summary.md"
-        )
-        with open(summary_path, 'w', encoding='utf-8') as f:
-            f.write(f"# {title} - {summary_type_name}\n\n")
-            f.write(summary_text)
-
         await send_long_message(
-            context.bot, chat_id, summary_text,
-            header=f"*{escape_md(title)} - {summary_type_name}*\n\n"
+            context.bot, chat_id, summary_result.summary_text,
+            header=f"*{escape_md(title)} - {summary_result.summary_type_name}*\n\n"
         )
 
         await update_status("Wysyłanie pliku z transkrypcją napisów...")

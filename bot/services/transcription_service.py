@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import os
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any, Callable
 
 from bot.transcription import (
@@ -141,3 +142,25 @@ def cleanup_transcription_artifacts(
     for file_name in os.listdir(output_dir):
         if file_name.startswith(f"{transcript_prefix}_part") and file_name.endswith("_transcript.txt"):
             os.remove(os.path.join(output_dir, file_name))
+
+
+def save_transcript_markdown(
+    *,
+    title: str,
+    transcript_text: str,
+    sanitized_title: str,
+    output_dir: str,
+    dated: bool = False,
+) -> str:
+    """Persist transcript text as a markdown artifact and return its path."""
+
+    file_name = f"{sanitized_title}_transcript.md"
+    if dated:
+        current_date = datetime.now().strftime("%Y-%m-%d")
+        file_name = f"{current_date} {file_name}"
+
+    transcript_path = os.path.join(output_dir, file_name)
+    with open(transcript_path, 'w', encoding='utf-8') as f:
+        f.write(f"# {title}\n\n")
+        f.write(transcript_text)
+    return transcript_path
