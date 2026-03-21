@@ -21,6 +21,10 @@ def _async(coro):
     return asyncio.run(coro)
 
 
+def _set_authorized_users(monkeypatch, users):
+    monkeypatch.setattr(tc, "get_runtime_authorized_users", lambda: users)
+
+
 def _make_update(text="", user_id=123456, chat_id=123456):
     update = Mock()
     update.effective_user.id = user_id
@@ -223,7 +227,7 @@ class TestPlaylistDetection:
         update = _make_update(user_id=111, chat_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
 
         called = {}
 
@@ -244,7 +248,7 @@ class TestPlaylistDetection:
         update = _make_update(user_id=111, chat_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
 
         _async(tc.process_youtube_link(
             update, context,
@@ -259,7 +263,7 @@ class TestPlaylistDetection:
         update = _make_update(user_id=111, chat_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(tc, "get_video_info", lambda url: {
             'title': 'Test', 'duration': 60, 'formats': []
         })

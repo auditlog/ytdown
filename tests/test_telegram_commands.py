@@ -18,6 +18,10 @@ def _set_runtime_values(monkeypatch, **values):
     monkeypatch.setattr(tc, "get_runtime_value", lambda key, default=None: values.get(key, default))
 
 
+def _set_authorized_users(monkeypatch, users):
+    monkeypatch.setattr(tc, "get_runtime_authorized_users", lambda: users)
+
+
 def _async(coro):
     return asyncio.run(coro)
 
@@ -48,7 +52,7 @@ class TestStart:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         tc.block_until[111] = 0
 
         _async(tc.start(update, context))
@@ -60,7 +64,7 @@ class TestStart:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         tc.block_until[111] = 0
 
         _async(tc.start(update, context))
@@ -76,7 +80,7 @@ class TestStart:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         tc.block_until[111] = datetime.now().timestamp() + 30
 
         _async(tc.start(update, context))
@@ -92,7 +96,7 @@ class TestHandlePin:
         context.user_data.update({"awaiting_pin": True, "pending_url": "https://youtube.com/watch?v=abc"})
 
         _set_runtime_values(monkeypatch, PIN_CODE="12345678")
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "failed_attempts", defaultdict(int))
         monkeypatch.setattr(tc, "manage_authorized_user", lambda *args, **kwargs: True)
 
@@ -121,7 +125,7 @@ class TestHandlePin:
         context.user_data.update({"awaiting_pin": True})
 
         _set_runtime_values(monkeypatch, PIN_CODE="12345678")
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "failed_attempts", defaultdict(int))
 
         handled = _async(tc.handle_pin(update, context))
@@ -138,7 +142,7 @@ class TestHandlePin:
 
         _set_runtime_values(monkeypatch, PIN_CODE="12345678")
         monkeypatch.setattr(tc, "MAX_ATTEMPTS", 1)
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         attempts = defaultdict(int)
         monkeypatch.setattr(tc, "failed_attempts", attempts)
 
@@ -156,7 +160,7 @@ class TestHandleYoutubeLink:
         update = _make_update(text="https://youtube.com/watch?v=abc", user_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
 
         _async(tc.handle_youtube_link(update, context))
@@ -169,7 +173,7 @@ class TestHandleYoutubeLink:
         update = _make_update(text="0:10-0:20", user_id=333, chat_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {333})
+        _set_authorized_users(monkeypatch, {333})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
         monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: True)
@@ -196,7 +200,7 @@ class TestHandleYoutubeLink:
         update = _make_update(text="https://example.com/not-valid", user_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {333})
+        _set_authorized_users(monkeypatch, {333})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
         monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: False)
@@ -210,7 +214,7 @@ class TestHandleYoutubeLink:
         update = _make_update(text="https://youtube.com/watch?v=ok", user_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {333})
+        _set_authorized_users(monkeypatch, {333})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
         monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: True)
@@ -279,7 +283,7 @@ class TestAudioUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
 
         _async(tc.handle_audio_upload(update, context))
@@ -303,7 +307,7 @@ class TestAudioUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {555})
+        _set_authorized_users(monkeypatch, {555})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: False)
 
@@ -325,7 +329,7 @@ class TestAudioUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {555})
+        _set_authorized_users(monkeypatch, {555})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
 
@@ -400,7 +404,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
 
         _async(tc.status_command(update, context))
 
@@ -413,7 +417,7 @@ class TestStatusAndStatsCommands:
         (tmp_path / "a.mp4").write_bytes(b"a" * 2048)
         (tmp_path / "b.mp4").write_bytes(b"b" * 2048)
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(tc, "DOWNLOAD_PATH", str(tmp_path))
         monkeypatch.setattr(tc, "get_disk_usage", lambda: (80.0, 20.0, 100.0, 80.0))
 
@@ -428,7 +432,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
 
         _async(tc.history_command(update, context))
 
@@ -438,7 +442,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(
             tc,
             "get_download_stats",
@@ -459,7 +463,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(
             tc,
             "get_download_stats",
@@ -492,7 +496,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
 
         _async(tc.cleanup_command(update, context))
 
@@ -502,7 +506,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(tc, "cleanup_old_files", lambda *_args, **_kwargs: 0)
         monkeypatch.setattr(tc, "get_disk_usage", lambda: (80.0, 20.0, 100.0, 80.0))
 
@@ -514,7 +518,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {1, 2, 111})
+        _set_authorized_users(monkeypatch, {1, 2, 111})
         _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
 
         _async(tc.users_command(update, context))
@@ -529,7 +533,7 @@ class TestHandleYoutubeLinkTimeRange:
         update = _make_update(text="1:00-10:00", user_id=333, chat_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {333})
+        _set_authorized_users(monkeypatch, {333})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
         monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: True)
@@ -680,7 +684,7 @@ class TestUsersCommand:
         update = _make_update(user_id=user_id)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {user_id, *range(1, 11)})
+        _set_authorized_users(monkeypatch, {user_id, *range(1, 11)})
         _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
 
         _async(tc.users_command(update, context))
@@ -782,7 +786,7 @@ class TestHistoryWithNewFields:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(
             tc,
             "get_download_stats",
@@ -836,7 +840,7 @@ class TestVideoUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
 
         _async(tc.handle_video_upload(update, context))
@@ -857,7 +861,7 @@ class TestVideoUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {888})
+        _set_authorized_users(monkeypatch, {888})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: False)
 
@@ -878,7 +882,7 @@ class TestVideoUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {888})
+        _set_authorized_users(monkeypatch, {888})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
 

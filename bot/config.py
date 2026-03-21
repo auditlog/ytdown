@@ -410,5 +410,11 @@ def get_runtime_value(key: str, default=None):
     return CONFIG.get(key, default)
 
 
+def get_runtime_authorized_users() -> set[int]:
+    """Return the active in-memory authorized user set."""
+
+    return authorized_users
+
+
 # Initialize runtime state on module load for backward compatibility.
 initialize_runtime()

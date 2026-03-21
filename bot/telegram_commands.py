@@ -18,8 +18,8 @@ from datetime import datetime
 
 from bot.config import (
     DOWNLOAD_PATH,
-    authorized_users,
     get_download_stats,
+    get_runtime_authorized_users,
     get_runtime_value,
 )
 from bot.security import (
@@ -182,7 +182,7 @@ def _get_authorized_user_ids(context: ContextTypes.DEFAULT_TYPE) -> set[int]:
     runtime = get_app_runtime(context)
     if runtime is not None:
         return runtime.authorized_users_set
-    return authorized_users
+    return get_runtime_authorized_users()
 
 
 def _is_authorized(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:

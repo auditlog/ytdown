@@ -21,6 +21,10 @@ def _async(coro):
     return asyncio.run(coro)
 
 
+def _set_authorized_users(monkeypatch, users):
+    monkeypatch.setattr(tc, "get_runtime_authorized_users", lambda: users)
+
+
 def _make_update(text="", user_id=123456, chat_id=123456):
     update = Mock()
     update.effective_user.id = user_id
@@ -292,7 +296,7 @@ class TestSpotifyTelegramFlow:
         context = _make_context()
 
         monkeypatch.setattr(tc, "detect_platform", lambda *_: "spotify")
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
 
         _async(tc.process_youtube_link(
             update, context,

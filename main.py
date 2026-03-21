@@ -20,7 +20,7 @@ from telegram.ext import (
     filters,
 )
 
-from bot.config import CONFIG, initialize_runtime
+from bot.config import get_runtime_value, initialize_runtime
 from bot.cleanup import monitor_disk_space, periodic_cleanup
 from bot.cli import parse_arguments, cli_mode, curses_main
 from bot.runtime import attach_runtime, build_app_runtime
@@ -76,7 +76,7 @@ def build_application(runtime=None):
 
     application = (
         ApplicationBuilder()
-        .token(CONFIG["TELEGRAM_BOT_TOKEN"])
+        .token(get_runtime_value("TELEGRAM_BOT_TOKEN", ""))
         .connect_timeout(30)
         .read_timeout(60)
         .write_timeout(60)

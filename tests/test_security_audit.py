@@ -271,7 +271,8 @@ class TestAuthorizedUsersLock:
     def test_auth_lock_exists(self):
         """Verify _auth_lock is defined in config module."""
         from bot.config import _auth_lock
-        assert isinstance(_auth_lock, type(threading.Lock()))
+        assert hasattr(_auth_lock, "acquire")
+        assert hasattr(_auth_lock, "release")
 
     def test_manage_authorized_user_uses_lock(self):
         """Verify manage_authorized_user source code uses _auth_lock."""

@@ -60,7 +60,8 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
     builder.build.return_value = app
 
     monkeypatch.setattr(app_main, "parse_arguments", lambda: args)
-    monkeypatch.setattr(app_main, "initialize_runtime", lambda: app_main.CONFIG.update({"TELEGRAM_BOT_TOKEN": "test-token"}))
+    monkeypatch.setattr(app_main, "initialize_runtime", Mock())
+    monkeypatch.setattr(app_main, "get_runtime_value", lambda key, default=None: "test-token" if key == "TELEGRAM_BOT_TOKEN" else default)
     monkeypatch.setattr(app_main, "ApplicationBuilder", lambda: builder)
     monkeypatch.setattr(app_main, "monitor_disk_space", Mock())
     monkeypatch.setattr(app_main, "periodic_cleanup", Mock())

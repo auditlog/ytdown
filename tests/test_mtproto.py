@@ -2,10 +2,9 @@
 Unit tests for bot.mtproto — MTProto large file download module.
 """
 
+import asyncio
 import os
 from unittest.mock import patch, AsyncMock, MagicMock
-
-import pytest
 
 from bot.mtproto import is_mtproto_available, download_file_mtproto
 
@@ -47,29 +46,26 @@ class TestIsMtprotoAvailable:
 class TestDownloadFileMtproto:
     """Tests for download_file_mtproto() error handling."""
 
-    @pytest.mark.asyncio
-    async def test_returns_false_when_pyrogram_missing(self, monkeypatch):
+    def test_returns_false_when_pyrogram_missing(self, monkeypatch):
         monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
                             'TELEGRAM_API_ID', '12345')
         monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
                             'TELEGRAM_API_HASH', 'abc123hash')
         with patch.dict('sys.modules', {'pyrogram': None}):
-            result = await download_file_mtproto("token", 123, 456, "/tmp/test.mp3")
+            result = asyncio.run(download_file_mtproto("token", 123, 456, "/tmp/test.mp3"))
             assert result is False
 
-    @pytest.mark.asyncio
-    async def test_returns_false_when_api_id_missing(self, monkeypatch):
+    def test_returns_false_when_api_id_missing(self, monkeypatch):
         monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
                             'TELEGRAM_API_ID', '')
         monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
                             'TELEGRAM_API_HASH', 'abc123hash')
         mock_pyrogram = MagicMock()
         with patch.dict('sys.modules', {'pyrogram': mock_pyrogram}):
-            result = await download_file_mtproto("token", 123, 456, "/tmp/test.mp3")
+            result = asyncio.run(download_file_mtproto("token", 123, 456, "/tmp/test.mp3"))
             assert result is False
 
-    @pytest.mark.asyncio
-    async def test_returns_false_on_exception(self, monkeypatch, tmp_path):
+    def test_returns_false_on_exception(self, monkeypatch, tmp_path):
         monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
                             'TELEGRAM_API_ID', '12345')
         monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
@@ -86,5 +82,5 @@ class TestDownloadFileMtproto:
 
         with patch.dict('sys.modules', {'pyrogram': mock_pyrogram}):
             dest = str(tmp_path / "test.mp3")
-            result = await download_file_mtproto("token", 123, 456, dest)
+            result = asyncio.run(download_file_mtproto("token", 123, 456, dest))
             assert result is False
