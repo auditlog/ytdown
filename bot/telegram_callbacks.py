@@ -75,6 +75,7 @@ from bot.services.playlist_service import (
     load_playlist,
     parse_playlist_download_choice,
 )
+from bot.runtime import record_download_for
 from bot.session_store import download_progress as _download_progress
 
 
@@ -571,9 +572,8 @@ async def _download_and_send_ig_photos(
                 if batch_start + 10 < len(downloaded_paths):
                     await asyncio.sleep(1)
 
-        from bot.config import add_download_record
         total_size = sum(os.path.getsize(p) for p in downloaded_paths) / (1024 * 1024)
-        add_download_record(chat_id, title, user_urls.get(chat_id, ''), "photo", total_size)
+        record_download_for(context, chat_id, title, user_urls.get(chat_id, ''), "photo", total_size)
         await safe_edit_message(query, f"Wysłano {len(downloaded_paths)} zdjęć!")
 
     except Exception as e:

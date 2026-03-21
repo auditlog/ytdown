@@ -73,6 +73,7 @@ from bot.services.spotify_service import (
     get_resolution_error_message,
     resolve_episode,
 )
+from bot.runtime import get_app_runtime
 
 
 def escape_md(text: str) -> str:
@@ -173,6 +174,15 @@ def _is_admin(user_id: int) -> bool:
         return user_id == int(admin_chat_id)
     except (ValueError, TypeError):
         return False
+
+
+def _get_history_stats(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict:
+    """Read history stats from runtime when present, otherwise use legacy facade."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        return runtime.download_history_repository.stats(user_id=user_id)
+    return get_download_stats(user_id)
 
 
 def parse_time_range(text: str) -> dict | None:
@@ -441,7 +451,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     # Get stats for this user
-    stats = get_download_stats(user_id)
+    stats = _get_history_stats(context, user_id)
 
     if stats['total_downloads'] == 0:
         await update.message.reply_text("Brak historii pobrań.")
