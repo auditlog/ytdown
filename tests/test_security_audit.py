@@ -304,6 +304,14 @@ class TestInitExports:
         import bot
         assert 'BOT_TOKEN' not in bot.__all__
 
+    def test_init_does_not_mask_import_errors(self):
+        import inspect
+        import bot
+
+        source = inspect.getsource(bot)
+        assert "except ImportError" not in source
+        assert "= None" not in source
+
 
 # --- Fix 2: exception message hiding ---
 

@@ -1,30 +1,9 @@
 """
-YouTube Downloader Telegram Bot - Package
+YouTube Downloader Telegram Bot package exports.
 
-This package contains all modules for the YouTube downloader bot.
+Import failures in runtime modules should surface immediately during package
+import instead of being masked by fallback `None` assignments.
 """
-
-# Core modules (minimal dependencies)
-from bot.config import (
-    CONFIG,
-    DOWNLOAD_PATH,
-    authorized_users,
-    load_config,
-    load_authorized_users,
-    save_authorized_users,
-)
-
-from bot.security import (
-    check_rate_limit,
-    validate_url,
-    validate_youtube_url,
-    detect_platform,
-    manage_authorized_user,
-    estimate_file_size,
-    user_urls,
-    user_playlist_data,
-    MAX_PLAYLIST_ITEMS,
-)
 
 from bot.cleanup import (
     cleanup_old_files,
@@ -32,165 +11,125 @@ from bot.cleanup import (
     monitor_disk_space,
     periodic_cleanup,
 )
-
-# Modules with optional dependencies (graceful handling)
-try:
-    from bot.transcription import (
-        transcribe_mp3_file,
-        generate_summary,
-        estimate_token_count,
-        is_text_too_long_for_correction,
-        is_text_too_long_for_summary,
-    )
-except ImportError:
-    transcribe_mp3_file = None
-    generate_summary = None
-    estimate_token_count = None
-    is_text_too_long_for_correction = None
-    is_text_too_long_for_summary = None
-
-try:
-    from bot.downloader import (
-        get_video_info,
-        download_youtube_video,
-        sanitize_filename,
-        get_available_subtitles,
-        download_subtitles,
-        parse_subtitle_file,
-        is_playlist_url,
-        get_playlist_info,
-        strip_playlist_params,
-        get_instagram_post_info,
-        is_photo_entry,
-        download_photo,
-    )
-except ImportError:
-    get_video_info = None
-    download_youtube_video = None
-    sanitize_filename = None
-    get_available_subtitles = None
-    download_subtitles = None
-    parse_subtitle_file = None
-    is_playlist_url = None
-    get_playlist_info = None
-    strip_playlist_params = None
-    get_instagram_post_info = None
-    is_photo_entry = None
-    download_photo = None
-
-try:
-    from bot.telegram_commands import (
-        start,
-        help_command,
-        status_command,
-        cleanup_command,
-        users_command,
-        handle_youtube_link,
-        handle_pin,
-        process_youtube_link,
-        process_playlist_link,
-        handle_audio_upload,
-        handle_video_upload,
-    )
-except ImportError:
-    start = None
-    help_command = None
-    status_command = None
-    cleanup_command = None
-    users_command = None
-    handle_youtube_link = None
-    handle_pin = None
-    process_youtube_link = None
-    process_playlist_link = None
-    handle_audio_upload = None
-    handle_video_upload = None
-
-try:
-    from bot.telegram_callbacks import (
-        handle_callback,
-        download_file,
-        download_playlist,
-        handle_formats_list,
-        show_summary_options,
-        back_to_main_menu,
-        transcribe_audio_file,
-        show_audio_summary_options,
-        show_subtitle_source_menu,
-        handle_subtitle_download,
-        show_subtitle_summary_options,
-    )
-except ImportError:
-    handle_callback = None
-    download_file = None
-    download_playlist = None
-    handle_formats_list = None
-    show_summary_options = None
-    back_to_main_menu = None
-    transcribe_audio_file = None
-    show_audio_summary_options = None
-    show_subtitle_source_menu = None
-    handle_subtitle_download = None
-    show_subtitle_summary_options = None
+from bot.config import (
+    CONFIG,
+    DOWNLOAD_PATH,
+    authorized_users,
+    load_authorized_users,
+    load_config,
+    save_authorized_users,
+)
+from bot.downloader import (
+    download_photo,
+    download_subtitles,
+    download_youtube_video,
+    get_available_subtitles,
+    get_instagram_post_info,
+    get_playlist_info,
+    get_video_info,
+    is_photo_entry,
+    is_playlist_url,
+    parse_subtitle_file,
+    sanitize_filename,
+    strip_playlist_params,
+)
+from bot.security import (
+    MAX_PLAYLIST_ITEMS,
+    check_rate_limit,
+    detect_platform,
+    estimate_file_size,
+    manage_authorized_user,
+    user_playlist_data,
+    user_urls,
+    validate_url,
+    validate_youtube_url,
+)
+from bot.telegram_callbacks import (
+    back_to_main_menu,
+    download_file,
+    download_playlist,
+    handle_callback,
+    handle_formats_list,
+    handle_subtitle_download,
+    show_audio_summary_options,
+    show_subtitle_source_menu,
+    show_subtitle_summary_options,
+    show_summary_options,
+    transcribe_audio_file,
+)
+from bot.telegram_commands import (
+    cleanup_command,
+    handle_audio_upload,
+    handle_pin,
+    handle_video_upload,
+    handle_youtube_link,
+    help_command,
+    process_playlist_link,
+    process_youtube_link,
+    start,
+    status_command,
+    users_command,
+)
+from bot.transcription import (
+    estimate_token_count,
+    generate_summary,
+    is_text_too_long_for_correction,
+    is_text_too_long_for_summary,
+    transcribe_mp3_file,
+)
 
 __all__ = [
-    # Config
-    'CONFIG',
-    'DOWNLOAD_PATH',
-    'authorized_users',
-    'load_config',
-    'load_authorized_users',
-    'save_authorized_users',
-    # Security
-    'check_rate_limit',
-    'validate_url',
-    'validate_youtube_url',
-    'detect_platform',
-    'manage_authorized_user',
-    'estimate_file_size',
-    'user_urls',
-    # Cleanup
-    'cleanup_old_files',
-    'get_disk_usage',
-    'monitor_disk_space',
-    'periodic_cleanup',
-    # Transcription
-    'transcribe_mp3_file',
-    'generate_summary',
-    # Downloader
-    'get_video_info',
-    'download_youtube_video',
-    'sanitize_filename',
-    'get_available_subtitles',
-    'download_subtitles',
-    'parse_subtitle_file',
-    'is_playlist_url',
-    'get_playlist_info',
-    'strip_playlist_params',
-    'get_instagram_post_info',
-    'is_photo_entry',
-    'download_photo',
-    # Telegram commands
-    'start',
-    'help_command',
-    'status_command',
-    'cleanup_command',
-    'users_command',
-    'handle_youtube_link',
-    'handle_pin',
-    'process_youtube_link',
-    'process_playlist_link',
-    'handle_audio_upload',
-    'handle_video_upload',
-    # Telegram callbacks
-    'handle_callback',
-    'download_file',
-    'download_playlist',
-    'handle_formats_list',
-    'show_summary_options',
-    'back_to_main_menu',
-    'transcribe_audio_file',
-    'show_audio_summary_options',
-    'show_subtitle_source_menu',
-    'handle_subtitle_download',
-    'show_subtitle_summary_options',
+    "CONFIG",
+    "DOWNLOAD_PATH",
+    "authorized_users",
+    "load_config",
+    "load_authorized_users",
+    "save_authorized_users",
+    "check_rate_limit",
+    "validate_url",
+    "validate_youtube_url",
+    "detect_platform",
+    "manage_authorized_user",
+    "estimate_file_size",
+    "user_urls",
+    "cleanup_old_files",
+    "get_disk_usage",
+    "monitor_disk_space",
+    "periodic_cleanup",
+    "transcribe_mp3_file",
+    "generate_summary",
+    "get_video_info",
+    "download_youtube_video",
+    "sanitize_filename",
+    "get_available_subtitles",
+    "download_subtitles",
+    "parse_subtitle_file",
+    "is_playlist_url",
+    "get_playlist_info",
+    "strip_playlist_params",
+    "get_instagram_post_info",
+    "is_photo_entry",
+    "download_photo",
+    "start",
+    "help_command",
+    "status_command",
+    "cleanup_command",
+    "users_command",
+    "handle_youtube_link",
+    "handle_pin",
+    "process_youtube_link",
+    "process_playlist_link",
+    "handle_audio_upload",
+    "handle_video_upload",
+    "handle_callback",
+    "download_file",
+    "download_playlist",
+    "handle_formats_list",
+    "show_summary_options",
+    "back_to_main_menu",
+    "transcribe_audio_file",
+    "show_audio_summary_options",
+    "show_subtitle_source_menu",
+    "handle_subtitle_download",
+    "show_subtitle_summary_options",
 ]
