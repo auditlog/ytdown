@@ -22,7 +22,6 @@ _executor = ThreadPoolExecutor(max_workers=2)
 
 from bot.config import (
     DOWNLOAD_PATH,
-    add_download_record,
     get_runtime_value,
 )
 from bot.security import (
@@ -802,7 +801,7 @@ async def download_file(
                             read_timeout=60,
                             write_timeout=60,
                         )
-                    add_download_record(chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
+                    record_download_for(context, chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
                     success_recorded = True
                     return
 
@@ -841,7 +840,11 @@ async def download_file(
                     )
 
                 # Record transcription+summary in history
-                add_download_record(chat_id, title, url, f"transcription_summary_{summary_type}", file_size_mb, time_range, selected_format=format)
+                record_download_for(
+                    context, chat_id, title, url,
+                    f"transcription_summary_{summary_type}",
+                    file_size_mb, time_range, selected_format=format,
+                )
                 success_recorded = True
 
                 await update_status("Transkrypcja i podsumowanie zostały wysłane!")
@@ -879,7 +882,7 @@ async def download_file(
                     logging.error(f"Error deleting files: {e}")
 
                 # Record transcription in history
-                add_download_record(chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
+                record_download_for(context, chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
                 success_recorded = True
 
                 await update_status("Transkrypcja została wysłana!")
@@ -926,7 +929,7 @@ async def download_file(
 
             # Record download in history
             format_type = f"{media_type}_{format}"
-            add_download_record(chat_id, title, url, format_type, file_size_mb, time_range, selected_format=format)
+            record_download_for(context, chat_id, title, url, format_type, file_size_mb, time_range, selected_format=format)
             success_recorded = True
 
             await update_status("Plik został wysłany!")
@@ -934,8 +937,8 @@ async def download_file(
     except Exception as e:
         # Only record failure if success wasn't already recorded
         if not success_recorded:
-            add_download_record(
-                chat_id, title, url, f"{media_type}_{format}",
+            record_download_for(
+                context, chat_id, title, url, f"{media_type}_{format}",
                 status="failure", selected_format=format,
                 error_message=str(e),
             )
@@ -1255,7 +1258,7 @@ async def _download_single_playlist_item(
         except OSError:
             pass
 
-    add_download_record(chat_id, title, url, f"{media_type}_{format_choice}", file_size_mb)
+    record_download_for(context, chat_id, title, url, f"{media_type}_{format_choice}", file_size_mb)
     await status_msg.edit_text(f"[✅] {title}")
 
 
@@ -1394,8 +1397,10 @@ async def download_spotify_resolved(
                     write_timeout=60,
                 )
 
-            add_download_record(chat_id, title, user_urls.get(chat_id, ''),
-                              "spotify_transcribe", file_size_mb)
+            record_download_for(
+                context, chat_id, title, user_urls.get(chat_id, ''),
+                "spotify_transcribe", file_size_mb,
+            )
             cleanup_transcription_artifacts(
                 source_media_path=downloaded_file_path,
                 output_dir=chat_download_path,
@@ -1411,8 +1416,10 @@ async def download_spotify_resolved(
                     caption=title[:200],
                     read_timeout=120, write_timeout=120,
                 )
-            add_download_record(chat_id, title, user_urls.get(chat_id, ''),
-                              f"spotify_audio_{audio_format}", file_size_mb)
+            record_download_for(
+                context, chat_id, title, user_urls.get(chat_id, ''),
+                f"spotify_audio_{audio_format}", file_size_mb,
+            )
 
         await update_status(f"Gotowe: {title}")
 
@@ -1641,7 +1648,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                     read_timeout=60,
                     write_timeout=60,
                 )
-            add_download_record(chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
+            record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
             return
 
         await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
@@ -1678,7 +1685,11 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                 write_timeout=60,
             )
 
-        add_download_record(chat_id, title, "audio_upload", f"audio_upload_transcription_summary_{summary_type}", file_size_mb, None)
+        record_download_for(
+            context, chat_id, title, "audio_upload",
+            f"audio_upload_transcription_summary_{summary_type}",
+            file_size_mb, None,
+        )
         await update_status("Transkrypcja i podsumowanie zostały wysłane!")
 
     else:
@@ -1716,7 +1727,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         except Exception as e:
             logging.error(f"Error deleting audio files: {e}")
 
-        add_download_record(chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
+        record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
         await update_status("Transkrypcja została wysłana!")
 
 
@@ -2052,8 +2063,8 @@ async def handle_subtitle_download(
         except Exception as e:
             logging.error(f"Error deleting subtitle file: {e}")
 
-        add_download_record(
-            chat_id, title, url,
+        record_download_for(
+            context, chat_id, title, url,
             f"yt_subtitles_{lang}_summary_{summary_type}",
             0, None, selected_format=f"sub_{lang}",
         )
@@ -2086,8 +2097,8 @@ async def handle_subtitle_download(
         except Exception as e:
             logging.error(f"Error deleting subtitle file: {e}")
 
-        add_download_record(
-            chat_id, title, url,
+        record_download_for(
+            context, chat_id, title, url,
             f"yt_subtitles_{lang}",
             0, None, selected_format=f"sub_{lang}",
         )
