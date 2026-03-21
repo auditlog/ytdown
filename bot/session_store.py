@@ -13,6 +13,8 @@ from typing import Any
 class SessionState:
     """Chat-scoped runtime state used by Telegram handlers."""
 
+    awaiting_pin: bool | None = None
+    pending_action: dict[str, Any] | None = None
     current_url: str | None = None
     time_range: dict[str, Any] | None = None
     playlist_data: dict[str, Any] | None = None
@@ -145,7 +147,9 @@ class SessionStore:
         if session is None:
             return
         if (
-            session.current_url is None
+            session.awaiting_pin is None
+            and session.pending_action is None
+            and session.current_url is None
             and session.time_range is None
             and session.playlist_data is None
             and session.download_progress is None

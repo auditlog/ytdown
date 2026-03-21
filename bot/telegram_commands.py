@@ -8,6 +8,7 @@ and PIN authentication logic.
 import os
 import logging
 import subprocess
+from collections.abc import MutableMapping
 from concurrent.futures import ThreadPoolExecutor
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -191,6 +192,158 @@ def _is_authorized(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
     return user_id in _get_authorized_user_ids(context)
 
 
+class _AuthSessionData(MutableMapping[str, object]):
+    """Runtime-aware auth state view with legacy `user_data` fallback semantics."""
+
+    _PENDING_KEYS = ("pending_url", "pending_audio", "pending_video")
+
+    def __init__(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+        self._context = context
+        self._chat_id = chat_id
+
+    def _runtime(self):
+        return get_app_runtime(self._context)
+
+    def _legacy(self) -> dict:
+        return self._context.user_data
+
+    def _get_pending(self):
+        runtime = self._runtime()
+        if runtime is not None:
+            pending = runtime.session_store.get_field(self._chat_id, "pending_action")
+            if pending is not None:
+                return pending
+
+        legacy = self._legacy()
+        for kind in ("url", "audio", "video"):
+            key = f"pending_{kind}"
+            if key in legacy:
+                return {"kind": kind, "payload": legacy[key]}
+        return None
+
+    def _set_pending(self, kind: str, payload) -> None:
+        runtime = self._runtime()
+        if runtime is not None:
+            runtime.session_store.set_field(
+                self._chat_id,
+                "pending_action",
+                {"kind": kind, "payload": payload},
+            )
+            for key in self._PENDING_KEYS:
+                self._legacy().pop(key, None)
+            return
+
+        self._legacy()[f"pending_{kind}"] = payload
+
+    def _clear_pending(self) -> None:
+        runtime = self._runtime()
+        if runtime is not None:
+            runtime.session_store.pop_field(self._chat_id, "pending_action", None)
+        for key in self._PENDING_KEYS:
+            self._legacy().pop(key, None)
+
+    def __getitem__(self, key: str):
+        value = self.get(key, None)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: str, value) -> None:
+        if key == "awaiting_pin":
+            runtime = self._runtime()
+            if runtime is not None:
+                runtime.session_store.set_field(self._chat_id, "awaiting_pin", bool(value))
+                self._legacy().pop(key, None)
+            else:
+                self._legacy()[key] = value
+            return
+
+        if key.startswith("pending_"):
+            self._set_pending(key.removeprefix("pending_"), value)
+            return
+
+        self._legacy()[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        marker = object()
+        value = self.pop(key, marker)
+        if value is marker:
+            raise KeyError(key)
+
+    def __iter__(self):
+        keys = set(self._legacy().keys())
+        if self.get("awaiting_pin", None):
+            keys.add("awaiting_pin")
+        pending = self._get_pending()
+        if pending is not None:
+            keys.add(f"pending_{pending['kind']}")
+        return iter(keys)
+
+    def __len__(self) -> int:
+        return len(list(iter(self)))
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        return self.get(key, None) is not None
+
+    def get(self, key: str, default=None):
+        if key == "awaiting_pin":
+            runtime = self._runtime()
+            if runtime is not None:
+                value = runtime.session_store.get_field(self._chat_id, "awaiting_pin")
+                if value is not None:
+                    return value
+            return self._legacy().get(key, default)
+
+        if key.startswith("pending_"):
+            pending = self._get_pending()
+            kind = key.removeprefix("pending_")
+            if pending is not None and pending.get("kind") == kind:
+                return pending.get("payload")
+            return self._legacy().get(key, default)
+
+        return self._legacy().get(key, default)
+
+    def pop(self, key: str, default=None):
+        if key == "awaiting_pin":
+            runtime = self._runtime()
+            if runtime is not None:
+                value = runtime.session_store.pop_field(self._chat_id, "awaiting_pin", None)
+                self._legacy().pop(key, None)
+                return default if value is None else value
+            return self._legacy().pop(key, default)
+
+        if key.startswith("pending_"):
+            kind = key.removeprefix("pending_")
+            pending = self._get_pending()
+            if pending is not None and pending.get("kind") == kind:
+                self._clear_pending()
+                return pending.get("payload")
+            return self._legacy().pop(key, default)
+
+        return self._legacy().pop(key, default)
+
+    def clear(self) -> None:
+        runtime = self._runtime()
+        if runtime is not None:
+            runtime.session_store.clear_fields(
+                self._chat_id,
+                "awaiting_pin",
+                "pending_action",
+            )
+        self._legacy().clear()
+
+
+def _get_auth_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> MutableMapping[str, object]:
+    """Return mutable auth flow state backed by runtime session when available."""
+
+    return _AuthSessionData(context, chat_id)
+
+
 def _get_session_value(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -267,6 +420,8 @@ def _set_session_context_value(
     runtime = get_app_runtime(context)
     if runtime is not None:
         runtime.session_store.set_field(chat_id, field_name, value)
+        context.user_data.pop(legacy_key, None)
+        return
     context.user_data[legacy_key] = value
 
 
@@ -387,12 +542,13 @@ def parse_time_range(text: str) -> dict | None:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /start command."""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     user_name = update.effective_user.first_name
     result = handle_start(
         user_id=user_id,
         user_name=user_name,
         authorized_user_ids=_get_authorized_user_ids(context),
-        user_data=context.user_data,
+        user_data=_get_auth_state(context, chat_id),
         block_map=block_until,
     )
     await update.message.reply_text(result.message)
@@ -438,11 +594,12 @@ async def notify_admin_pin_failure(bot, user, attempt_count: int, blocked: bool)
 async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles PIN input from user."""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     message_text = update.message.text
     result = handle_pin_input(
         user_id=user_id,
         message_text=message_text,
-        user_data=context.user_data,
+        user_data=_get_auth_state(context, chat_id),
         pin_code=get_runtime_value("PIN_CODE", ""),
         authorized_user_ids=_get_authorized_user_ids(context),
         attempts=failed_attempts,
@@ -494,7 +651,7 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         chat_id=chat_id,
         authorized_user_ids=_get_authorized_user_ids(context),
         remove_authorized_user=lambda auth_user_id: manage_authorized_user(auth_user_id, 'remove'),
-        user_data=context.user_data,
+        user_data=_get_auth_state(context, chat_id),
         user_urls=user_urls,
         user_time_ranges=user_time_ranges,
     )
@@ -702,7 +859,7 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Check if user is authorized
     if not _is_authorized(context, user_id):
-        store_pending_action(context.user_data, kind="url", payload=message_text)
+        store_pending_action(_get_auth_state(context, chat_id), kind="url", payload=message_text)
 
         await update.message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
@@ -1103,7 +1260,11 @@ async def handle_audio_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not _is_authorized(context, user_id):
-        store_pending_action(context.user_data, kind="audio", payload=audio_info)
+        store_pending_action(
+            _get_auth_state(context, update.effective_chat.id),
+            kind="audio",
+            payload=audio_info,
+        )
         await message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
@@ -1319,7 +1480,11 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not _is_authorized(context, user_id):
-        store_pending_action(context.user_data, kind="video", payload=video_info)
+        store_pending_action(
+            _get_auth_state(context, update.effective_chat.id),
+            kind="video",
+            payload=video_info,
+        )
         await message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."

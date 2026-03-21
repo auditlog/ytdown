@@ -349,6 +349,8 @@ def _set_session_context_value(
     runtime = get_app_runtime(context)
     if runtime is not None:
         runtime.session_store.set_field(chat_id, field_name, value)
+        context.user_data.pop(legacy_key, None)
+        return
     context.user_data[legacy_key] = value
 
 
