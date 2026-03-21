@@ -8,6 +8,7 @@ from typing import Any
 
 from bot.config import (
     add_download_record,
+    authorized_users,
     get_authorized_users_repository,
     get_download_history_repository,
     get_runtime_config,
@@ -31,6 +32,7 @@ class AppRuntime:
     services: Any
     authorized_users_repository: Any
     download_history_repository: Any
+    authorized_users_set: set[int]
 
 
 def build_app_runtime() -> AppRuntime:
@@ -43,6 +45,7 @@ def build_app_runtime() -> AppRuntime:
         services=get_runtime_services(),
         authorized_users_repository=get_authorized_users_repository(),
         download_history_repository=get_download_history_repository(),
+        authorized_users_set=authorized_users,
     )
 
 

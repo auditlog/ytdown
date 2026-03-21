@@ -176,6 +176,66 @@ def _is_admin(user_id: int) -> bool:
         return False
 
 
+def _get_authorized_user_ids(context: ContextTypes.DEFAULT_TYPE) -> set[int]:
+    """Return authorized users from runtime when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        return runtime.authorized_users_set
+    return authorized_users
+
+
+def _is_authorized(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
+    """Check user authorization against runtime-aware state."""
+
+    return user_id in _get_authorized_user_ids(context)
+
+
+def _get_session_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    legacy_map,
+):
+    """Read one chat-scoped value from runtime session store when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        return runtime.session_store.get_field(chat_id, field_name)
+    return legacy_map.get(chat_id)
+
+
+def _set_session_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    value,
+    legacy_map,
+) -> None:
+    """Write one chat-scoped value through runtime session store when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.set_field(chat_id, field_name, value)
+        return
+    legacy_map[chat_id] = value
+
+
+def _clear_session_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    legacy_map,
+) -> None:
+    """Clear one chat-scoped value through runtime session store when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.pop_field(chat_id, field_name, None)
+        return
+    legacy_map.pop(chat_id, None)
+
+
 def _get_history_stats(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict:
     """Read history stats from runtime when present, otherwise use legacy facade."""
 
@@ -245,7 +305,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     result = handle_start(
         user_id=user_id,
         user_name=user_name,
-        authorized_user_ids=authorized_users,
+        authorized_user_ids=_get_authorized_user_ids(context),
         user_data=context.user_data,
         block_map=block_until,
     )
@@ -298,7 +358,7 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         message_text=message_text,
         user_data=context.user_data,
         pin_code=get_runtime_value("PIN_CODE", ""),
-        authorized_user_ids=authorized_users,
+        authorized_user_ids=_get_authorized_user_ids(context),
         attempts=failed_attempts,
         block_map=block_until,
         authorize_user=lambda auth_user_id: manage_authorized_user(auth_user_id, 'add'),
@@ -346,7 +406,7 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     success = logout_user(
         user_id=user_id,
         chat_id=chat_id,
-        authorized_user_ids=authorized_users,
+        authorized_user_ids=_get_authorized_user_ids(context),
         remove_authorized_user=lambda auth_user_id: manage_authorized_user(auth_user_id, 'remove'),
         user_data=context.user_data,
         user_urls=user_urls,
@@ -397,7 +457,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /status command - shows disk space status."""
     user_id = update.effective_user.id
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
         return
 
@@ -446,7 +506,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /history command - shows download history and statistics."""
     user_id = update.effective_user.id
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
         return
 
@@ -494,7 +554,7 @@ async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /cleanup command - manually triggers file cleanup."""
     user_id = update.effective_user.id
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
         return
 
@@ -521,7 +581,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /users command - user management (admin only)."""
     user_id = update.effective_user.id
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
         return
 
@@ -529,8 +589,9 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ta komenda jest dostępna tylko dla administratora.")
         return
 
-    user_count = len(authorized_users)
-    user_list = ', '.join(str(uid) for uid in sorted(authorized_users))
+    authorized_user_ids = _get_authorized_user_ids(context)
+    user_count = len(authorized_user_ids)
+    user_list = ', '.join(str(uid) for uid in sorted(authorized_user_ids))
 
     await update.message.reply_text(
         f"Autoryzowani użytkownicy\n\n"
@@ -552,7 +613,7 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # Check if user is authorized
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         store_pending_action(context.user_data, kind="url", payload=message_text)
 
         await update.message.reply_text(
@@ -562,7 +623,7 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # Check if user has an active URL session and message looks like a time range
-    current_url = user_urls.get(chat_id)
+    current_url = _get_session_value(context, chat_id, "current_url", user_urls)
     if current_url:
         time_range = parse_time_range(message_text)
         if time_range:
@@ -582,7 +643,7 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                     return
                 
                 # Apply the custom time range
-                user_time_ranges[chat_id] = time_range
+                _set_session_value(context, chat_id, "time_range", time_range, user_time_ranges)
 
                 # Send confirmation and show main menu with updated time range
                 cur_platform = context.user_data.get('platform', 'youtube')
@@ -673,8 +734,8 @@ async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     # Store playlist data in session
-    user_playlist_data[chat_id] = playlist_info
-    user_urls[chat_id] = url
+    _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
+    _set_session_value(context, chat_id, "current_url", url, user_urls)
 
     msg, reply_markup = _build_playlist_message(playlist_info)
     await progress_message.edit_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
@@ -695,7 +756,7 @@ async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT
 
     # Store resolved info for callback handlers
     context.user_data['spotify_resolved'] = resolved
-    user_urls[chat_id] = url
+    _set_session_value(context, chat_id, "current_url", url, user_urls)
 
     caption_data = build_episode_caption_data(resolved)
     title = caption_data['title']
@@ -726,9 +787,9 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
         import asyncio
         with ThreadPoolExecutor(max_workers=1) as executor:
             url = await asyncio.get_event_loop().run_in_executor(executor, normalize_url, url)
-    user_urls[chat_id] = url
+    _set_session_value(context, chat_id, "current_url", url, user_urls)
     # Clear any previous time range
-    user_time_ranges.pop(chat_id, None)
+    _clear_session_value(context, chat_id, "time_range", user_time_ranges)
 
     # Detect and store platform for conditional UI
     platform = detect_platform(url) or 'youtube'
@@ -855,7 +916,7 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     # Show time range info if set
-    time_range = user_time_ranges.get(chat_id)
+    time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
     time_range_info = ""
     if time_range:
         time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
@@ -930,7 +991,7 @@ async def handle_audio_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     if pin_handled:
         return
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         store_pending_action(context.user_data, kind="audio", payload=audio_info)
         await message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
@@ -1140,7 +1201,7 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     if pin_handled:
         return
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         store_pending_action(context.user_data, kind="video", payload=video_info)
         await message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
