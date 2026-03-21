@@ -8,6 +8,7 @@ and PIN authentication logic.
 import os
 import logging
 import subprocess
+from concurrent.futures import ThreadPoolExecutor
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -46,8 +47,6 @@ from bot.security import (
     estimate_file_size,
     is_user_blocked,
     get_block_remaining_seconds,
-    clear_failed_attempts,
-    register_pin_failure,
 )
 from bot.cleanup import (
     cleanup_old_files,
@@ -61,6 +60,12 @@ from bot.downloader import (
     is_photo_entry,
 )
 from bot.spotify import parse_spotify_episode_url
+from bot.services.auth_service import (
+    handle_pin_input,
+    handle_start,
+    logout_user,
+    store_pending_action,
+)
 from bot.services.playlist_service import (
     build_playlist_message,
     load_playlist,
@@ -228,37 +233,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /start command."""
     user_id = update.effective_user.id
     user_name = update.effective_user.first_name
-
-    # Check if user is blocked
-    if is_user_blocked(user_id, block_map=block_until):
-        remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)
-        minutes = remaining_time // 60
-        seconds = remaining_time % 60
-
-        await update.message.reply_text(
-            f"Witaj, {user_name}!\n\n"
-            f"Dostęp zablokowany z powodu zbyt wielu nieudanych prób. "
-            f"Spróbuj ponownie za {minutes} min {seconds} s."
-        )
-        return
-
-    # Check if user is already authorized
-    if user_id in authorized_users:
-        await update.message.reply_text(
-            f"Witaj, {user_name}!\n\n"
-            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
-            "aby pobrać film lub audio."
-        )
-        return
-
-    # If user is not authorized, ask for PIN
-    await update.message.reply_text(
-        f"Witaj, {user_name}!\n\n"
-        "To jest bot chroniony PIN-em.\n"
-        "Aby korzystać z bota, podaj 8-cyfrowy kod PIN."
+    result = handle_start(
+        user_id=user_id,
+        user_name=user_name,
+        authorized_user_ids=authorized_users,
+        user_data=context.user_data,
+        block_map=block_until,
     )
-
-    context.user_data["awaiting_pin"] = True
+    await update.message.reply_text(result.message)
 
 
 async def notify_admin_pin_failure(bot, user, attempt_count: int, blocked: bool):
@@ -301,101 +283,49 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles PIN input from user."""
     user_id = update.effective_user.id
     message_text = update.message.text
+    result = handle_pin_input(
+        user_id=user_id,
+        message_text=message_text,
+        user_data=context.user_data,
+        pin_code=PIN_CODE,
+        authorized_user_ids=authorized_users,
+        attempts=failed_attempts,
+        block_map=block_until,
+        authorize_user=lambda auth_user_id: manage_authorized_user(auth_user_id, 'add'),
+        max_attempts=MAX_ATTEMPTS,
+        block_time=BLOCK_TIME,
+    )
 
-    # Check if user is blocked
-    if is_user_blocked(user_id, block_map=block_until):
-        remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)
-        minutes = remaining_time // 60
-        seconds = remaining_time % 60
+    if not result.handled:
+        return False
 
-        await update.message.reply_text(
-            f"Dostęp zablokowany z powodu zbyt wielu nieudanych prób. "
-            f"Spróbuj ponownie za {minutes} min {seconds} s."
+    if result.notify_admin:
+        await notify_admin_pin_failure(
+            context.bot,
+            update.effective_user,
+            result.attempt_count,
+            result.blocked,
         )
 
+    if result.message:
+        await update.message.reply_text(result.message)
+
+    if result.delete_message:
         try:
             await update.message.delete()
         except Exception:
             pass
 
-        return True
+    pending_action = result.pending_action
+    if pending_action:
+        if pending_action.kind == "url":
+            await process_youtube_link(update, context, pending_action.payload)
+        elif pending_action.kind == "audio":
+            await process_audio_file(update, context, pending_action.payload)
+        elif pending_action.kind == "video":
+            await process_video_file(update, context, pending_action.payload)
 
-    # Check if waiting for PIN from this user
-    if context.user_data.get("awaiting_pin", False) or not (user_id in authorized_users):
-        # Check if message looks like a PIN attempt (digits only)
-        if message_text and message_text.isdigit():
-            if message_text == PIN_CODE:
-                # Reset failed attempts counter
-                clear_failed_attempts(user_id, attempts=failed_attempts)
-
-                # Add user to authorized list
-                manage_authorized_user(user_id, 'add')
-
-                # Remove awaiting PIN state
-                context.user_data.pop("awaiting_pin", None)
-
-                await update.message.reply_text(
-                    "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-                    "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
-                    "aby pobrać film lub audio."
-                )
-
-                # Check for pending URL
-                pending_url = context.user_data.get("pending_url")
-                if pending_url:
-                    context.user_data.pop("pending_url", None)
-                    await process_youtube_link(update, context, pending_url)
-
-                # Check for pending audio upload
-                pending_audio = context.user_data.get("pending_audio")
-                if pending_audio:
-                    context.user_data.pop("pending_audio", None)
-                    await process_audio_file(update, context, pending_audio)
-
-                # Check for pending video upload
-                pending_video = context.user_data.get("pending_video")
-                if pending_video:
-                    context.user_data.pop("pending_video", None)
-                    await process_video_file(update, context, pending_video)
-            else:
-                # Increment failed attempts counter
-                remaining_attempts, attempt_count = register_pin_failure(
-                    user_id,
-                    attempts=failed_attempts,
-                    block_map=block_until,
-                    max_attempts=MAX_ATTEMPTS,
-                    block_time=BLOCK_TIME,
-                )
-
-                blocked = remaining_attempts == 0
-
-                # Notify admin (non-blocking)
-                await notify_admin_pin_failure(
-                    context.bot, update.effective_user,
-                    attempt_count, blocked,
-                )
-
-                if blocked:
-                    await update.message.reply_text(
-                        "Niepoprawny PIN!\n\n"
-                        f"Przekroczono maksymalną liczbę prób ({MAX_ATTEMPTS}).\n"
-                        f"Dostęp zablokowany na {BLOCK_TIME // 60} minut."
-                    )
-                else:
-                    await update.message.reply_text(
-                        "Niepoprawny PIN!\n\n"
-                        f"Pozostało prób: {remaining_attempts}"
-                    )
-
-            # Delete message containing PIN for security
-            try:
-                await update.message.delete()
-            except Exception:
-                pass
-
-            return True
-
-    return False
+    return True
 
 
 async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -403,16 +333,18 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    if user_id not in authorized_users:
+    success = logout_user(
+        user_id=user_id,
+        chat_id=chat_id,
+        authorized_user_ids=authorized_users,
+        remove_authorized_user=lambda auth_user_id: manage_authorized_user(auth_user_id, 'remove'),
+        user_data=context.user_data,
+        user_urls=user_urls,
+        user_time_ranges=user_time_ranges,
+    )
+    if not success:
         await update.message.reply_text("Nie jesteś zalogowany.")
         return
-
-    manage_authorized_user(user_id, 'remove')
-
-    # Clear session state
-    user_urls.pop(chat_id, None)
-    user_time_ranges.pop(chat_id, None)
-    context.user_data.clear()
 
     await update.message.reply_text(
         "Wylogowano pomyślnie.\n\n"
@@ -611,14 +543,12 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Check if user is authorized
     if user_id not in authorized_users:
-        context.user_data["pending_url"] = message_text
+        store_pending_action(context.user_data, kind="url", payload=message_text)
 
         await update.message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
         )
-
-        context.user_data["awaiting_pin"] = True
         return
 
     # Check if user has an active URL session and message looks like a time range
@@ -685,7 +615,8 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     if "castbox.fm" in message_text:
         import asyncio
         loop = asyncio.get_event_loop()
-        message_text = await loop.run_in_executor(None, normalize_url, message_text)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            message_text = await loop.run_in_executor(executor, normalize_url, message_text)
 
     # Validate URL
     if not validate_url(message_text):
@@ -783,7 +714,8 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     # Only Castbox links require redirect normalization that may hit the network.
     if "castbox.fm" in url:
         import asyncio
-        url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            url = await asyncio.get_event_loop().run_in_executor(executor, normalize_url, url)
     user_urls[chat_id] = url
     # Clear any previous time range
     user_time_ranges.pop(chat_id, None)
@@ -989,12 +921,11 @@ async def handle_audio_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if user_id not in authorized_users:
-        context.user_data["pending_audio"] = audio_info
+        store_pending_action(context.user_data, kind="audio", payload=audio_info)
         await message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
         )
-        context.user_data["awaiting_pin"] = True
         return
 
     # Rate limiting
@@ -1200,12 +1131,11 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if user_id not in authorized_users:
-        context.user_data["pending_video"] = video_info
+        store_pending_action(context.user_data, kind="video", payload=video_info)
         await message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
         )
-        context.user_data["awaiting_pin"] = True
         return
 
     # Rate limiting

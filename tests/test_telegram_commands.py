@@ -340,9 +340,10 @@ class TestAudioUpload:
 
 
 class TestAudioFileProcessing:
-    def test_process_audio_file_rejects_large_files(self):
+    def test_process_audio_file_rejects_large_files(self, monkeypatch):
         update = _make_update(user_id=777, chat_id=777)
         context = _make_context()
+        monkeypatch.setattr("bot.mtproto.is_mtproto_available", lambda: False)
 
         result = _async(tc.process_audio_file(update, context, {
             "file_id": "big1",
@@ -889,9 +890,10 @@ class TestVideoUpload:
 
         assert called["called"] is True
 
-    def test_process_video_file_rejects_large_files(self):
+    def test_process_video_file_rejects_large_files(self, monkeypatch):
         update = _make_update(user_id=888, chat_id=888)
         context = _make_context()
+        monkeypatch.setattr("bot.mtproto.is_mtproto_available", lambda: False)
 
         _async(tc.process_video_file(update, context, {
             "file_id": "big_vid",
@@ -1076,6 +1078,7 @@ class TestMultiPlatformUI:
         })
         monkeypatch.setattr(tc, "estimate_file_size", lambda *_: 10)
         monkeypatch.setattr(tc, "detect_platform", lambda *_: "castbox")
+        monkeypatch.setattr(tc, "normalize_url", lambda url: url)
 
         _async(tc.process_youtube_link(update, context, "https://castbox.fm/episode/Test-id123"))
 
@@ -1097,6 +1100,7 @@ class TestMultiPlatformUI:
         context = _make_context()
 
         monkeypatch.setattr(tc, "detect_platform", lambda *_: "castbox")
+        monkeypatch.setattr(tc, "normalize_url", lambda url: url)
 
         _async(tc.process_youtube_link(update, context, "https://castbox.fm/channel/Podcast-id123"))
 
