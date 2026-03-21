@@ -270,6 +270,21 @@ def _set_session_context_value(
     context.user_data[legacy_key] = value
 
 
+def _clear_session_context_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    *,
+    legacy_key: str,
+) -> None:
+    """Clear one session-scoped context value from runtime and legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.pop_field(chat_id, field_name, None)
+    context.user_data.pop(legacy_key, None)
+
+
 def _get_history_stats(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict:
     """Read history stats from runtime when present, otherwise use legacy facade."""
 
@@ -449,6 +464,16 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not success:
         await update.message.reply_text("Nie jesteś zalogowany.")
         return
+
+    _clear_session_value(context, chat_id, "current_url", user_urls)
+    _clear_session_value(context, chat_id, "time_range", user_time_ranges)
+    _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
+    _clear_session_context_value(context, chat_id, "platform", legacy_key="platform")
+    _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+    _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
+    _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
+    _clear_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title")
+    _clear_session_context_value(context, chat_id, "subtitle_pending", legacy_key="subtitle_pending")
 
     await update.message.reply_text(
         "Wylogowano pomyślnie.\n\n"
@@ -680,7 +705,13 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                 _set_session_value(context, chat_id, "time_range", time_range, user_time_ranges)
 
                 # Send confirmation and show main menu with updated time range
-                cur_platform = context.user_data.get('platform', 'youtube')
+                cur_platform = _get_session_context_value(
+                    context,
+                    chat_id,
+                    "platform",
+                    legacy_key="platform",
+                    default="youtube",
+                )
                 keyboard = _build_main_keyboard(cur_platform)
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
@@ -834,6 +865,9 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
         context, chat_id, "platform", platform,
         legacy_key="platform",
     )
+    _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+    _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
+    _clear_session_context_value(context, chat_id, "subtitle_pending", legacy_key="subtitle_pending")
 
     # Castbox: channel URLs are not supported, only episode URLs
     if platform == 'castbox' and '/channel/' in url:

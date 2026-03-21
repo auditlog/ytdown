@@ -352,6 +352,21 @@ def _set_session_context_value(
     context.user_data[legacy_key] = value
 
 
+def _clear_session_context_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    *,
+    legacy_key: str,
+) -> None:
+    """Clear one session-scoped context value from runtime and legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.pop_field(chat_id, field_name, None)
+    context.user_data.pop(legacy_key, None)
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all callback queries."""
     query = update.callback_query
@@ -657,6 +672,7 @@ async def _download_and_send_ig_photos(
         logging.error("Error sending Instagram photos: %s", e)
         await safe_edit_message(query, "Błąd podczas wysyłania zdjęć.")
     finally:
+        _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
         for path in downloaded_paths:
             try:
                 os.remove(path)
@@ -741,6 +757,7 @@ async def _download_and_send_ig_videos(
         await safe_edit_message(query, f"Wysłano {sent_count} z {total} filmów.")
     else:
         await safe_edit_message(query, "Nie udało się wysłać żadnego filmu.")
+    _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
 
 
 async def download_file(
@@ -1345,6 +1362,7 @@ async def _download_single_playlist_item(
 async def _show_spotify_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows summary type options for Spotify episodes."""
     query = update.callback_query
+    chat_id = update.effective_chat.id
     resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved", default={})
     title = resolved.get('title', 'Odcinek podcastu')
 
@@ -1482,6 +1500,7 @@ async def download_spotify_resolved(
                 _get_session_value(context, chat_id, "current_url", user_urls) or '',
                 "spotify_transcribe", file_size_mb,
             )
+            _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
             cleanup_transcription_artifacts(
                 source_media_path=downloaded_file_path,
                 output_dir=chat_download_path,
@@ -1502,6 +1521,7 @@ async def download_spotify_resolved(
                 _get_session_value(context, chat_id, "current_url", user_urls) or '',
                 f"spotify_audio_{audio_format}", file_size_mb,
             )
+            _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
 
         await update_status(f"Gotowe: {title}")
 
@@ -1659,6 +1679,8 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     title = _get_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title", default='Plik audio')
 
     if not mp3_path or not os.path.exists(mp3_path):
+        _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
+        _clear_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title")
         await query.edit_message_text("Plik audio nie został znaleziony. Wyślij go ponownie.")
         return
 
@@ -1729,8 +1751,10 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                     caption=f"Transkrypcja: {title} (podsumowanie pominięte — tekst zbyt długi)",
                     read_timeout=60,
                     write_timeout=60,
-                )
+            )
             record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
+            _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
+            _clear_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title")
             return
 
         await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
@@ -1772,6 +1796,8 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             f"audio_upload_transcription_summary_{summary_type}",
             file_size_mb, None,
         )
+        _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
+        _clear_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title")
         await update_status("Transkrypcja i podsumowanie zostały wysłane!")
 
     else:
@@ -1810,6 +1836,8 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             logging.error(f"Error deleting audio files: {e}")
 
         record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
+        _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
+        _clear_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title")
         await update_status("Transkrypcja została wysłana!")
 
 
@@ -2003,11 +2031,22 @@ async def _handle_subtitle_summary_callback(update: Update, context: ContextType
         await update.callback_query.edit_message_text("Nieobsługiwana opcja podsumowania.")
         return
 
-    pending = context.user_data.get('subtitle_pending')
+    pending = _get_session_context_value(
+        context,
+        update.effective_chat.id,
+        "subtitle_pending",
+        legacy_key="subtitle_pending",
+    )
     if not pending:
         await update.callback_query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
         return
 
+    _clear_session_context_value(
+        context,
+        update.effective_chat.id,
+        "subtitle_pending",
+        legacy_key="subtitle_pending",
+    )
     await handle_subtitle_download(
         update, context,
         pending['url'], pending['lang'], pending['auto'],
