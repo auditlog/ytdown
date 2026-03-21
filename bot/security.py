@@ -12,6 +12,7 @@ from typing import DefaultDict
 from urllib.parse import urlparse, parse_qs
 
 from bot.config import authorized_users, save_authorized_users, _auth_lock
+from bot.session_store import user_playlist_data, user_time_ranges, user_urls
 
 
 # Maximum failed attempts before blocking
@@ -69,17 +70,6 @@ class SecurityState:
     failed_attempts: DefaultDict[int, int]
     block_until: DefaultDict[int, float]
     user_requests: DefaultDict[int, list[float]]
-
-
-# Dictionary to store URLs (key: chat_id, value: url)
-# Needed because callback_data has 64 byte limit
-user_urls = {}
-
-# Dictionary to store time ranges (key: chat_id, value: {"start": "0:30", "end": "5:45"})
-user_time_ranges = {}
-
-# Playlist session data (key: chat_id, value: playlist info dict)
-user_playlist_data = {}
 
 
 def _new_state() -> SecurityState:

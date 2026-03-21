@@ -20,9 +20,6 @@ from telegram.helpers import escape_markdown
 # Thread pool for running sync functions
 _executor = ThreadPoolExecutor(max_workers=2)
 
-# Global download progress state (per chat_id)
-_download_progress = {}
-
 from bot.config import (
     CONFIG,
     DOWNLOAD_PATH,
@@ -78,6 +75,7 @@ from bot.services.playlist_service import (
     load_playlist,
     parse_playlist_download_choice,
 )
+from bot.session_store import download_progress as _download_progress
 
 
 def escape_md(text: str) -> str:
