@@ -318,6 +318,40 @@ def _clear_session_value(
     legacy_map.pop(chat_id, None)
 
 
+def _get_session_context_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    *,
+    legacy_key: str,
+    default=None,
+):
+    """Read one session-scoped context value from runtime or legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        value = runtime.session_store.get_field(chat_id, field_name)
+        if value is not None:
+            return value
+    return context.user_data.get(legacy_key, default)
+
+
+def _set_session_context_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    value,
+    *,
+    legacy_key: str,
+) -> None:
+    """Write one session-scoped context value to runtime and legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.set_field(chat_id, field_name, value)
+    context.user_data[legacy_key] = value
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all callback queries."""
     query = update.callback_query
@@ -378,8 +412,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         selected_format = download_data["format"]
 
         # Spotify: use resolved audio source instead of yt-dlp
-        if context.user_data.get('platform') == 'spotify':
-            resolved = context.user_data.get('spotify_resolved')
+        if _get_session_context_value(context, chat_id, "platform", legacy_key="platform") == 'spotify':
+            resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
             if not resolved:
                 await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
                 return
@@ -408,7 +442,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
             return
     elif data == "transcribe_summary":
-        if context.user_data.get('platform') == 'spotify':
+        if _get_session_context_value(context, chat_id, "platform", legacy_key="platform") == 'spotify':
             await _show_spotify_summary_options(update, context)
         else:
             await show_subtitle_source_menu(update, context, url, with_summary=True)
@@ -417,8 +451,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if option is None:
             await query.edit_message_text("Nieobsługiwana opcja podsumowania.")
             return
-        if context.user_data.get('platform') == 'spotify':
-            resolved = context.user_data.get('spotify_resolved')
+        if _get_session_context_value(context, chat_id, "platform", legacy_key="platform") == 'spotify':
+            resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
             if resolved:
                 await download_spotify_resolved(update, context, resolved, "mp3", transcribe=True, summary=True, summary_type=option)
             else:
@@ -426,8 +460,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         else:
             await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=option)
     elif data == "transcribe":
-        if context.user_data.get('platform') == 'spotify':
-            resolved = context.user_data.get('spotify_resolved')
+        if _get_session_context_value(context, chat_id, "platform", legacy_key="platform") == 'spotify':
+            resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
             if resolved:
                 await download_spotify_resolved(update, context, resolved, "mp3", transcribe=True)
             else:
@@ -507,7 +541,7 @@ async def _handle_instagram_download(
     query = update.callback_query
     chat_id = update.effective_chat.id
 
-    carousel = context.user_data.get('ig_carousel')
+    carousel = _get_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
     if not carousel:
         await safe_edit_message(query, "Sesja wygasła. Wyślij link ponownie.")
         return
@@ -732,7 +766,7 @@ async def download_file(
     async def update_status(text):
         await safe_edit_message(query, text)
 
-    media_name = get_media_label(context.user_data.get('platform'))
+    media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
     await update_status(f"Pobieranie informacji o {media_name}...")
 
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
@@ -1009,7 +1043,8 @@ async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     info = get_video_info(url)
     if not info:
-        media_name = get_media_label(context.user_data.get('platform'))
+        chat_id = update.effective_chat.id
+        media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
         await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
@@ -1061,7 +1096,8 @@ async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYP
 
     info = get_video_info(url)
     if not info:
-        media_name = get_media_label(context.user_data.get('platform'))
+        chat_id = update.effective_chat.id
+        media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
         await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
@@ -1103,7 +1139,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
             _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
             _set_session_value(context, chat_id, "current_url", clean_url, user_urls)
 
-            media_name = get_media_label(context.user_data.get('platform'))
+            media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
             await query.edit_message_text(f"Pobieranie informacji o {media_name}...")
 
             info = get_video_info(clean_url)
@@ -1115,7 +1151,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
             title = info.get('title', 'Nieznany tytuł')
             duration = info.get('duration', 0)
             duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
-            platform = context.user_data.get('platform', 'youtube')
+            platform = _get_session_context_value(context, chat_id, "platform", legacy_key="platform", default="youtube")
             keyboard = _build_main_keyboard(platform)
             reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -1309,7 +1345,7 @@ async def _download_single_playlist_item(
 async def _show_spotify_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows summary type options for Spotify episodes."""
     query = update.callback_query
-    resolved = context.user_data.get('spotify_resolved', {})
+    resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved", default={})
     title = resolved.get('title', 'Odcinek podcastu')
 
     keyboard = [
@@ -1486,7 +1522,7 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     query = update.callback_query
     chat_id = update.effective_chat.id
 
-    platform = context.user_data.get('platform', 'youtube')
+    platform = _get_session_context_value(context, chat_id, "platform", legacy_key="platform", default="youtube")
 
     info = get_video_info(url)
     if not info:
@@ -1523,7 +1559,7 @@ async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_
 
     info = get_video_info(url)
     if not info:
-        media_name = get_media_label(context.user_data.get('platform'))
+        media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
         await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
@@ -1570,7 +1606,7 @@ async def apply_time_range_preset(update: Update, context: ContextTypes.DEFAULT_
 
     info = get_video_info(url)
     if not info:
-        media_name = get_media_label(context.user_data.get('platform'))
+        media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
         await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
@@ -1619,8 +1655,8 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     chat_id = update.effective_chat.id
 
-    mp3_path = context.user_data.get('audio_file_path')
-    title = context.user_data.get('audio_file_title', 'Plik audio')
+    mp3_path = _get_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
+    title = _get_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title", default='Plik audio')
 
     if not mp3_path or not os.path.exists(mp3_path):
         await query.edit_message_text("Plik audio nie został znaleziony. Wyślij go ponownie.")
@@ -1780,7 +1816,8 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
 async def show_audio_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Displays summary type selection for uploaded audio files."""
     query = update.callback_query
-    title = context.user_data.get('audio_file_title', 'Plik audio')
+    chat_id = update.effective_chat.id
+    title = _get_session_context_value(context, chat_id, "audio_file_title", legacy_key="audio_file_title", default='Plik audio')
 
     keyboard = [
         [InlineKeyboardButton("1. Krótkie podsumowanie", callback_data="audio_summary_option_1")],
@@ -1812,7 +1849,7 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
 
     info = get_video_info(url)
     if not info:
-        media_name = get_media_label(context.user_data.get('platform'))
+        media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
         await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
@@ -1944,11 +1981,11 @@ async def _handle_subtitle_callback(update: Update, context: ContextTypes.DEFAUL
 
     if with_summary:
         # Store pending subtitle info for summary type selection
-        context.user_data['subtitle_pending'] = {
+        _set_session_context_value(context, update.effective_chat.id, "subtitle_pending", {
             'url': url,
             'lang': lang,
             'auto': auto,
-        }
+        }, legacy_key="subtitle_pending")
         await show_subtitle_summary_options(update, context)
     else:
         await handle_subtitle_download(update, context, url, lang, auto, summary=False)

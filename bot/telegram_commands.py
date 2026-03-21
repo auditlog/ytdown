@@ -236,6 +236,40 @@ def _clear_session_value(
     legacy_map.pop(chat_id, None)
 
 
+def _get_session_context_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    *,
+    legacy_key: str,
+    default=None,
+):
+    """Read one session-scoped context value from runtime or legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        value = runtime.session_store.get_field(chat_id, field_name)
+        if value is not None:
+            return value
+    return context.user_data.get(legacy_key, default)
+
+
+def _set_session_context_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    value,
+    *,
+    legacy_key: str,
+) -> None:
+    """Write one session-scoped context value to runtime and legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.set_field(chat_id, field_name, value)
+    context.user_data[legacy_key] = value
+
+
 def _get_history_stats(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict:
     """Read history stats from runtime when present, otherwise use legacy facade."""
 
@@ -755,7 +789,10 @@ async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT
         return
 
     # Store resolved info for callback handlers
-    context.user_data['spotify_resolved'] = resolved
+    _set_session_context_value(
+        context, chat_id, "spotify_resolved", resolved,
+        legacy_key="spotify_resolved",
+    )
     _set_session_value(context, chat_id, "current_url", url, user_urls)
 
     caption_data = build_episode_caption_data(resolved)
@@ -793,7 +830,10 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
 
     # Detect and store platform for conditional UI
     platform = detect_platform(url) or 'youtube'
-    context.user_data['platform'] = platform
+    _set_session_context_value(
+        context, chat_id, "platform", platform,
+        legacy_key="platform",
+    )
 
     # Castbox: channel URLs are not supported, only episode URLs
     if platform == 'castbox' and '/channel/' in url:
@@ -831,11 +871,15 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
                 videos = [e for e in entries if not is_photo_entry(e)]
 
                 if photos:
-                    context.user_data['ig_carousel'] = {
+                    carousel_state = {
                         'photos': photos,
                         'videos': videos,
                         'title': ig_info.get('title', 'Instagram post'),
                     }
+                    _set_session_context_value(
+                        context, chat_id, "instagram_carousel", carousel_state,
+                        legacy_key="ig_carousel",
+                    )
                     keyboard = _build_instagram_photo_keyboard(photos, videos)
                     reply_markup = InlineKeyboardMarkup(keyboard)
                     title = escape_md(ig_info.get('title', 'Instagram post'))
@@ -854,11 +898,15 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
 
             # Single photo post
             elif is_photo_entry(ig_info):
-                context.user_data['ig_carousel'] = {
+                carousel_state = {
                     'photos': [ig_info],
                     'videos': [],
                     'title': ig_info.get('title', 'Instagram photo'),
                 }
+                _set_session_context_value(
+                    context, chat_id, "instagram_carousel", carousel_state,
+                    legacy_key="ig_carousel",
+                )
                 keyboard = [[InlineKeyboardButton("Pobierz zdjęcie", callback_data="dl_ig_photos")]]
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 title = escape_md(ig_info.get('title', 'Instagram photo'))
@@ -1117,8 +1165,14 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         mp3_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
 
         # Store info for callback handlers
-        context.user_data['audio_file_path'] = mp3_path
-        context.user_data['audio_file_title'] = title
+        _set_session_context_value(
+            context, chat_id, "audio_file_path", mp3_path,
+            legacy_key="audio_file_path",
+        )
+        _set_session_context_value(
+            context, chat_id, "audio_file_title", title,
+            legacy_key="audio_file_title",
+        )
 
         duration_info = ""
         if audio_info.get('duration'):
@@ -1309,8 +1363,14 @@ async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         mp3_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
 
         # Store info for callback handlers
-        context.user_data['audio_file_path'] = mp3_path
-        context.user_data['audio_file_title'] = title
+        _set_session_context_value(
+            context, chat_id, "audio_file_path", mp3_path,
+            legacy_key="audio_file_path",
+        )
+        _set_session_context_value(
+            context, chat_id, "audio_file_title", title,
+            legacy_key="audio_file_title",
+        )
 
         duration_info = ""
         if video_info.get('duration'):

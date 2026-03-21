@@ -17,6 +17,12 @@ class SessionState:
     time_range: dict[str, Any] | None = None
     playlist_data: dict[str, Any] | None = None
     download_progress: dict[str, Any] | None = None
+    platform: str | None = None
+    spotify_resolved: dict[str, Any] | None = None
+    instagram_carousel: dict[str, Any] | None = None
+    audio_file_path: str | None = None
+    audio_file_title: str | None = None
+    subtitle_pending: dict[str, Any] | None = None
 
 
 @dataclass
@@ -132,6 +138,12 @@ class SessionStore:
             and session.time_range is None
             and session.playlist_data is None
             and session.download_progress is None
+            and session.platform is None
+            and session.spotify_resolved is None
+            and session.instagram_carousel is None
+            and session.audio_file_path is None
+            and session.audio_file_title is None
+            and session.subtitle_pending is None
         ):
             self._sessions.pop(chat_id, None)
 
