@@ -47,6 +47,7 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
     args = Namespace(cli=False, url=None, list_formats=False, format=None, audio_only=False, audio_quality="192")
     app = Mock()
     app.add_handler = Mock()
+    app.bot_data = {}
     app.job_queue = Mock()
     app.job_queue.run_once = Mock()
     app.run_polling = Mock()
@@ -92,5 +93,6 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
     app_main.main()
 
     assert builder.token.called
+    assert "app_runtime" in app.bot_data
     app.run_polling.assert_called_once()
     assert app.add_handler.call_count >= 7

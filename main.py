@@ -23,6 +23,7 @@ from telegram.ext import (
 from bot.config import CONFIG, initialize_runtime
 from bot.cleanup import monitor_disk_space, periodic_cleanup
 from bot.cli import parse_arguments, cli_mode, curses_main
+from bot.runtime import attach_runtime, build_app_runtime
 from bot.telegram_commands import (
     start,
     help_command,
@@ -70,7 +71,7 @@ def start_background_services() -> None:
     monitor_disk_space()
 
 
-def build_application():
+def build_application(runtime=None):
     """Create and configure the Telegram application object."""
 
     application = (
@@ -81,6 +82,9 @@ def build_application():
         .write_timeout(60)
         .build()
     )
+
+    if runtime is not None:
+        attach_runtime(application, runtime)
 
     application.job_queue.run_once(lambda context: set_bot_commands(application), when=1)
     return application
@@ -146,7 +150,7 @@ def main():
 
     initialize_runtime()
     start_background_services()
-    application = build_application()
+    application = build_application(runtime=build_app_runtime())
     register_handlers(application)
 
     logging.info("Starting Telegram bot...")
