@@ -73,7 +73,8 @@ class TestPoetryConfiguration:
             "mutagen",
             "python-telegram-bot",
             "requests",
-            "python-dotenv"
+            "python-dotenv",
+            "Pillow",
         ]
 
         for dep in required_deps:
@@ -132,7 +133,8 @@ class TestPoetryConfiguration:
         assert "black" in tool_config
         assert "ruff" in tool_config
         assert "mypy" in tool_config
-        assert "pytest" in tool_config
+        # pytest config lives in pytest.ini (source of truth), not pyproject.toml
+        assert "pytest" not in tool_config
 
         # Verify Black configuration
         black_config = tool_config["black"]
@@ -144,19 +146,19 @@ class TestPoetryConfiguration:
         assert ruff_config["line-length"] == 100
         assert ruff_config["target-version"] == "py312"
 
-    def test_pytest_configuration(self):
-        """Test pytest configuration in pyproject.toml."""
+    def test_pytest_configuration_in_ini(self):
+        """Test pytest configuration lives in pytest.ini (not pyproject.toml)."""
         project_root = Path(__file__).parent.parent
-        pyproject_path = project_root / "pyproject.toml"
 
+        # pytest.ini should exist as the source of truth
+        pytest_ini = project_root / "pytest.ini"
+        assert pytest_ini.exists(), "pytest.ini should be the pytest config source of truth"
+
+        # pyproject.toml should NOT have [tool.pytest]
+        pyproject_path = project_root / "pyproject.toml"
         with open(pyproject_path, "rb") as f:
             config = tomllib.load(f)
-
-        pytest_config = config["tool"]["pytest"]["ini_options"]
-
-        assert "tests" in pytest_config["testpaths"]
-        assert "test_*.py" in pytest_config["python_files"]
-        assert pytest_config["asyncio_mode"] == "auto"
+        assert "pytest" not in config.get("tool", {})
 
     def test_coverage_configuration(self):
         """Test coverage configuration."""
@@ -199,11 +201,23 @@ class TestRequirementsFile:
             "mutagen",
             "python-telegram-bot",
             "requests",
-            "python-dotenv"
+            "python-dotenv",
+            "Pillow",
         ]
 
         for dep in required_deps:
             assert dep in content, f"Missing dependency in requirements.txt: {dep}"
+
+    def test_requirements_txt_documents_optional_dependencies(self):
+        """Test that requirements.txt keeps optional runtime dependencies explicit."""
+        project_root = Path(__file__).parent.parent
+        requirements_path = project_root / "requirements.txt"
+
+        with open(requirements_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        assert "pyrogram" in content
+        assert "instaloader" in content
 
 
 class TestProjectStructure:
@@ -253,6 +267,12 @@ class TestProjectStructure:
             content = f.read()
             assert "def main()" in content
             assert 'if __name__ == "__main__"' in content
+
+    def test_no_legacy_node_manifests_in_project_root(self):
+        """Test that unused Node manifests are not kept in the Python project root."""
+        project_root = Path(__file__).parent.parent
+        assert not (project_root / "package.json").exists()
+        assert not (project_root / "package-lock.json").exists()
 
 
 @pytest.mark.skipif(

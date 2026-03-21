@@ -203,12 +203,9 @@ class TestDownloadHistory:
 class TestDownloadHistoryIntegration:
     """Integration tests for download history."""
 
-    @patch('bot.config.load_download_history')
-    @patch('bot.config.save_download_history')
-    def test_concurrent_adds(self, mock_save, mock_load, temp_history_file):
+    @patch('bot.config.DownloadHistoryRepository.append')
+    def test_concurrent_adds(self, mock_append, temp_history_file):
         """Test adding multiple records concurrently."""
-        mock_load.return_value = []
-
         # Simulate multiple adds
         for i in range(5):
             add_download_record(
@@ -218,8 +215,8 @@ class TestDownloadHistoryIntegration:
                 format_type="video_best"
             )
 
-        # Verify save was called multiple times
-        assert mock_save.call_count == 5
+        # Verify repository append was called multiple times
+        assert mock_append.call_count == 5
 
     def test_special_characters_in_title(self, temp_history_file):
         """Test handling special characters in video titles."""

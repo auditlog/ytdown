@@ -9,9 +9,19 @@ import time
 from collections import defaultdict
 from dataclasses import dataclass
 from typing import DefaultDict
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qs
 
 from bot.config import authorized_users, save_authorized_users, _auth_lock
+from bot.session_store import (
+    SecurityRuntimeState,
+    block_until,
+    failed_attempts,
+    security_store,
+    user_playlist_data,
+    user_requests,
+    user_time_ranges,
+    user_urls,
+)
 
 
 # Maximum failed attempts before blocking
@@ -31,31 +41,14 @@ MAX_FILE_SIZE_MB = 1000  # 1GB limit
 # Groq API has 25MB limit, use 20MB for safety margin
 MAX_MP3_PART_SIZE_MB = 20
 
-# Allowed domains grouped by platform
-ALLOWED_DOMAINS = [
-    # YouTube
-    'youtube.com',
-    'www.youtube.com',
-    'youtu.be',
-    'm.youtube.com',
-    'music.youtube.com',
-    # Vimeo
-    'vimeo.com',
-    'player.vimeo.com',
-    # TikTok
-    'tiktok.com',
-    'www.tiktok.com',
-    'vm.tiktok.com',
-    'm.tiktok.com',
-    # Instagram
-    'instagram.com',
-    'www.instagram.com',
-    # LinkedIn
-    'linkedin.com',
-    'www.linkedin.com',
-]
+# Timeout for ffmpeg operations (in seconds)
+FFMPEG_TIMEOUT = 180
 
-# Domain -> platform mapping for detect_platform()
+# Maximum number of playlist items to download (default / expanded)
+MAX_PLAYLIST_ITEMS = 10
+MAX_PLAYLIST_ITEMS_EXPANDED = 50
+
+# Domain -> platform mapping (single source of truth for supported domains)
 _DOMAIN_TO_PLATFORM = {
     'youtube.com': 'youtube',
     'youtu.be': 'youtube',
@@ -68,7 +61,15 @@ _DOMAIN_TO_PLATFORM = {
     'vm.tiktok.com': 'tiktok',
     'instagram.com': 'instagram',
     'linkedin.com': 'linkedin',
+    'castbox.fm': 'castbox',
+    'open.spotify.com': 'spotify',
 }
+
+# Generated from _DOMAIN_TO_PLATFORM + www. variants for base domains (name.tld)
+ALLOWED_DOMAINS = sorted(
+    set(_DOMAIN_TO_PLATFORM.keys())
+    | {f'www.{d}' for d in _DOMAIN_TO_PLATFORM if d.count('.') == 1}
+)
 
 
 @dataclass
@@ -79,41 +80,19 @@ class SecurityState:
     block_until: DefaultDict[int, float]
     user_requests: DefaultDict[int, list[float]]
 
-
-# Dictionary to store URLs (key: chat_id, value: url)
-# Needed because callback_data has 64 byte limit
-user_urls = {}
-
-# Dictionary to store time ranges (key: chat_id, value: {"start": "0:30", "end": "5:45"})
-user_time_ranges = {}
-
-
-def _new_state() -> SecurityState:
-    """Create a new empty security state."""
-
-    return SecurityState(
-        failed_attempts=defaultdict(int),
-        block_until=defaultdict(float),
-        user_requests=defaultdict(list),
-    )
-
-
-_security_state = _new_state()
-
-# Public aliases kept for backward compatibility and test patchability.
-failed_attempts = _security_state.failed_attempts
-block_until = _security_state.block_until
-user_requests = _security_state.user_requests
-
-
 def get_security_state() -> SecurityState:
     """Returns an isolated copy of the active state."""
 
+    snapshot = security_store.snapshot()
     return SecurityState(
-        failed_attempts=defaultdict(int, failed_attempts),
-        block_until=defaultdict(float, block_until),
+        failed_attempts=defaultdict(int, {
+            user_id: state.failed_attempts for user_id, state in snapshot.items()
+        }),
+        block_until=defaultdict(float, {
+            user_id: state.block_until for user_id, state in snapshot.items()
+        }),
         user_requests=defaultdict(list, {
-            user_id: list(values) for user_id, values in user_requests.items()
+            user_id: list(state.user_requests) for user_id, state in snapshot.items()
         }),
     )
 
@@ -121,22 +100,23 @@ def get_security_state() -> SecurityState:
 def set_security_state(state: SecurityState) -> SecurityState:
     """Replace active state values with values from provided state object."""
 
-    failed_attempts.clear()
-    block_until.clear()
-    user_requests.clear()
+    next_state = {}
+    for user_id in set(state.failed_attempts) | set(state.block_until) | set(state.user_requests):
+        next_state[user_id] = SecurityRuntimeState(
+            failed_attempts=state.failed_attempts.get(user_id, 0),
+            block_until=state.block_until.get(user_id, 0.0),
+            user_requests=list(state.user_requests.get(user_id, [])),
+        )
 
-    failed_attempts.update(state.failed_attempts)
-    block_until.update(state.block_until)
-    user_requests.update({
-        user_id: list(values) for user_id, values in state.user_requests.items()
-    })
+    security_store.replace(next_state)
     return get_security_state()
 
 
 def reset_security_state() -> SecurityState:
     """Clears and returns a fresh security state."""
 
-    return set_security_state(_new_state())
+    security_store.reset()
+    return get_security_state()
 
 
 def check_rate_limit(
@@ -279,6 +259,50 @@ def _normalize_domain(url: str) -> str | None:
         return domain
     except Exception:
         return None
+
+
+def normalize_url(url: str, _depth: int = 0) -> str:
+    """Resolves platform-specific redirect URLs to their canonical form.
+
+    Handles Castbox redirect chains:
+      d.castbox.fm/dynamic-link/redirect?link=... → extract link param
+      castbox.fm/vb/... or /ep/... → follow HTTP redirect to /episode/...
+    """
+    if _depth > 5:
+        return url
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+
+        # d.castbox.fm dynamic links — extract real URL from query param
+        if domain == 'd.castbox.fm':
+            link_param = parse_qs(parsed.query).get('link', [None])[0]
+            if link_param and 'castbox.fm' in link_param:
+                return normalize_url(link_param, _depth + 1)
+
+        # castbox.fm short links (/vb/, /ep/) — resolve to /episode/ via HTTP
+        if (domain in ('castbox.fm', 'www.castbox.fm')
+                and '/episode/' not in parsed.path
+                and parsed.path not in ('', '/')):
+            from urllib.request import Request, urlopen
+            try:
+                req = Request(url, method='HEAD',
+                              headers={'User-Agent': 'Mozilla/5.0'})
+                with urlopen(req, timeout=5) as resp:
+                    if resp.url != url:
+                        return normalize_url(resp.url, _depth + 1)
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return url
+
+
+def get_media_label(platform: str | None) -> str:
+    """Returns Polish locative noun for media type ('o filmie' / 'o odcinku')."""
+    if platform in ('castbox', 'spotify'):
+        return 'odcinku'
+    return 'filmie'
 
 
 def validate_url(url) -> bool:

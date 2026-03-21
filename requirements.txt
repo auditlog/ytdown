@@ -1,11 +1,19 @@
-# Production dependencies
+# Core runtime dependencies
 yt-dlp>=2024.12.6
 mutagen>=1.47.0
 python-telegram-bot>=21.0
 requests>=2.31.0
 python-dotenv>=1.0.0
+Pillow>=10.0.0
 
-# Development dependencies (optional)
+# Optional runtime dependencies
+# Install manually when you need the related feature set.
+# pyrogram enables MTProto large file downloads (>20 MB)
+pyrogram>=2.0.100
+# instaloader enables Instagram photo/carousel extraction
+# instaloader>=4.10
+
+# Development dependencies (install separately in your dev environment)
 # pytest>=8.0.0
 # pytest-asyncio>=0.23.0
 # pytest-cov>=4.1.0

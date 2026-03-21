@@ -8,13 +8,17 @@ import logging
 import os
 import re
 from datetime import datetime
+from io import BytesIO
+from urllib.parse import urlparse, parse_qs
 
+import requests
 import yt_dlp
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
 
+IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
 
-FORMAT_ID_PATTERN = re.compile(r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$")
+FORMAT_ID_PATTERN = re.compile(r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$|^(?:dash-[\da-zA-Z]+)$|^(?:[\da-zA-Z]+-\d+)$")
 SUPPORTED_AUDIO_FORMATS = ("mp3", "m4a", "wav", "flac", "ogg", "opus")
 AUDIO_FORMATS = set(SUPPORTED_AUDIO_FORMATS)
 
@@ -173,7 +177,7 @@ def progress_hook(d):
         print(f"\nError during download: {d.get('error')}")
 
 
-def get_basic_ydl_opts():
+def get_basic_ydl_opts(*, include_progress_hooks: bool = False):
     """
     Returns basic configuration for yt-dlp.
 
@@ -183,8 +187,9 @@ def get_basic_ydl_opts():
     opts = {
         'quiet': True,
         'no_warnings': True,
-        'progress_hooks': [progress_hook],
     }
+    if include_progress_hooks:
+        opts['progress_hooks'] = [progress_hook]
     if os.path.exists(COOKIES_FILE):
         opts['cookiefile'] = COOKIES_FILE
     return opts
@@ -202,11 +207,12 @@ def get_video_info(url):
     """
     try:
         ydl_opts = get_basic_ydl_opts()
+        ydl_opts['noplaylist'] = True  # Always fetch single video info, never full playlist
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             return info
     except Exception as e:
-        print(f"Error getting video info: {str(e)}")
+        logging.error("Error getting video info for %s: %s", url, e)
         return None
 
 
@@ -509,6 +515,347 @@ def parse_subtitle_file(file_path: str) -> str:
     return '\n'.join(text_lines)
 
 
+def is_playlist_url(url: str) -> bool:
+    """Detects if URL contains a YouTube playlist parameter.
+
+    Returns True for:
+    - youtube.com/playlist?list=XXX (pure playlist)
+    - youtube.com/watch?v=XXX&list=XXX (video in playlist context)
+    - youtu.be/XXX?list=XXX
+    """
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        hostname = (parsed.hostname or '').lower()
+
+        # Only YouTube supports playlists in this bot
+        youtube_hosts = {'youtube.com', 'www.youtube.com', 'm.youtube.com',
+                         'music.youtube.com', 'youtu.be'}
+        if hostname not in youtube_hosts:
+            return False
+
+        return 'list' in params
+    except Exception:
+        return False
+
+
+def is_pure_playlist_url(url: str) -> bool:
+    """Returns True if URL is a pure playlist (no single video selected)."""
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query)
+        return 'list' in params and 'v' not in params and parsed.path in ('/', '/playlist')
+    except Exception:
+        return False
+
+
+def strip_playlist_params(url: str) -> str:
+    """Removes playlist parameters from URL, keeping only the video."""
+    try:
+        parsed = urlparse(url)
+        params = parse_qs(parsed.query, keep_blank_values=True)
+        params.pop('list', None)
+        params.pop('index', None)
+
+        # Rebuild query string
+        new_query = '&'.join(f'{k}={v[0]}' for k, v in params.items() if v)
+        return parsed._replace(query=new_query).geturl()
+    except Exception:
+        return url
+
+
+def get_playlist_info(url: str, max_items: int = 10) -> dict | None:
+    """Fetches playlist metadata using flat extraction.
+
+    Args:
+        url: YouTube playlist URL.
+        max_items: Maximum number of entries to fetch.
+
+    Returns:
+        Dict with title, playlist_count, entries list, or None on error.
+    """
+    try:
+        ydl_opts = {
+            'extract_flat': 'in_playlist',
+            'quiet': True,
+            'no_warnings': True,
+            'playlistend': max_items,
+        }
+        if os.path.exists(COOKIES_FILE):
+            ydl_opts['cookiefile'] = COOKIES_FILE
+
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+
+        if not info:
+            return None
+
+        # yt-dlp returns _type='playlist' for playlists
+        if info.get('_type') != 'playlist':
+            return None
+
+        entries = []
+        for entry in (info.get('entries') or []):
+            if entry is None:
+                continue
+            video_id = entry.get('id', '')
+            entries.append({
+                'url': f"https://www.youtube.com/watch?v={video_id}" if video_id else entry.get('url', ''),
+                'title': entry.get('title', 'Nieznany tytuł'),
+                'duration': entry.get('duration'),
+                'id': video_id,
+            })
+
+        return {
+            'title': info.get('title', 'Playlista'),
+            'playlist_count': info.get('playlist_count') or len(entries),
+            'entries': entries,
+        }
+
+    except Exception as e:
+        logging.error("Error getting playlist info: %s", e)
+        return None
+
+
+def _load_instagram_cookies():
+    """Loads Instagram session cookies from the cookies file.
+
+    Returns:
+        dict: Cookie name-value pairs, or empty dict on error.
+    """
+    cookies = {}
+    if not os.path.exists(COOKIES_FILE):
+        return cookies
+    try:
+        with open(COOKIES_FILE) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#'):
+                    parts = line.split('\t')
+                    if len(parts) >= 7 and 'instagram' in parts[0]:
+                        cookies[parts[5]] = parts[6]
+    except Exception as e:
+        logging.error("Error loading Instagram cookies: %s", e)
+    return cookies
+
+
+def _get_instaloader_context():
+    """Creates an instaloader context with session cookies.
+
+    Returns:
+        instaloader.Instaloader or None: Configured instance, or None on error.
+    """
+    try:
+        import instaloader
+    except ImportError:
+        logging.error("instaloader not installed")
+        return None
+
+    cookies = _load_instagram_cookies()
+    session_id = cookies.get('sessionid', '')
+    if not session_id:
+        logging.warning("No Instagram sessionid in cookies")
+        return None
+
+    loader = instaloader.Instaloader(max_connection_attempts=1)
+    for name in ('sessionid', 'ds_user_id', 'csrftoken', 'ig_did', 'mid', 'rur'):
+        if cookies.get(name):
+            loader.context._session.cookies.set(name, cookies[name], domain='.instagram.com')
+    loader.context.username = cookies.get('ds_user_id', '')
+    return loader
+
+
+def get_instagram_post_info(url):
+    """Fetches full Instagram post info using instaloader.
+
+    Returns a dict compatible with the rest of the bot code:
+    - For carousels: {'_type': 'playlist', 'entries': [...], 'title': ...}
+    - For single photos: {'ext': 'jpg', 'url': ..., 'title': ...}
+    - For videos: falls through to yt-dlp (returns None)
+
+    Args:
+        url: Instagram post URL.
+
+    Returns:
+        dict or None: Post info dictionary or None on error.
+    """
+    # Extract shortcode from URL
+    match = re.search(r'/(?:p|reel)/([A-Za-z0-9_-]+)', url)
+    if not match:
+        return None
+    shortcode = match.group(1)
+
+    loader = _get_instaloader_context()
+    if not loader:
+        return _get_instagram_post_info_ytdlp(url)
+
+    try:
+        import instaloader
+        post = instaloader.Post.from_shortcode(loader.context, shortcode)
+        title = f"Post by {post.owner_username}"
+
+        if post.typename == 'GraphSidecar':
+            entries = []
+            for node in post.get_sidecar_nodes():
+                entry = {
+                    'title': title,
+                    'url': node.display_url,
+                    'is_video': node.is_video,
+                }
+                if node.is_video:
+                    entry['video_url'] = node.video_url
+                else:
+                    entry['ext'] = 'jpg'
+                entries.append(entry)
+            return {
+                '_type': 'playlist',
+                'entries': entries,
+                'title': title,
+                'playlist_count': len(entries),
+            }
+
+        if not post.is_video:
+            return {
+                'ext': 'jpg',
+                'url': post.url,
+                'title': title,
+            }
+
+        # Video post — let yt-dlp handle it
+        return None
+
+    except Exception as e:
+        logging.error("instaloader error for %s: %s", url, e)
+        # Fallback to yt-dlp only for photo detection;
+        # if yt-dlp returns video data, return None to let standard flow handle it
+        info = _get_instagram_post_info_ytdlp(url)
+        if info and (info.get('formats') or info.get('duration')):
+            return None  # Video — let yt-dlp standard flow handle it
+        return info
+
+
+def _get_instagram_post_info_ytdlp(url):
+    """Fallback: fetches Instagram post info via yt-dlp."""
+    try:
+        ydl_opts = get_basic_ydl_opts()
+        ydl_opts['ignore_no_formats_error'] = True
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            return ydl.extract_info(url, download=False)
+    except Exception as e:
+        logging.error("Error getting Instagram post info for %s: %s", url, e)
+        return None
+
+
+def is_photo_entry(info: dict) -> bool:
+    """Returns True if an info dict represents a photo (not video).
+
+    Args:
+        info: Single entry info dict.
+
+    Returns:
+        True if the entry is a photo.
+    """
+    if not info:
+        return False
+    # Explicit is_video flag from instaloader
+    if 'is_video' in info:
+        return not info['is_video']
+    ext = (info.get('ext') or '').lower()
+    if ext in IMAGE_EXTENSIONS:
+        return True
+    # No formats and no duration — likely a photo
+    if not info.get('formats') and not info.get('duration'):
+        url = info.get('url', '')
+        return any(url.lower().endswith(f'.{e}') for e in IMAGE_EXTENSIONS)
+    return False
+
+
+def download_photo(url: str, output_path: str) -> str | None:
+    """Downloads a photo from direct URL.
+
+    Args:
+        url: Direct image URL.
+        output_path: File path without extension.
+
+    Returns:
+        Path to downloaded file, or None on error.
+    """
+    try:
+        resp = requests.get(url, timeout=30)
+        resp.raise_for_status()
+
+        content_type = resp.headers.get('content-type', '')
+        if 'png' in content_type:
+            ext = 'png'
+        elif 'webp' in content_type:
+            ext = 'webp'
+        else:
+            ext = 'jpg'
+
+        file_path = f"{output_path}.{ext}"
+        with open(file_path, 'wb') as f:
+            f.write(resp.content)
+        return file_path
+    except Exception as e:
+        logging.error("Error downloading photo: %s", e)
+        return None
+
+
+def download_thumbnail(info: dict, output_dir: str, embed: bool = False) -> str | None:
+    """Downloads video thumbnail from yt-dlp info dict.
+
+    For embed=True, converts to JPEG and scales to max 320x320
+    (Telegram Bot API thumbnail requirement).
+    For embed=False, downloads full-resolution image.
+
+    Args:
+        info: yt-dlp info dictionary containing 'thumbnail' or 'thumbnails'.
+        output_dir: Directory to save the thumbnail file.
+        embed: If True, resize for Telegram embed (max 320x320 JPEG).
+
+    Returns:
+        Path to downloaded thumbnail file, or None on error.
+    """
+    # Pick best thumbnail URL
+    thumb_url = None
+    thumbnails = info.get('thumbnails') or []
+    if thumbnails:
+        # yt-dlp lists thumbnails in ascending quality — last is best
+        thumb_url = thumbnails[-1].get('url')
+    if not thumb_url:
+        thumb_url = info.get('thumbnail')
+    if not thumb_url:
+        return None
+
+    try:
+        from PIL import Image
+
+        resp = requests.get(thumb_url, timeout=15)
+        resp.raise_for_status()
+
+        img = Image.open(BytesIO(resp.content))
+
+        if embed:
+            # Telegram requires JPEG, max 320x320
+            img.thumbnail((320, 320), Image.LANCZOS)
+            suffix = "_thumb_embed.jpg"
+        else:
+            suffix = "_thumb_full.jpg"
+
+        # Convert to RGB (handles PNG with alpha, WebP, etc.)
+        if img.mode != 'RGB':
+            img = img.convert('RGB')
+
+        safe_title = sanitize_filename(info.get('title', 'thumbnail'))
+        thumb_path = os.path.join(output_dir, f"{safe_title}{suffix}")
+        img.save(thumb_path, 'JPEG', quality=85)
+        return thumb_path
+
+    except Exception as e:
+        logging.warning("Failed to download thumbnail: %s", e)
+        return None
+
+
 def validate_url(url):
     """
     Checks if URL is from a supported platform.
@@ -521,7 +868,4 @@ def validate_url(url):
     """
     from bot.security import validate_url as _validate_url
 
-    valid = _validate_url(url)
-    if not valid:
-        print("Error: Invalid URL. Supported: YouTube, Vimeo, TikTok, Instagram, LinkedIn.")
-    return valid
+    return _validate_url(url)

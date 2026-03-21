@@ -10,12 +10,16 @@ Handles loading and validation of configuration from various sources:
 
 import os
 import re
-import json
-import shutil
 import logging
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from collections.abc import Mapping
+from bot.repositories import (
+    AuthorizedUsersRepository,
+    DownloadHistoryRepository,
+    DownloadRecord,
+)
 
 # Configuration file path
 CONFIG_FILE_PATH = "api_key.md"
@@ -26,7 +30,11 @@ DEFAULT_CONFIG = {
     "GROQ_API_KEY": "",
     "PIN_CODE": "12345678",
     "CLAUDE_API_KEY": "",
-    "ADMIN_CHAT_ID": ""
+    "ADMIN_CHAT_ID": "",
+    "SPOTIFY_CLIENT_ID": "",
+    "SPOTIFY_CLIENT_SECRET": "",
+    "TELEGRAM_API_ID": "",
+    "TELEGRAM_API_HASH": "",
 }
 
 # Download directory (absolute path based on project root)
@@ -34,6 +42,14 @@ DOWNLOAD_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 
 # Path to authorized users file
 AUTHORIZED_USERS_FILE = "authorized_users.json"
+
+
+@dataclass
+class RuntimeServices:
+    """Runtime persistence services initialized during bootstrap."""
+
+    authorized_users_repository: AuthorizedUsersRepository
+    download_history_repository: DownloadHistoryRepository
 
 def _read_config_file(file_path: str) -> dict:
     """Reads key/value pairs from api_key.md-like config file."""
@@ -105,6 +121,8 @@ def load_config(
         "CLAUDE_API_KEY": environment.get("CLAUDE_API_KEY"),
         "PIN_CODE": environment.get("PIN_CODE"),
         "ADMIN_CHAT_ID": environment.get("ADMIN_CHAT_ID"),
+        "TELEGRAM_API_ID": environment.get("TELEGRAM_API_ID"),
+        "TELEGRAM_API_HASH": environment.get("TELEGRAM_API_HASH"),
     }
 
     for key, value in overrides.items():
@@ -117,7 +135,7 @@ def load_config(
         logging.error("ERROR: Missing TELEGRAM_BOT_TOKEN! Set in api_key.md or as environment variable.")
 
     # Validate configuration
-    validate_config(config)
+    validate_config(config, config_file_path=config_file_path)
 
     if ensure_downloads_dir:
         ensure_download_path()
@@ -132,19 +150,23 @@ def ensure_download_path(path: str = DOWNLOAD_PATH) -> str:
     return path
 
 
-def validate_config(config):
+def validate_config(config, *, config_file_path: str = CONFIG_FILE_PATH):
     """
     Validates configuration and displays warnings.
 
     Args:
         config: Configuration dictionary to validate
     """
-    # Check PIN format (any length, digits only)
+    # Check PIN format (exactly 8 digits)
     pin = config.get("PIN_CODE", "")
     if not pin:
         logging.error("ERROR: Missing PIN_CODE in configuration!")
-    elif not pin.isdigit():
-        logging.error("ERROR: PIN_CODE format invalid (length=%d, digits_only=%s)", len(pin), pin.isdigit())
+    elif not pin.isdigit() or len(pin) != 8:
+        logging.error(
+            "ERROR: PIN_CODE format invalid (length=%d, digits_only=%s, expected=8 digits)",
+            len(pin),
+            pin.isdigit(),
+        )
     elif pin == "12345678":
         logging.error("SECURITY: Using default PIN_CODE! Change it immediately for production use.")
 
@@ -165,19 +187,19 @@ def validate_config(config):
         logging.warning("WARNING: CLAUDE_API_KEY should start with 'sk-'!")
 
     # Check config file permissions (Unix only) and auto-fix if possible
-    if os.path.exists(CONFIG_FILE_PATH) and hasattr(os, 'stat'):
+    if os.path.exists(config_file_path) and hasattr(os, 'stat'):
         try:
-            file_stats = os.stat(CONFIG_FILE_PATH)
+            file_stats = os.stat(config_file_path)
             file_mode = oct(file_stats.st_mode)[-3:]
             if file_mode != '600':
-                logging.warning("Config file %s has permissions %s, expected 600", CONFIG_FILE_PATH, file_mode)
+                logging.warning("Config file %s has permissions %s, expected 600", config_file_path, file_mode)
                 try:
-                    os.chmod(CONFIG_FILE_PATH, 0o600)
-                    logging.info("Fixed %s permissions to 600", CONFIG_FILE_PATH)
+                    os.chmod(config_file_path, 0o600)
+                    logging.info("Fixed %s permissions to 600", config_file_path)
                 except OSError as e:
-                    logging.warning("Could not fix permissions for %s: %s", CONFIG_FILE_PATH, e)
+                    logging.warning("Could not fix permissions for %s: %s", config_file_path, e)
         except Exception:
-            logging.debug("Unable to verify config file permissions for %s", CONFIG_FILE_PATH)
+            logging.debug("Unable to verify config file permissions for %s", config_file_path)
 
 
 def load_authorized_users():
@@ -187,18 +209,7 @@ def load_authorized_users():
     Returns:
         set: Set of user_id for authorized users
     """
-    try:
-        if os.path.exists(AUTHORIZED_USERS_FILE):
-            with open(AUTHORIZED_USERS_FILE, 'r') as f:
-                data = json.load(f)
-                return set(int(user_id) for user_id in data.get('authorized_users', []))
-        else:
-            logging.info(f"File {AUTHORIZED_USERS_FILE} does not exist. Creating new.")
-            return set()
-    except (json.JSONDecodeError, ValueError, IOError) as e:
-        logging.warning(f"Error loading {AUTHORIZED_USERS_FILE}: {e}")
-        logging.warning("Using empty authorized users list.")
-        return set()
+    return get_authorized_users_repository().load()
 
 
 def save_authorized_users(authorized_users_set):
@@ -208,28 +219,7 @@ def save_authorized_users(authorized_users_set):
     Args:
         authorized_users_set: Set of authorized user IDs
     """
-    try:
-        data = {
-            'authorized_users': [str(user_id) for user_id in authorized_users_set],
-            'last_updated': datetime.now().isoformat(),
-            'version': '1.0'
-        }
-
-        # Write to temp file then move (atomic write)
-        temp_file = AUTHORIZED_USERS_FILE + '.tmp'
-        with open(temp_file, 'w') as f:
-            json.dump(data, f, indent=2)
-
-        shutil.move(temp_file, AUTHORIZED_USERS_FILE)
-
-        # Set secure permissions (Unix only)
-        if hasattr(os, 'chmod'):
-            os.chmod(AUTHORIZED_USERS_FILE, 0o600)
-
-        logging.debug(f"Saved {len(authorized_users_set)} authorized users to {AUTHORIZED_USERS_FILE}")
-
-    except (IOError, OSError) as e:
-        logging.error(f"Error saving {AUTHORIZED_USERS_FILE}: {e}")
+    get_authorized_users_repository().save(authorized_users_set)
 
 
 # Path to download history file
@@ -239,10 +229,62 @@ DOWNLOAD_HISTORY_FILE = "download_history.json"
 MAX_HISTORY_ENTRIES = 500
 
 # Lock for thread-safe history operations
-_history_lock = threading.Lock()
+_history_lock = threading.RLock()
 
 # Lock for thread-safe authorized users operations
-_auth_lock = threading.Lock()
+_auth_lock = threading.RLock()
+
+
+def build_runtime_services() -> RuntimeServices:
+    """Build runtime persistence services for the current repository paths."""
+
+    return RuntimeServices(
+        authorized_users_repository=AuthorizedUsersRepository(
+            AUTHORIZED_USERS_FILE,
+            lock=_auth_lock,
+        ),
+        download_history_repository=DownloadHistoryRepository(
+            DOWNLOAD_HISTORY_FILE,
+            max_entries=MAX_HISTORY_ENTRIES,
+            lock=_history_lock,
+        ),
+    )
+
+
+RUNTIME_SERVICES = build_runtime_services()
+
+
+def _refresh_runtime_services_if_needed() -> RuntimeServices:
+    """Rebuild runtime services when repository paths changed at runtime."""
+
+    global RUNTIME_SERVICES
+
+    services = RUNTIME_SERVICES
+    users_path_changed = services.authorized_users_repository.path != AUTHORIZED_USERS_FILE
+    history_path_changed = services.download_history_repository.path != DOWNLOAD_HISTORY_FILE
+
+    if users_path_changed or history_path_changed:
+        RUNTIME_SERVICES = build_runtime_services()
+
+    return RUNTIME_SERVICES
+
+
+def get_runtime_services() -> RuntimeServices:
+    """Return active runtime persistence services."""
+
+    return _refresh_runtime_services_if_needed()
+
+
+def get_authorized_users_repository() -> AuthorizedUsersRepository:
+    """Return active authorized users repository."""
+
+    return get_runtime_services().authorized_users_repository
+
+
+def get_download_history_repository() -> DownloadHistoryRepository:
+    """Return active download history repository."""
+
+    return get_runtime_services().download_history_repository
 
 
 def load_download_history():
@@ -252,16 +294,7 @@ def load_download_history():
     Returns:
         list: List of download records
     """
-    try:
-        if os.path.exists(DOWNLOAD_HISTORY_FILE):
-            with open(DOWNLOAD_HISTORY_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data.get('downloads', [])
-        else:
-            return []
-    except (json.JSONDecodeError, ValueError, IOError) as e:
-        logging.warning(f"Error loading {DOWNLOAD_HISTORY_FILE}: {e}")
-        return []
+    return get_download_history_repository().load()
 
 
 def save_download_history(history):
@@ -271,26 +304,7 @@ def save_download_history(history):
     Args:
         history: List of download records
     """
-    try:
-        # Keep only the last MAX_HISTORY_ENTRIES
-        if len(history) > MAX_HISTORY_ENTRIES:
-            history = history[-MAX_HISTORY_ENTRIES:]
-
-        data = {
-            'downloads': history,
-            'last_updated': datetime.now().isoformat(),
-            'version': '1.0'
-        }
-
-        temp_file = DOWNLOAD_HISTORY_FILE + '.tmp'
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-        shutil.move(temp_file, DOWNLOAD_HISTORY_FILE)
-        logging.debug(f"Saved {len(history)} download records to {DOWNLOAD_HISTORY_FILE}")
-
-    except (IOError, OSError) as e:
-        logging.error(f"Error saving {DOWNLOAD_HISTORY_FILE}: {e}")
+    get_download_history_repository().save(history)
 
 
 def add_download_record(
@@ -313,31 +327,22 @@ def add_download_record(
         selected_format: Raw format string passed to yt-dlp (optional)
         error_message: Error description when status is "failure" (optional)
     """
-    record = {
-        'timestamp': datetime.now().isoformat(),
-        'user_id': user_id,
-        'title': title,
-        'url': url,
-        'format': format_type,
-        'status': status,
-    }
-
-    if file_size_mb:
-        record['file_size_mb'] = round(file_size_mb, 2)
-
-    if time_range:
-        record['time_range'] = f"{time_range.get('start', '0:00')}-{time_range.get('end', 'end')}"
-
-    if selected_format:
-        record['selected_format'] = selected_format
-
-    if error_message:
-        record['error_message'] = str(error_message)[:200]
-
-    with _history_lock:
-        history = load_download_history()
-        history.append(record)
-        save_download_history(history)
+    record = DownloadRecord(
+        timestamp=datetime.now().isoformat(),
+        user_id=user_id,
+        title=title,
+        url=url,
+        format=format_type,
+        status=status,
+        file_size_mb=round(file_size_mb, 2) if file_size_mb is not None else None,
+        time_range=(
+            f"{time_range.get('start', '0:00')}-{time_range.get('end', 'end')}"
+            if time_range else None
+        ),
+        selected_format=selected_format,
+        error_message=str(error_message)[:200] if error_message else None,
+    )
+    get_download_history_repository().append(record)
 
 
 def get_download_stats(user_id=None):
@@ -350,40 +355,66 @@ def get_download_stats(user_id=None):
     Returns:
         dict: Statistics dictionary
     """
-    with _history_lock:
-        history = load_download_history()
-
-    if user_id:
-        history = [h for h in history if h.get('user_id') == user_id]
-
-    total_downloads = len(history)
-    total_size = sum(h.get('file_size_mb', 0) for h in history)
-
-    # Count by format
-    format_counts = {}
-    for h in history:
-        fmt = h.get('format', 'unknown')
-        format_counts[fmt] = format_counts.get(fmt, 0) + 1
-
-    # Count by status (old records without status default to "success")
-    success_count = sum(1 for h in history if h.get('status', 'success') == 'success')
-    failure_count = sum(1 for h in history if h.get('status', 'success') == 'failure')
-
-    return {
-        'total_downloads': total_downloads,
-        'total_size_mb': round(total_size, 2),
-        'format_counts': format_counts,
-        'success_count': success_count,
-        'failure_count': failure_count,
-        'recent': history[-10:][::-1] if history else []  # Last 10, newest first
-    }
+    return get_download_history_repository().stats(user_id=user_id)
 
 
-# Initialize configuration on module load
-CONFIG = load_config(ensure_downloads_dir=True)
-BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
-PIN_CODE = CONFIG["PIN_CODE"]
-ADMIN_CHAT_ID = CONFIG.get("ADMIN_CHAT_ID", "")
+CONFIG: dict = {}
+BOT_TOKEN = ""
+PIN_CODE = ""
+ADMIN_CHAT_ID = ""
+authorized_users: set[int] = set()
 
-# Load authorized users from JSON file
-authorized_users = load_authorized_users()
+
+def initialize_runtime(
+    *,
+    config_file_path: str = CONFIG_FILE_PATH,
+    env: Mapping[str, str | None] | None = None,
+    load_env_file: bool = True,
+    ensure_downloads_dir: bool = True,
+) -> dict:
+    """Load runtime configuration and update exported globals in place."""
+    global RUNTIME_SERVICES
+
+    loaded_config = load_config(
+        config_file_path=config_file_path,
+        env=env,
+        load_env_file=load_env_file,
+        ensure_downloads_dir=ensure_downloads_dir,
+    )
+    RUNTIME_SERVICES = build_runtime_services()
+    loaded_users = get_authorized_users_repository().load()
+
+    CONFIG.clear()
+    CONFIG.update(loaded_config)
+
+    global BOT_TOKEN, PIN_CODE, ADMIN_CHAT_ID
+    BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
+    PIN_CODE = CONFIG["PIN_CODE"]
+    ADMIN_CHAT_ID = CONFIG.get("ADMIN_CHAT_ID", "")
+
+    authorized_users.clear()
+    authorized_users.update(loaded_users)
+
+    return CONFIG
+
+
+def get_runtime_config() -> dict:
+    """Return the active runtime configuration mapping."""
+
+    return CONFIG
+
+
+def get_runtime_value(key: str, default=None):
+    """Return one value from the active runtime configuration."""
+
+    return CONFIG.get(key, default)
+
+
+def get_runtime_authorized_users() -> set[int]:
+    """Return the active in-memory authorized user set."""
+
+    return authorized_users
+
+
+# Initialize runtime state on module load for backward compatibility.
+initialize_runtime()

@@ -14,6 +14,8 @@ from bot.downloader import (
     normalize_format_id,
     validate_url,
     parse_time_seconds,
+    is_photo_entry,
+    _load_instagram_cookies,
 )
 
 
@@ -54,6 +56,11 @@ def test_get_basic_ydl_opts_contains_expected_fields():
     opts = get_basic_ydl_opts()
     assert opts["quiet"] is True
     assert opts["no_warnings"] is True
+    assert "progress_hooks" not in opts
+
+
+def test_get_basic_ydl_opts_can_enable_progress_hooks():
+    opts = get_basic_ydl_opts(include_progress_hooks=True)
     assert len(opts["progress_hooks"]) == 1
 
 
@@ -291,6 +298,12 @@ def test_validate_url():
     assert not validate_url("https://example.com/watch?v=test")
 
 
+def test_validate_url_has_no_stdout_side_effect(capsys):
+    assert not validate_url("https://example.com/watch?v=test")
+    captured = capsys.readouterr()
+    assert captured.out == ""
+
+
 class TestDurationValidation:
     """Tests for video_duration parameter in download_youtube_video."""
 
@@ -391,3 +404,114 @@ class TestDurationValidation:
             video_duration=60,
         )
         assert result is False
+
+
+class TestIsPhotoEntry:
+    """Tests for is_photo_entry() with instaloader and yt-dlp info dicts."""
+
+    def test_none_returns_false(self):
+        assert is_photo_entry(None) is False
+
+    def test_empty_dict_returns_false(self):
+        assert is_photo_entry({}) is False
+
+    def test_instaloader_photo_detected(self):
+        # instaloader sets is_video=False for photos
+        assert is_photo_entry({'is_video': False, 'url': 'https://example.com/img.jpg'}) is True
+
+    def test_instaloader_video_not_photo(self):
+        # instaloader sets is_video=True for videos
+        assert is_photo_entry({'is_video': True, 'url': 'https://example.com/vid.mp4'}) is False
+
+    def test_ytdlp_photo_by_extension(self):
+        assert is_photo_entry({'ext': 'jpg'}) is True
+        assert is_photo_entry({'ext': 'png'}) is True
+        assert is_photo_entry({'ext': 'webp'}) is True
+        assert is_photo_entry({'ext': 'JPEG'}) is True
+
+    def test_ytdlp_video_by_extension(self):
+        assert is_photo_entry({'ext': 'mp4'}) is False
+
+    def test_ytdlp_photo_by_url_no_formats(self):
+        assert is_photo_entry({'url': 'https://example.com/photo.jpg'}) is True
+        assert is_photo_entry({'url': 'https://example.com/photo.PNG'}) is True
+
+    def test_ytdlp_video_has_formats(self):
+        assert is_photo_entry({'formats': [{}], 'url': 'https://example.com/img.jpg'}) is False
+
+    def test_ytdlp_video_has_duration(self):
+        assert is_photo_entry({'duration': 30, 'url': 'https://example.com/img.jpg'}) is False
+
+    def test_is_video_flag_takes_precedence_over_ext(self):
+        # is_video=False should win even if ext looks like video
+        assert is_photo_entry({'is_video': False, 'ext': 'mp4'}) is True
+        # is_video=True should win even if ext looks like photo
+        assert is_photo_entry({'is_video': True, 'ext': 'jpg'}) is False
+
+
+class TestFormatIdPatternExtended:
+    """Tests for expanded FORMAT_ID_PATTERN (dash-prefixed and alphanumeric-digit patterns)."""
+
+    def test_dash_prefixed_format_ids(self):
+        assert is_valid_ytdlp_format_id("dash-video1") is True
+        assert is_valid_ytdlp_format_id("dash-abc123") is True
+
+    def test_alphanumeric_digit_format_ids(self):
+        assert is_valid_ytdlp_format_id("hls-1") is True
+        assert is_valid_ytdlp_format_id("audio-0") is True
+
+    def test_existing_patterns_still_work(self):
+        assert is_valid_ytdlp_format_id("best") is True
+        assert is_valid_ytdlp_format_id("137+140") is True
+        assert is_valid_ytdlp_format_id("1080p") is True
+
+    def test_invalid_patterns_rejected(self):
+        assert is_valid_ytdlp_format_id("best[height<=720]") is False
+        assert is_valid_ytdlp_format_id("'; DROP TABLE") is False
+
+
+class TestLoadInstagramCookies:
+    """Tests for _load_instagram_cookies() parsing."""
+
+    def test_no_cookies_file_returns_empty(self, tmp_path, monkeypatch):
+        monkeypatch.setattr("bot.downloader.COOKIES_FILE", str(tmp_path / "nonexistent.txt"))
+        assert _load_instagram_cookies() == {}
+
+    def test_parses_instagram_cookies(self, tmp_path, monkeypatch):
+        cookie_file = tmp_path / "cookies.txt"
+        cookie_file.write_text(
+            "# Netscape HTTP Cookie File\n"
+            ".instagram.com\tTRUE\t/\tTRUE\t0\tsessionid\tABC123\n"
+            ".instagram.com\tTRUE\t/\tTRUE\t0\tds_user_id\t12345\n"
+            ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\txyz\n"
+        )
+        monkeypatch.setattr("bot.downloader.COOKIES_FILE", str(cookie_file))
+        cookies = _load_instagram_cookies()
+        assert cookies == {'sessionid': 'ABC123', 'ds_user_id': '12345'}
+
+    def test_ignores_non_instagram_cookies(self, tmp_path, monkeypatch):
+        cookie_file = tmp_path / "cookies.txt"
+        cookie_file.write_text(
+            ".youtube.com\tTRUE\t/\tTRUE\t0\tSID\txyz\n"
+        )
+        monkeypatch.setattr("bot.downloader.COOKIES_FILE", str(cookie_file))
+        assert _load_instagram_cookies() == {}
+
+    def test_ignores_comment_lines(self, tmp_path, monkeypatch):
+        cookie_file = tmp_path / "cookies.txt"
+        cookie_file.write_text(
+            "# This is a comment\n"
+            "# .instagram.com commented out\n"
+        )
+        monkeypatch.setattr("bot.downloader.COOKIES_FILE", str(cookie_file))
+        assert _load_instagram_cookies() == {}
+
+    def test_ignores_malformed_lines(self, tmp_path, monkeypatch):
+        cookie_file = tmp_path / "cookies.txt"
+        cookie_file.write_text(
+            ".instagram.com\tshort\n"
+            ".instagram.com\tTRUE\t/\tTRUE\t0\tcsrftoken\tTOKEN123\n"
+        )
+        monkeypatch.setattr("bot.downloader.COOKIES_FILE", str(cookie_file))
+        cookies = _load_instagram_cookies()
+        assert cookies == {'csrftoken': 'TOKEN123'}

@@ -5,7 +5,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 ## Funkcje
 
 ### Podstawowe
-- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp)
+- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp), Spotify podcasty (via iTunes/YouTube)
 - Pobieranie video w różnych formatach (1080p, 720p, 480p, 360p)
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
@@ -24,13 +24,14 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 | YouTube | youtube.com, youtu.be, music.youtube.com | Pełne wsparcie (video, audio, napisy, zakres czasowy) |
 | Vimeo | vimeo.com, player.vimeo.com | Video, audio, transkrypcja |
 | TikTok | tiktok.com, vm.tiktok.com, m.tiktok.com | Uproszczone menu (krótkie video) |
-| Instagram | instagram.com | Reels, Stories, posty video. Wymaga cookies.txt |
+| Instagram | instagram.com | Reels i posty video przez yt-dlp. Zdjęcia i karuzele wymagają dodatkowo `instaloader` oraz `cookies.txt` |
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
+| Spotify | open.spotify.com | Odcinki podcastów. Wymaga SPOTIFY_CLIENT_ID/SECRET. Audio z iTunes lub YouTube |
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik
 - Limit rozmiaru plików - max 1GB
-- Walidacja URL - whitelist domen (YouTube, Vimeo, TikTok, Instagram, LinkedIn), wymagany HTTPS
+- Walidacja URL - whitelist domen (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Spotify), wymagany HTTPS
 - Blokada po 3 nieudanych próbach PIN (15 minut)
 - Logowanie nieudanych prób PIN + powiadomienia Telegram do admina
 - Walidacja format_id przed przekazaniem do yt-dlp
@@ -51,6 +52,18 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 - Python 3.12+
 - ffmpeg (zainstalowany w systemie)
 - Poetry (opcjonalnie, zalecane) lub pip
+
+### Zależności opcjonalne
+
+- `pyrogram` - potrzebny do pobierania dużych plików z Telegrama przez MTProto
+- `instaloader` - potrzebny do zdjęć i karuzel z Instagrama
+
+Instalacja opcjonalnych dodatków:
+
+```bash
+pip install pyrogram
+pip install instaloader
+```
 
 ## Instalacja
 
@@ -75,6 +88,8 @@ poetry shell
 poetry run python main.py
 ```
 
+Poetry instaluje zależności z `pyproject.toml`. Biblioteki opcjonalne, takie jak `instaloader`, doinstaluj osobno, jeśli chcesz używać tych funkcji.
+
 ### Opcja 2: Instalacja z pip (tradycyjna)
 
 ```bash
@@ -89,6 +104,12 @@ source venv/bin/activate  # Linux/macOS
 
 # Zainstaluj zależności
 pip install -r requirements.txt
+```
+
+Jeśli chcesz obsługi MTProto lub zdjęć/karuzel z Instagrama, doinstaluj również zależności opcjonalne:
+
+```bash
+pip install instaloader
 ```
 
 ### Instalacja ffmpeg
@@ -126,7 +147,13 @@ GROQ_API_KEY=twój_klucz_groq
 CLAUDE_API_KEY=twój_klucz_claude
 PIN_CODE=12345678
 ADMIN_CHAT_ID=twój_telegram_user_id
+SPOTIFY_CLIENT_ID=twój_spotify_client_id
+SPOTIFY_CLIENT_SECRET=twój_spotify_client_secret
 ```
+
+`PIN_CODE` musi mieć dokładnie 8 cyfr.
+
+Klucze Spotify uzyskasz na [Spotify Developer Dashboard](https://developer.spotify.com/) — utwórz aplikację z Web API.
 
 **UWAGA**: Plik `api_key.md` jest ignorowany przez git - nie commituj go do repozytorium!
 
@@ -139,6 +166,8 @@ export GROQ_API_KEY="twój_klucz"
 export CLAUDE_API_KEY="twój_klucz"
 export PIN_CODE="12345678"
 export ADMIN_CHAT_ID="twój_telegram_user_id"
+export SPOTIFY_CLIENT_ID="twój_spotify_client_id"
+export SPOTIFY_CLIENT_SECRET="twój_spotify_client_secret"
 ```
 
 **Windows (PowerShell):**
@@ -148,6 +177,8 @@ $env:GROQ_API_KEY="twój_klucz"
 $env:CLAUDE_API_KEY="twój_klucz"
 $env:PIN_CODE="12345678"
 $env:ADMIN_CHAT_ID="twój_telegram_user_id"
+$env:SPOTIFY_CLIENT_ID="twój_spotify_client_id"
+$env:SPOTIFY_CLIENT_SECRET="twój_spotify_client_secret"
 ```
 
 ### Jak uzyskać ADMIN_CHAT_ID?
@@ -168,6 +199,10 @@ Plik `cookies.txt` jest potrzebny gdy:
 - LinkedIn wymaga logowania do postów video
 - TikTok blokuje pobieranie bez sesji
 
+Dodatkowo:
+- zdjęcia i karuzele z Instagrama wymagają zainstalowanego `instaloader`
+- duże pliki z Telegrama wymagają `pyrogram` oraz `TELEGRAM_API_ID` i `TELEGRAM_API_HASH`
+
 Jak uzyskać cookies:
 1. Zainstaluj rozszerzenie **"Get cookies.txt LOCALLY"** w przeglądarce (Chrome/Firefox)
 2. Zaloguj się na daną platformę (YouTube, Instagram, LinkedIn, TikTok)
@@ -177,6 +212,20 @@ Jak uzyskać cookies:
 Bot automatycznie wykrywa brak cookies i wyświetla odpowiedni komunikat.
 
 **UWAGA**: Plik `cookies.txt` zawiera dane sesji — nie udostępniaj go i nie commituj do repozytorium! Jest ignorowany przez git.
+
+### Pliki runtime i lokalne artefakty
+
+Te pliki nie są częścią kodu aplikacji i powinny pozostać lokalne:
+
+- `.env`
+- `api_key.md`
+- `cookies.txt`
+- `authorized_users.json`
+- `download_history.json`
+- `downloads/`
+- `backup/`
+
+Repozytorium powinno zawierać kod, testy i konfigurację projektu, ale nie lokalne sekrety, backupy ani dane runtime.
 
 ## Uruchomienie
 
@@ -256,10 +305,16 @@ python -m pytest tests/test_subtitles.py -v
 1. Znajdź swojego bota na Telegramie
 2. Wyślij `/start`
 3. Wprowadź kod PIN
-4. Wyślij link z obsługiwanej platformy (YouTube, Vimeo, TikTok, Instagram, LinkedIn)
+4. Wyślij link z obsługiwanej platformy (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Spotify)
 5. Wybierz format i jakość
 6. Opcjonalnie: wybierz transkrypcję lub streszczenie
    - Jeśli film ma napisy YouTube — możesz wybrać gotowe napisy (natychmiastowo, 0 tokenów) lub transkrypcję AI (minuty, tokeny Groq/Claude)
+
+### Podcasty Spotify
+1. Wyślij link do odcinka podcastu ze Spotify (`open.spotify.com/episode/...`)
+2. Bot automatycznie wyszuka audio w iTunes (priorytet — bezpośredni MP3) lub na YouTube (fallback)
+3. Wybierz opcję: Audio (MP3), Transkrypcja lub Transkrypcja + Podsumowanie
+4. Wymaga skonfigurowania `SPOTIFY_CLIENT_ID` i `SPOTIFY_CLIENT_SECRET`
 
 ### Transkrypcja plików audio
 1. Wyślij wiadomość głosową, plik audio lub dokument audio (np. notatkę głosową z WhatsApp)
@@ -294,6 +349,7 @@ ytdown/
 │   ├── cleanup.py                  # Czyszczenie plików i monitoring dysku
 │   ├── transcription.py            # Transkrypcja (Groq) i podsumowania (Claude)
 │   ├── downloader.py               # Pobieranie mediów z platform (yt-dlp)
+│   ├── spotify.py                  # Rozwiązywanie Spotify podcastów (iTunes/YouTube)
 │   ├── cli.py                      # Interfejs wiersza poleceń
 │   ├── telegram_commands.py        # Handlery komend Telegram (/start, /help, etc.)
 │   └── telegram_callbacks.py       # Handlery callbacków (przyciski, pobieranie)
@@ -304,6 +360,7 @@ ytdown/
 │   ├── test_security_unit.py       # Testy PIN, blokowania, logowania
 │   ├── test_telegram_commands.py   # Testy komend, powiadomień admina
 │   ├── test_telegram_callbacks.py  # Testy callbacków, pobierania
+│   ├── test_spotify.py             # Testy Spotify podcastów
 │   ├── test_downloader.py          # Testy downloadera, walidacji czasu
 │   ├── test_download_history.py    # Testy historii pobrań
 │   ├── test_cli.py                 # Testy CLI
@@ -336,6 +393,7 @@ ytdown/
 - Podsumowanie AI: do ~14h materiału audio (powyżej automatycznie pomijane)
 - Sama transkrypcja (Whisper) i napisy YouTube działają bez limitu długości
 - Instagram, LinkedIn, TikTok mogą wymagać cookies.txt do pobierania
+- Instagram zdjęcia/karuzele wymagają instaloader z ważną sesją w cookies.txt
 
 ## Rozwiązywanie problemów
 
@@ -371,6 +429,7 @@ Ten projekt jest dostępny na licencji MIT.
 ## Podziękowania
 
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - pobieranie mediów z platform (YouTube, Vimeo, TikTok, Instagram, LinkedIn)
+- [instaloader](https://github.com/instaloader/instaloader) - pobieranie zdjęć i karuzel z Instagrama
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - API Telegram
 - [Groq](https://groq.com/) - transkrypcja audio (Whisper)
 - [Anthropic Claude](https://www.anthropic.com/) - generowanie podsumowań (Haiku 4.5)

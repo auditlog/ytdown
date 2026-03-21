@@ -83,6 +83,26 @@ def test_send_long_message_splits_large_text():
     assert first_call_text.startswith(header)
 
 
+def test_send_long_message_falls_back_on_parse_error():
+    """When Markdown parsing fails, message is resent without parse_mode."""
+    bot = Mock()
+    call_count = {"n": 0}
+
+    async def fake_send_message(**kwargs):
+        call_count["n"] += 1
+        if kwargs.get("parse_mode"):
+            raise BadRequest("Can't parse entities")
+
+    bot.send_message = AsyncMock(side_effect=fake_send_message)
+
+    asyncio.run(tc.send_long_message(bot, 123, "text with *broken markdown", parse_mode="Markdown"))
+
+    # Should be called twice: first with Markdown (fails), then without
+    assert bot.send_message.await_count == 2
+    second_call = bot.send_message.await_args_list[1]
+    assert "parse_mode" not in second_call.kwargs
+
+
 def _make_update(data: str, chat_id: int = 123):
     update = Mock()
     update.effective_chat.id = chat_id
@@ -472,11 +492,98 @@ def test_transcribe_audio_file_requires_groq_api_key(tmp_path, monkeypatch):
     context.user_data["audio_file_path"] = str(audio_file)
     context.user_data["audio_file_title"] = "Recording"
 
-    monkeypatch.setitem(tc.CONFIG, "GROQ_API_KEY", "")
+    monkeypatch.setattr(tc, "get_runtime_value", lambda key, default=None: "" if key == "GROQ_API_KEY" else default)
     asyncio.run(tc.transcribe_audio_file(update, context))
 
     messages = [call.args[0] for call in update.callback_query.edit_message_text.await_args_list]
     assert any("brak klucza api" in msg.lower() for msg in messages)
+
+
+def test_handle_callback_spotify_transcribe_calls_download_spotify_resolved(monkeypatch):
+    """transcribe callback with spotify platform calls download_spotify_resolved."""
+    tc.user_urls[123] = "https://open.spotify.com/episode/abc123"
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+    context.user_data['platform'] = 'spotify'
+    context.user_data['spotify_resolved'] = {
+        'source': 'itunes',
+        'audio_url': 'https://example.com/ep.mp3',
+        'title': 'Test Episode',
+    }
+
+    called = {}
+
+    async def fake_download_spotify(update_arg, context_arg, resolved, fmt, transcribe=False, **kw):
+        called["resolved"] = resolved
+        called["transcribe"] = transcribe
+
+    monkeypatch.setattr(tc, "download_spotify_resolved", fake_download_spotify)
+    asyncio.run(tc.handle_callback(update, context))
+
+    assert called["transcribe"] is True
+    assert called["resolved"]["source"] == "itunes"
+
+
+def test_handle_callback_spotify_transcribe_summary_shows_options(monkeypatch):
+    """transcribe_summary with spotify platform shows summary type options."""
+    tc.user_urls[123] = "https://open.spotify.com/episode/abc123"
+    update = _make_update("transcribe_summary", chat_id=123)
+    context = _make_context()
+    context.user_data['platform'] = 'spotify'
+    context.user_data['spotify_resolved'] = {'title': 'Test Episode'}
+
+    called = {}
+
+    async def fake_show_spotify_summary(update_arg, context_arg):
+        called["invoked"] = True
+
+    monkeypatch.setattr(tc, "_show_spotify_summary_options", fake_show_spotify_summary)
+    asyncio.run(tc.handle_callback(update, context))
+
+    assert called.get("invoked") is True
+
+
+def test_handle_callback_spotify_summary_option_calls_download(monkeypatch):
+    """summary_option with spotify platform calls download_spotify_resolved with summary."""
+    tc.user_urls[123] = "https://open.spotify.com/episode/abc123"
+    update = _make_update("summary_option_2", chat_id=123)
+    context = _make_context()
+    context.user_data['platform'] = 'spotify'
+    context.user_data['spotify_resolved'] = {
+        'source': 'youtube',
+        'youtube_url': 'https://youtube.com/watch?v=xyz',
+        'title': 'Test Episode',
+    }
+
+    called = {}
+
+    async def fake_download_spotify(update_arg, context_arg, resolved, fmt,
+                                     transcribe=False, summary=False, summary_type=None):
+        called["transcribe"] = transcribe
+        called["summary"] = summary
+        called["summary_type"] = summary_type
+
+    monkeypatch.setattr(tc, "download_spotify_resolved", fake_download_spotify)
+    asyncio.run(tc.handle_callback(update, context))
+
+    assert called["transcribe"] is True
+    assert called["summary"] is True
+    assert called["summary_type"] == 2
+
+
+def test_handle_callback_spotify_expired_session(monkeypatch):
+    """Spotify transcribe with no resolved data shows session expired message."""
+    tc.user_urls[123] = "https://open.spotify.com/episode/abc123"
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+    context.user_data['platform'] = 'spotify'
+    # No spotify_resolved in user_data
+
+    asyncio.run(tc.handle_callback(update, context))
+
+    update.callback_query.edit_message_text.assert_awaited_with(
+        "Sesja Spotify wygasła. Wyślij link ponownie."
+    )
 
 
 def test_handle_callback_time_range_options_and_clear():

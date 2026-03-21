@@ -8,6 +8,8 @@ and PIN authentication logic.
 import os
 import logging
 import subprocess
+from collections.abc import MutableMapping
+from concurrent.futures import ThreadPoolExecutor
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
@@ -16,11 +18,10 @@ from telegram.helpers import escape_markdown
 from datetime import datetime
 
 from bot.config import (
-    ADMIN_CHAT_ID,
     DOWNLOAD_PATH,
-    PIN_CODE,
-    authorized_users,
     get_download_stats,
+    get_runtime_authorized_users,
+    get_runtime_value,
 )
 from bot.security import (
     MAX_ATTEMPTS,
@@ -28,26 +29,52 @@ from bot.security import (
     RATE_LIMIT_REQUESTS,
     RATE_LIMIT_WINDOW,
     MAX_FILE_SIZE_MB,
+    MAX_PLAYLIST_ITEMS,
+    FFMPEG_TIMEOUT,
     failed_attempts,
     block_until,
     user_urls,
     user_time_ranges,
+    user_playlist_data,
     check_rate_limit,
     validate_url,
     validate_youtube_url,
     detect_platform,
+    normalize_url,
+    get_media_label,
     manage_authorized_user,
     estimate_file_size,
     is_user_blocked,
     get_block_remaining_seconds,
-    clear_failed_attempts,
-    register_pin_failure,
 )
 from bot.cleanup import (
     cleanup_old_files,
     get_disk_usage,
 )
-from bot.downloader import get_video_info
+from bot.downloader import (
+    get_video_info,
+    is_playlist_url,
+    is_pure_playlist_url,
+    get_instagram_post_info,
+    is_photo_entry,
+)
+from bot.spotify import parse_spotify_episode_url
+from bot.services.auth_service import (
+    handle_pin_input,
+    handle_start,
+    logout_user,
+    store_pending_action,
+)
+from bot.services.playlist_service import (
+    build_playlist_message,
+    load_playlist,
+)
+from bot.services.spotify_service import (
+    build_episode_caption_data,
+    get_resolution_error_message,
+    resolve_episode,
+)
+from bot.runtime import get_app_runtime
 
 
 def escape_md(text: str) -> str:
@@ -55,14 +82,408 @@ def escape_md(text: str) -> str:
     return escape_markdown(text, version=1)
 
 
+def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
+    """Builds the main format selection keyboard, conditional on platform.
+
+    Args:
+        platform: Detected platform ('youtube', 'tiktok', etc.)
+        large_file: If True, shows resolution options instead of "best quality"
+
+    Returns:
+        List of InlineKeyboardButton rows for InlineKeyboardMarkup.
+    """
+    is_podcast = platform in ('castbox', 'spotify')
+    hide_flac = platform in ('tiktok', 'castbox', 'spotify')
+    hide_time_range = platform in ('tiktok', 'castbox', 'spotify')
+
+    if is_podcast:
+        # Audio-only platform — no video options, no format list
+        keyboard = [
+            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        ]
+        return keyboard
+
+    if large_file:
+        keyboard = [
+            [InlineKeyboardButton("Video 1080p (Full HD)", callback_data="dl_video_1080p")],
+            [InlineKeyboardButton("Video 720p (HD)", callback_data="dl_video_720p")],
+            [InlineKeyboardButton("Video 480p (SD)", callback_data="dl_video_480p")],
+            [InlineKeyboardButton("Video 360p (Niska jakość)", callback_data="dl_video_360p")],
+            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        ]
+    else:
+        keyboard = [
+            [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
+            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+        ]
+        if not hide_flac:
+            keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
+        keyboard.extend([
+            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        ])
+
+    if not hide_time_range:
+        keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
+    keyboard.append([
+        InlineKeyboardButton("Lista formatów", callback_data="formats"),
+        InlineKeyboardButton("Miniaturka", callback_data="thumbnail"),
+    ])
+
+    return keyboard
+
+
+def _build_instagram_photo_keyboard(photos: list, videos: list) -> list:
+    """Builds keyboard for Instagram photo/carousel posts.
+
+    Args:
+        photos: List of photo entries from yt-dlp.
+        videos: List of video entries from yt-dlp.
+
+    Returns:
+        List of InlineKeyboardButton rows.
+    """
+    keyboard = []
+
+    if photos:
+        label = f"Pobierz zdjęcia ({len(photos)})" if len(photos) > 1 else "Pobierz zdjęcie"
+        keyboard.append([InlineKeyboardButton(label, callback_data="dl_ig_photos")])
+
+    if videos:
+        label = f"Pobierz filmy ({len(videos)})" if len(videos) > 1 else "Pobierz film"
+        keyboard.append([InlineKeyboardButton(label, callback_data="dl_ig_videos")])
+
+    if photos and videos:
+        keyboard.append([InlineKeyboardButton("Pobierz wszystko", callback_data="dl_ig_all")])
+
+    return keyboard
+
+
 def _is_admin(user_id: int) -> bool:
     """Returns True if user_id matches ADMIN_CHAT_ID."""
-    if not ADMIN_CHAT_ID:
+    admin_chat_id = get_runtime_value("ADMIN_CHAT_ID", "")
+    if not admin_chat_id:
         return True  # No admin configured — all authorized users are admin
     try:
-        return user_id == int(ADMIN_CHAT_ID)
+        return user_id == int(admin_chat_id)
     except (ValueError, TypeError):
         return False
+
+
+def _get_authorized_user_ids(context: ContextTypes.DEFAULT_TYPE) -> set[int]:
+    """Return authorized users from runtime when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        return runtime.authorized_users_set
+    return get_runtime_authorized_users()
+
+
+def _is_authorized(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
+    """Check user authorization against runtime-aware state."""
+
+    return user_id in _get_authorized_user_ids(context)
+
+
+class _AuthSessionData(MutableMapping[str, object]):
+    """Runtime-aware auth state view with legacy `user_data` fallback semantics."""
+
+    _PENDING_KEYS = ("pending_url", "pending_audio", "pending_video")
+
+    def __init__(self, context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> None:
+        self._context = context
+        self._chat_id = chat_id
+
+    def _runtime(self):
+        return get_app_runtime(self._context)
+
+    def _legacy(self) -> dict:
+        return self._context.user_data
+
+    def _get_pending(self):
+        runtime = self._runtime()
+        if runtime is not None:
+            pending = runtime.session_store.get_field(self._chat_id, "pending_action")
+            if pending is not None:
+                return pending
+
+        legacy = self._legacy()
+        for kind in ("url", "audio", "video"):
+            key = f"pending_{kind}"
+            if key in legacy:
+                return {"kind": kind, "payload": legacy[key]}
+        return None
+
+    def _set_pending(self, kind: str, payload) -> None:
+        runtime = self._runtime()
+        if runtime is not None:
+            runtime.session_store.set_field(
+                self._chat_id,
+                "pending_action",
+                {"kind": kind, "payload": payload},
+            )
+            for key in self._PENDING_KEYS:
+                self._legacy().pop(key, None)
+            return
+
+        self._legacy()[f"pending_{kind}"] = payload
+
+    def _clear_pending(self) -> None:
+        runtime = self._runtime()
+        if runtime is not None:
+            runtime.session_store.pop_field(self._chat_id, "pending_action", None)
+        for key in self._PENDING_KEYS:
+            self._legacy().pop(key, None)
+
+    def __getitem__(self, key: str):
+        value = self.get(key, None)
+        if value is None:
+            raise KeyError(key)
+        return value
+
+    def __setitem__(self, key: str, value) -> None:
+        if key == "awaiting_pin":
+            runtime = self._runtime()
+            if runtime is not None:
+                runtime.session_store.set_field(self._chat_id, "awaiting_pin", bool(value))
+                self._legacy().pop(key, None)
+            else:
+                self._legacy()[key] = value
+            return
+
+        if key.startswith("pending_"):
+            self._set_pending(key.removeprefix("pending_"), value)
+            return
+
+        self._legacy()[key] = value
+
+    def __delitem__(self, key: str) -> None:
+        marker = object()
+        value = self.pop(key, marker)
+        if value is marker:
+            raise KeyError(key)
+
+    def __iter__(self):
+        keys = set(self._legacy().keys())
+        if self.get("awaiting_pin", None):
+            keys.add("awaiting_pin")
+        pending = self._get_pending()
+        if pending is not None:
+            keys.add(f"pending_{pending['kind']}")
+        return iter(keys)
+
+    def __len__(self) -> int:
+        return len(list(iter(self)))
+
+    def __contains__(self, key: object) -> bool:
+        if not isinstance(key, str):
+            return False
+        return self.get(key, None) is not None
+
+    def get(self, key: str, default=None):
+        if key == "awaiting_pin":
+            runtime = self._runtime()
+            if runtime is not None:
+                value = runtime.session_store.get_field(self._chat_id, "awaiting_pin")
+                if value is not None:
+                    return value
+            return self._legacy().get(key, default)
+
+        if key.startswith("pending_"):
+            pending = self._get_pending()
+            kind = key.removeprefix("pending_")
+            if pending is not None and pending.get("kind") == kind:
+                return pending.get("payload")
+            return self._legacy().get(key, default)
+
+        return self._legacy().get(key, default)
+
+    def pop(self, key: str, default=None):
+        if key == "awaiting_pin":
+            runtime = self._runtime()
+            if runtime is not None:
+                value = runtime.session_store.pop_field(self._chat_id, "awaiting_pin", None)
+                self._legacy().pop(key, None)
+                return default if value is None else value
+            return self._legacy().pop(key, default)
+
+        if key.startswith("pending_"):
+            kind = key.removeprefix("pending_")
+            pending = self._get_pending()
+            if pending is not None and pending.get("kind") == kind:
+                self._clear_pending()
+                return pending.get("payload")
+            return self._legacy().pop(key, default)
+
+        return self._legacy().pop(key, default)
+
+    def clear(self) -> None:
+        runtime = self._runtime()
+        if runtime is not None:
+            runtime.session_store.clear_fields(
+                self._chat_id,
+                "awaiting_pin",
+                "pending_action",
+            )
+        self._legacy().clear()
+
+
+def _get_auth_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> MutableMapping[str, object]:
+    """Return mutable auth flow state backed by runtime session when available."""
+
+    return _AuthSessionData(context, chat_id)
+
+
+def _get_session_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    legacy_map,
+):
+    """Read one chat-scoped value from runtime session store when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        return runtime.session_store.get_field(chat_id, field_name)
+    return legacy_map.get(chat_id)
+
+
+def _set_session_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    value,
+    legacy_map,
+) -> None:
+    """Write one chat-scoped value through runtime session store when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.set_field(chat_id, field_name, value)
+        return
+    legacy_map[chat_id] = value
+
+
+def _clear_session_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    legacy_map,
+) -> None:
+    """Clear one chat-scoped value through runtime session store when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.pop_field(chat_id, field_name, None)
+        return
+    legacy_map.pop(chat_id, None)
+
+
+def _get_session_context_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    *,
+    legacy_key: str,
+    default=None,
+):
+    """Read one session-scoped context value from runtime or legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        value = runtime.session_store.get_field(chat_id, field_name)
+        if value is not None:
+            return value
+    return context.user_data.get(legacy_key, default)
+
+
+def _set_session_context_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    value,
+    *,
+    legacy_key: str,
+) -> None:
+    """Write one session-scoped context value to runtime and legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.set_field(chat_id, field_name, value)
+        context.user_data.pop(legacy_key, None)
+        return
+    context.user_data[legacy_key] = value
+
+
+def _clear_session_context_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    *,
+    legacy_key: str,
+) -> None:
+    """Clear one session-scoped context value from runtime and legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.pop_field(chat_id, field_name, None)
+    context.user_data.pop(legacy_key, None)
+
+
+def _clear_transient_flow_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> None:
+    """Clear temporary Telegram flow state from runtime and legacy user_data."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.clear_fields(
+            chat_id,
+            "current_url",
+            "time_range",
+            "playlist_data",
+            "platform",
+            "spotify_resolved",
+            "instagram_carousel",
+            "audio_file_path",
+            "audio_file_title",
+            "subtitle_pending",
+        )
+
+    for legacy_key in (
+        "platform",
+        "spotify_resolved",
+        "ig_carousel",
+        "audio_file_path",
+        "audio_file_title",
+        "subtitle_pending",
+    ):
+        context.user_data.pop(legacy_key, None)
+
+    if runtime is None:
+        user_urls.pop(chat_id, None)
+        user_time_ranges.pop(chat_id, None)
+        user_playlist_data.pop(chat_id, None)
+
+
+def _get_history_stats(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict:
+    """Read history stats from runtime when present, otherwise use legacy facade."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        return runtime.download_history_repository.stats(user_id=user_id)
+    return get_download_stats(user_id)
 
 
 def parse_time_range(text: str) -> dict | None:
@@ -121,38 +542,16 @@ def parse_time_range(text: str) -> dict | None:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /start command."""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     user_name = update.effective_user.first_name
-
-    # Check if user is blocked
-    if is_user_blocked(user_id, block_map=block_until):
-        remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)
-        minutes = remaining_time // 60
-        seconds = remaining_time % 60
-
-        await update.message.reply_text(
-            f"Witaj, {user_name}!\n\n"
-            f"Dostęp zablokowany z powodu zbyt wielu nieudanych prób. "
-            f"Spróbuj ponownie za {minutes} min {seconds} s."
-        )
-        return
-
-    # Check if user is already authorized
-    if user_id in authorized_users:
-        await update.message.reply_text(
-            f"Witaj, {user_name}!\n\n"
-            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
-            "aby pobrać film lub audio."
-        )
-        return
-
-    # If user is not authorized, ask for PIN
-    await update.message.reply_text(
-        f"Witaj, {user_name}!\n\n"
-        "To jest bot chroniony PIN-em.\n"
-        "Aby korzystać z bota, podaj 8-cyfrowy kod PIN."
+    result = handle_start(
+        user_id=user_id,
+        user_name=user_name,
+        authorized_user_ids=_get_authorized_user_ids(context),
+        user_data=_get_auth_state(context, chat_id),
+        block_map=block_until,
     )
-
-    context.user_data["awaiting_pin"] = True
+    await update.message.reply_text(result.message)
 
 
 async def notify_admin_pin_failure(bot, user, attempt_count: int, blocked: bool):
@@ -161,13 +560,14 @@ async def notify_admin_pin_failure(bot, user, attempt_count: int, blocked: bool)
 
     Non-blocking: any error is silently logged so the auth flow is never interrupted.
     """
-    if not ADMIN_CHAT_ID:
+    admin_chat_id = get_runtime_value("ADMIN_CHAT_ID", "")
+    if not admin_chat_id:
         return
 
     try:
-        admin_id = int(ADMIN_CHAT_ID)
+        admin_id = int(admin_chat_id)
     except (ValueError, TypeError):
-        logging.warning("ADMIN_CHAT_ID is not a valid integer: %s", ADMIN_CHAT_ID)
+        logging.warning("ADMIN_CHAT_ID is not a valid integer: %s", admin_chat_id)
         return
 
     try:
@@ -194,102 +594,51 @@ async def notify_admin_pin_failure(bot, user, attempt_count: int, blocked: bool)
 async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles PIN input from user."""
     user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
     message_text = update.message.text
+    result = handle_pin_input(
+        user_id=user_id,
+        message_text=message_text,
+        user_data=_get_auth_state(context, chat_id),
+        pin_code=get_runtime_value("PIN_CODE", ""),
+        authorized_user_ids=_get_authorized_user_ids(context),
+        attempts=failed_attempts,
+        block_map=block_until,
+        authorize_user=lambda auth_user_id: manage_authorized_user(auth_user_id, 'add'),
+        max_attempts=MAX_ATTEMPTS,
+        block_time=BLOCK_TIME,
+    )
 
-    # Check if user is blocked
-    if is_user_blocked(user_id, block_map=block_until):
-        remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)
-        minutes = remaining_time // 60
-        seconds = remaining_time % 60
+    if not result.handled:
+        return False
 
-        await update.message.reply_text(
-            f"Dostęp zablokowany z powodu zbyt wielu nieudanych prób. "
-            f"Spróbuj ponownie za {minutes} min {seconds} s."
+    if result.notify_admin:
+        await notify_admin_pin_failure(
+            context.bot,
+            update.effective_user,
+            result.attempt_count,
+            result.blocked,
         )
 
+    if result.message:
+        await update.message.reply_text(result.message)
+
+    if result.delete_message:
         try:
             await update.message.delete()
         except Exception:
             pass
 
-        return True
+    pending_action = result.pending_action
+    if pending_action:
+        if pending_action.kind == "url":
+            await process_youtube_link(update, context, pending_action.payload)
+        elif pending_action.kind == "audio":
+            await process_audio_file(update, context, pending_action.payload)
+        elif pending_action.kind == "video":
+            await process_video_file(update, context, pending_action.payload)
 
-    # Check if waiting for PIN from this user
-    if context.user_data.get("awaiting_pin", False) or not (user_id in authorized_users):
-        # Check if message looks like a PIN attempt (digits only)
-        if message_text.isdigit():
-            if message_text == PIN_CODE:
-                # Reset failed attempts counter
-                clear_failed_attempts(user_id, attempts=failed_attempts)
-
-                # Add user to authorized list
-                manage_authorized_user(user_id, 'add')
-
-                # Remove awaiting PIN state
-                context.user_data.pop("awaiting_pin", None)
-
-                await update.message.reply_text(
-                    "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-                    "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
-                    "aby pobrać film lub audio."
-                )
-
-                # Check for pending URL
-                pending_url = context.user_data.get("pending_url")
-                if pending_url:
-                    context.user_data.pop("pending_url", None)
-                    await process_youtube_link(update, context, pending_url)
-
-                # Check for pending audio upload
-                pending_audio = context.user_data.get("pending_audio")
-                if pending_audio:
-                    context.user_data.pop("pending_audio", None)
-                    await process_audio_file(update, context, pending_audio)
-
-                # Check for pending video upload
-                pending_video = context.user_data.get("pending_video")
-                if pending_video:
-                    context.user_data.pop("pending_video", None)
-                    await process_video_file(update, context, pending_video)
-            else:
-                # Increment failed attempts counter
-                remaining_attempts, attempt_count = register_pin_failure(
-                    user_id,
-                    attempts=failed_attempts,
-                    block_map=block_until,
-                    max_attempts=MAX_ATTEMPTS,
-                    block_time=BLOCK_TIME,
-                )
-
-                blocked = remaining_attempts == 0
-
-                # Notify admin (non-blocking)
-                await notify_admin_pin_failure(
-                    context.bot, update.effective_user,
-                    attempt_count, blocked,
-                )
-
-                if blocked:
-                    await update.message.reply_text(
-                        "Niepoprawny PIN!\n\n"
-                        f"Przekroczono maksymalną liczbę prób ({MAX_ATTEMPTS}).\n"
-                        f"Dostęp zablokowany na {BLOCK_TIME // 60} minut."
-                    )
-                else:
-                    await update.message.reply_text(
-                        "Niepoprawny PIN!\n\n"
-                        f"Pozostało prób: {remaining_attempts}"
-                    )
-
-            # Delete message containing PIN for security
-            try:
-                await update.message.delete()
-            except Exception:
-                pass
-
-            return True
-
-    return False
+    return True
 
 
 async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -297,16 +646,20 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    if user_id not in authorized_users:
+    success = logout_user(
+        user_id=user_id,
+        chat_id=chat_id,
+        authorized_user_ids=_get_authorized_user_ids(context),
+        remove_authorized_user=lambda auth_user_id: manage_authorized_user(auth_user_id, 'remove'),
+        user_data=_get_auth_state(context, chat_id),
+        user_urls=user_urls,
+        user_time_ranges=user_time_ranges,
+    )
+    if not success:
         await update.message.reply_text("Nie jesteś zalogowany.")
         return
 
-    manage_authorized_user(user_id, 'remove')
-
-    # Clear session state
-    user_urls.pop(chat_id, None)
-    user_time_ranges.pop(chat_id, None)
-    context.user_data.clear()
+    _clear_transient_flow_state(context, chat_id)
 
     await update.message.reply_text(
         "Wylogowano pomyślnie.\n\n"
@@ -332,7 +685,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- Vimeo (vimeo.com)\n"
         "- TikTok (tiktok.com)\n"
         "- Instagram (instagram.com)\n"
-        "- LinkedIn (linkedin.com)\n\n"
+        "- LinkedIn (linkedin.com)\n"
+        "- Castbox (castbox.fm)\n"
+        "- Spotify podcasty (open.spotify.com/episode)\n\n"
+        "🔒 *Platformy wymagające logowania:*\n"
+        "TikTok, Instagram i LinkedIn mogą wymagać pliku cookies.txt\n"
+        "do pobierania treści z ograniczonym dostępem.\n\n"
         "Komendy administracyjne:\n"
         "- /status - sprawdź przestrzeń dyskową\n"
         "- /cleanup - usuń stare pliki (>24h)",
@@ -344,7 +702,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /status command - shows disk space status."""
     user_id = update.effective_user.id
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
         return
 
@@ -378,6 +736,14 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if free_gb < 5:
         status_msg += "**KRYTYCZNIE mało miejsca!**\n"
 
+    # Show cookies.txt status
+    from bot.downloader import COOKIES_FILE
+    if os.path.exists(COOKIES_FILE):
+        cookie_size = os.path.getsize(COOKIES_FILE)
+        status_msg += f"\n**cookies.txt:** ✅ ({cookie_size} B)\n"
+    else:
+        status_msg += "\n**cookies.txt:** ❌ brak (TikTok/Instagram/LinkedIn mogą wymagać)\n"
+
     await update.message.reply_text(status_msg, parse_mode='Markdown')
 
 
@@ -385,12 +751,12 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /history command - shows download history and statistics."""
     user_id = update.effective_user.id
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
         return
 
     # Get stats for this user
-    stats = get_download_stats(user_id)
+    stats = _get_history_stats(context, user_id)
 
     if stats['total_downloads'] == 0:
         await update.message.reply_text("Brak historii pobrań.")
@@ -433,7 +799,7 @@ async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /cleanup command - manually triggers file cleanup."""
     user_id = update.effective_user.id
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
         return
 
@@ -460,7 +826,7 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles /users command - user management (admin only)."""
     user_id = update.effective_user.id
 
-    if user_id not in authorized_users:
+    if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
         return
 
@@ -468,8 +834,9 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Ta komenda jest dostępna tylko dla administratora.")
         return
 
-    user_count = len(authorized_users)
-    user_list = ', '.join(str(uid) for uid in sorted(authorized_users))
+    authorized_user_ids = _get_authorized_user_ids(context)
+    user_count = len(authorized_user_ids)
+    user_list = ', '.join(str(uid) for uid in sorted(authorized_user_ids))
 
     await update.message.reply_text(
         f"Autoryzowani użytkownicy\n\n"
@@ -491,26 +858,24 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # Check if user is authorized
-    if user_id not in authorized_users:
-        context.user_data["pending_url"] = message_text
+    if not _is_authorized(context, user_id):
+        store_pending_action(_get_auth_state(context, chat_id), kind="url", payload=message_text)
 
         await update.message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
         )
-
-        context.user_data["awaiting_pin"] = True
         return
 
     # Check if user has an active URL session and message looks like a time range
-    current_url = user_urls.get(chat_id)
+    current_url = _get_session_value(context, chat_id, "current_url", user_urls)
     if current_url:
         time_range = parse_time_range(message_text)
         if time_range:
             # Get video info to validate time range against duration
             info = get_video_info(current_url)
             if info:
-                duration = info.get('duration', 0)
+                duration = int(info.get('duration') or 0)
                 title = info.get('title', 'Nieznany tytuł')
                 duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
                 
@@ -523,24 +888,17 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
                     return
                 
                 # Apply the custom time range
-                user_time_ranges[chat_id] = time_range
+                _set_session_value(context, chat_id, "time_range", time_range, user_time_ranges)
 
                 # Send confirmation and show main menu with updated time range
-                # Respect platform for conditional buttons
-                cur_platform = context.user_data.get('platform', 'youtube')
-                keyboard = [
-                    [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
-                    [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-                    [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-                ]
-                if cur_platform != 'tiktok':
-                    keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
-                keyboard.extend([
-                    [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-                    [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-                    [InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")],
-                    [InlineKeyboardButton("Lista formatów", callback_data="formats")]
-                ])
+                cur_platform = _get_session_context_value(
+                    context,
+                    chat_id,
+                    "platform",
+                    legacy_key="platform",
+                    default="youtube",
+                )
+                keyboard = _build_main_keyboard(cur_platform)
                 reply_markup = InlineKeyboardMarkup(keyboard)
                 
                 await update.message.reply_text(
@@ -575,6 +933,13 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
+    # Only Castbox links require redirect normalization that may hit the network.
+    if "castbox.fm" in message_text:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            message_text = await loop.run_in_executor(executor, normalize_url, message_text)
+
     # Validate URL
     if not validate_url(message_text):
         await update.message.reply_text(
@@ -584,78 +949,242 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             "- Vimeo (vimeo.com)\n"
             "- TikTok (tiktok.com)\n"
             "- Instagram (instagram.com)\n"
-            "- LinkedIn (linkedin.com)"
+            "- LinkedIn (linkedin.com)\n"
+            "- Castbox (castbox.fm)\n"
+            "- Spotify podcasty (open.spotify.com/episode)"
         )
         return
 
     await process_youtube_link(update, context, message_text)
 
 
+def _build_playlist_message(playlist_info: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Compatibility wrapper around the playlist service message builder."""
+
+    return build_playlist_message(playlist_info)
+
+
+async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    """Handles playlist URL — fetches info and shows playlist menu."""
+    chat_id = update.effective_chat.id
+
+    progress_message = await update.message.reply_text(
+        "Wykryto playlistę! Pobieranie informacji..."
+    )
+
+    playlist_info = load_playlist(url, max_items=MAX_PLAYLIST_ITEMS)
+
+    if not playlist_info:
+        await progress_message.edit_text(
+            "Nie udało się pobrać informacji o playliście."
+        )
+        return
+
+    if not playlist_info['entries']:
+        await progress_message.edit_text("Playlista jest pusta.")
+        return
+
+    # Store playlist data in session
+    _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
+    _set_session_value(context, chat_id, "current_url", url, user_urls)
+
+    msg, reply_markup = _build_playlist_message(playlist_info)
+    await progress_message.edit_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
+
+
+async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    """Resolves a Spotify episode URL and shows download options."""
+    chat_id = update.effective_chat.id
+    progress_message = await update.message.reply_text(
+        "Spotify: wyszukiwanie odcinka podcastu..."
+    )
+
+    resolved = await resolve_episode(url)
+    error_message = get_resolution_error_message(resolved)
+    if error_message:
+        await progress_message.edit_text(error_message)
+        return
+
+    # Store resolved info for callback handlers
+    _set_session_context_value(
+        context, chat_id, "spotify_resolved", resolved,
+        legacy_key="spotify_resolved",
+    )
+    _set_session_value(context, chat_id, "current_url", url, user_urls)
+
+    caption_data = build_episode_caption_data(resolved)
+    title = caption_data['title']
+    show_name = caption_data['show_name']
+    duration_str = caption_data['duration_str']
+    source_label = caption_data['source_label']
+
+    show_info = f"\nPodcast: {escape_md(show_name)}" if show_name else ""
+
+    keyboard = _build_main_keyboard('spotify')
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await progress_message.edit_text(
+        f"*{escape_md(title)}*{show_info}\n"
+        f"Czas trwania: {duration_str}\n"
+        f"Źródło audio: {source_label}\n\n"
+        f"Wybierz opcję:",
+        reply_markup=reply_markup,
+        parse_mode='Markdown'
+    )
+
+
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Processes a media link after PIN authorization."""
     chat_id = update.effective_chat.id
-    user_urls[chat_id] = url
+    # Only Castbox links require redirect normalization that may hit the network.
+    if "castbox.fm" in url:
+        import asyncio
+        with ThreadPoolExecutor(max_workers=1) as executor:
+            url = await asyncio.get_event_loop().run_in_executor(executor, normalize_url, url)
+    _set_session_value(context, chat_id, "current_url", url, user_urls)
     # Clear any previous time range
-    user_time_ranges.pop(chat_id, None)
+    _clear_session_value(context, chat_id, "time_range", user_time_ranges)
 
     # Detect and store platform for conditional UI
     platform = detect_platform(url) or 'youtube'
-    context.user_data['platform'] = platform
+    _set_session_context_value(
+        context, chat_id, "platform", platform,
+        legacy_key="platform",
+    )
+    _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+    _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
+    _clear_session_context_value(context, chat_id, "subtitle_pending", legacy_key="subtitle_pending")
 
-    progress_message = await update.message.reply_text("Pobieranie informacji o filmie...")
+    # Castbox: channel URLs are not supported, only episode URLs
+    if platform == 'castbox' and '/channel/' in url:
+        await update.message.reply_text(
+            "Castbox: link do kanału nie jest obsługiwany.\n\n"
+            "Wyślij link do konkretnego odcinka podcastu\n"
+            "(np. castbox.fm/episode/...)."
+        )
+        return
+
+    # Spotify: only episode URLs, not show/playlist/track
+    if platform == 'spotify':
+        if not parse_spotify_episode_url(url):
+            await update.message.reply_text(
+                "Spotify: obsługiwane są tylko linki do odcinków podcastów.\n\n"
+                "Wyślij link w formacie:\n"
+                "open.spotify.com/episode/..."
+            )
+            return
+        await _process_spotify_episode(update, context, url)
+        return
+
+    # Instagram: detect photo/carousel posts before standard video flow
+    if platform == 'instagram':
+        progress_message = await update.message.reply_text("Pobieranie informacji o poście...")
+        import asyncio
+        ig_info = await asyncio.get_event_loop().run_in_executor(
+            None, get_instagram_post_info, url
+        )
+        if ig_info:
+            # Carousel post — multiple entries (photos and/or videos)
+            if ig_info.get('_type') == 'playlist' and ig_info.get('entries'):
+                entries = [e for e in ig_info.get('entries', []) if e]
+                photos = [e for e in entries if is_photo_entry(e)]
+                videos = [e for e in entries if not is_photo_entry(e)]
+
+                if photos:
+                    carousel_state = {
+                        'photos': photos,
+                        'videos': videos,
+                        'title': ig_info.get('title', 'Instagram post'),
+                    }
+                    _set_session_context_value(
+                        context, chat_id, "instagram_carousel", carousel_state,
+                        legacy_key="ig_carousel",
+                    )
+                    keyboard = _build_instagram_photo_keyboard(photos, videos)
+                    reply_markup = InlineKeyboardMarkup(keyboard)
+                    title = escape_md(ig_info.get('title', 'Instagram post'))
+                    parts = []
+                    if photos:
+                        parts.append(f"{len(photos)} zdjęć" if len(photos) > 1 else "1 zdjęcie")
+                    if videos:
+                        parts.append(f"{len(videos)} filmów" if len(videos) > 1 else "1 film")
+                    await progress_message.edit_text(
+                        f"*{title}*\nKaruzela: {', '.join(parts)}\n\nWybierz co pobrać:",
+                        reply_markup=reply_markup,
+                        parse_mode='Markdown'
+                    )
+                    return
+                # Carousel with only videos — fall through to normal flow
+
+            # Single photo post
+            elif is_photo_entry(ig_info):
+                carousel_state = {
+                    'photos': [ig_info],
+                    'videos': [],
+                    'title': ig_info.get('title', 'Instagram photo'),
+                }
+                _set_session_context_value(
+                    context, chat_id, "instagram_carousel", carousel_state,
+                    legacy_key="ig_carousel",
+                )
+                keyboard = [[InlineKeyboardButton("Pobierz zdjęcie", callback_data="dl_ig_photos")]]
+                reply_markup = InlineKeyboardMarkup(keyboard)
+                title = escape_md(ig_info.get('title', 'Instagram photo'))
+                await progress_message.edit_text(
+                    f"*{title}*\nTyp: zdjęcie\n\nWybierz opcję:",
+                    reply_markup=reply_markup,
+                    parse_mode='Markdown'
+                )
+                return
+
+        # Video post or failed info — fall through to standard flow
+        # Delete progress message to avoid duplicate
+        await progress_message.delete()
+
+    # Playlist detection — offer choice or go straight to playlist view
+    if is_playlist_url(url):
+        if is_pure_playlist_url(url):
+            await process_playlist_link(update, context, url)
+            return
+        else:
+            # URL has both video and playlist — let user choose
+            keyboard = [
+                [InlineKeyboardButton("Pojedynczy film", callback_data="pl_single")],
+                [InlineKeyboardButton("Cała playlista", callback_data="pl_full")],
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            await update.message.reply_text(
+                "Ten link zawiera zarówno film jak i playlistę.\n\n"
+                "Co chcesz pobrać?",
+                reply_markup=reply_markup
+            )
+            return
+
+    media_name = get_media_label(platform)
+    progress_message = await update.message.reply_text(f"Pobieranie informacji o {media_name}...")
 
     info = get_video_info(url)
     if not info:
-        await progress_message.edit_text("Wystąpił błąd podczas pobierania informacji o filmie.")
+        await progress_message.edit_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
     title = info.get('title', 'Nieznany tytuł')
-    duration = info.get('duration', 0)
+    duration = int(info.get('duration') or 0)
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
     estimated_size = estimate_file_size(info)
     size_warning = ""
 
-    # TikTok: short videos, no time range or FLAC needed
-    hide_time_range = platform == 'tiktok'
-    hide_flac = platform == 'tiktok'
-
     if estimated_size and estimated_size > MAX_FILE_SIZE_MB:
         size_warning = f"\n*Uwaga:* Szacowany rozmiar najlepszej jakości: {estimated_size:.1f} MB (limit: {MAX_FILE_SIZE_MB} MB)\n"
-
-        keyboard = [
-            [InlineKeyboardButton("Video 1080p (Full HD)", callback_data="dl_video_1080p")],
-            [InlineKeyboardButton("Video 720p (HD)", callback_data="dl_video_720p")],
-            [InlineKeyboardButton("Video 480p (SD)", callback_data="dl_video_480p")],
-            [InlineKeyboardButton("Video 360p (Niska jakość)", callback_data="dl_video_360p")],
-            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-        ]
-        if not hide_time_range:
-            keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
-        keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
+        keyboard = _build_main_keyboard(platform, large_file=True)
     else:
-        keyboard = [
-            [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
-            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-        ]
-        if not hide_flac:
-            keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
-        keyboard.extend([
-            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-        ])
-        if not hide_time_range:
-            keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
-        keyboard.append([InlineKeyboardButton("Lista formatów", callback_data="formats")])
+        keyboard = _build_main_keyboard(platform)
 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     # Show time range info if set
-    time_range = user_time_ranges.get(chat_id)
+    time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
     time_range_info = ""
     if time_range:
         time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
@@ -667,8 +1196,11 @@ async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYP
     )
 
 
-# Telegram Bot API download limit (bots can download files up to 20MB)
+# Telegram Bot API download limit (bots can download files up to 20MB via getFile)
 TELEGRAM_DOWNLOAD_LIMIT_MB = 20
+
+# Maximum file size for MTProto downloads (reasonable limit for transcription)
+MTPROTO_MAX_FILE_SIZE_MB = 200
 
 
 def _extract_audio_info(message) -> dict | None:
@@ -727,13 +1259,16 @@ async def handle_audio_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     if pin_handled:
         return
 
-    if user_id not in authorized_users:
-        context.user_data["pending_audio"] = audio_info
+    if not _is_authorized(context, user_id):
+        store_pending_action(
+            _get_auth_state(context, update.effective_chat.id),
+            kind="audio",
+            payload=audio_info,
+        )
         await message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
         )
-        context.user_data["awaiting_pin"] = True
         return
 
     # Rate limiting
@@ -765,23 +1300,36 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     file_size = audio_info.get('file_size') or 0
     file_size_mb = file_size / (1024 * 1024) if file_size else 0
+    use_mtproto = file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB
 
-    if file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB:
-        await message.reply_text(
-            f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
-            f"Rozmiar: {file_size_mb:.1f} MB\n"
-            f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB"
-        )
-        return
+    if use_mtproto:
+        from bot.mtproto import is_mtproto_available
+        if not is_mtproto_available():
+            await message.reply_text(
+                f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
+                f"Rozmiar: {file_size_mb:.1f} MB\n"
+                f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB\n\n"
+                f"Aby pobierać większe pliki, skonfiguruj TELEGRAM_API_ID "
+                f"i TELEGRAM_API_HASH (z my.telegram.org) oraz zainstaluj pyrogram."
+            )
+            return
+        if file_size_mb > MTPROTO_MAX_FILE_SIZE_MB:
+            await message.reply_text(
+                f"Plik jest zbyt duży.\n\n"
+                f"Rozmiar: {file_size_mb:.1f} MB\n"
+                f"Limit: {MTPROTO_MAX_FILE_SIZE_MB} MB"
+            )
+            return
 
-    progress_msg = await message.reply_text("Pobieranie pliku audio...")
+    progress_msg = await message.reply_text(
+        f"Pobieranie pliku audio ({file_size_mb:.1f} MB)..."
+        + (" (MTProto)" if use_mtproto else "")
+    )
 
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
     try:
-        tg_file = await context.bot.get_file(audio_info['file_id'])
-
         # Determine extension from MIME type
         mime_to_ext = {
             'audio/ogg': '.ogg',
@@ -806,7 +1354,20 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         raw_path = os.path.join(chat_download_path, f"{timestamp}_{safe_title}{ext}")
 
-        await tg_file.download_to_drive(raw_path)
+        if use_mtproto:
+            from bot.mtproto import download_file_mtproto
+            success = await download_file_mtproto(
+                bot_token=get_runtime_value("TELEGRAM_BOT_TOKEN", ""),
+                chat_id=chat_id,
+                message_id=message.message_id,
+                dest_path=raw_path,
+            )
+            if not success:
+                await progress_msg.edit_text("Błąd pobierania pliku przez MTProto.")
+                return
+        else:
+            tg_file = await context.bot.get_file(audio_info['file_id'])
+            await tg_file.download_to_drive(raw_path)
 
         # Convert to MP3 if not already
         if ext == '.mp3':
@@ -816,7 +1377,7 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
             await progress_msg.edit_text("Konwersja do MP3...")
             result = subprocess.run(
                 ['ffmpeg', '-i', raw_path, '-vn', '-acodec', 'libmp3lame', '-q:a', '2', mp3_path],
-                capture_output=True, timeout=120
+                capture_output=True, timeout=FFMPEG_TIMEOUT
             )
             if result.returncode != 0:
                 logging.error(f"ffmpeg conversion failed: {result.stderr.decode()}")
@@ -828,8 +1389,14 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         mp3_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
 
         # Store info for callback handlers
-        context.user_data['audio_file_path'] = mp3_path
-        context.user_data['audio_file_title'] = title
+        _set_session_context_value(
+            context, chat_id, "audio_file_path", mp3_path,
+            legacy_key="audio_file_path",
+        )
+        _set_session_context_value(
+            context, chat_id, "audio_file_title", title,
+            legacy_key="audio_file_title",
+        )
 
         duration_info = ""
         if audio_info.get('duration'):
@@ -912,13 +1479,16 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
     if pin_handled:
         return
 
-    if user_id not in authorized_users:
-        context.user_data["pending_video"] = video_info
+    if not _is_authorized(context, user_id):
+        store_pending_action(
+            _get_auth_state(context, update.effective_chat.id),
+            kind="video",
+            payload=video_info,
+        )
         await message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
         )
-        context.user_data["awaiting_pin"] = True
         return
 
     # Rate limiting
@@ -950,23 +1520,36 @@ async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
 
     file_size = video_info.get('file_size') or 0
     file_size_mb = file_size / (1024 * 1024) if file_size else 0
+    use_mtproto = file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB
 
-    if file_size_mb > TELEGRAM_DOWNLOAD_LIMIT_MB:
-        await message.reply_text(
-            f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
-            f"Rozmiar: {file_size_mb:.1f} MB\n"
-            f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB"
-        )
-        return
+    if use_mtproto:
+        from bot.mtproto import is_mtproto_available
+        if not is_mtproto_available():
+            await message.reply_text(
+                f"Plik jest za duży do pobrania przez Telegram Bot API.\n\n"
+                f"Rozmiar: {file_size_mb:.1f} MB\n"
+                f"Limit: {TELEGRAM_DOWNLOAD_LIMIT_MB} MB\n\n"
+                f"Aby pobierać większe pliki, skonfiguruj TELEGRAM_API_ID "
+                f"i TELEGRAM_API_HASH (z my.telegram.org) oraz zainstaluj pyrogram."
+            )
+            return
+        if file_size_mb > MTPROTO_MAX_FILE_SIZE_MB:
+            await message.reply_text(
+                f"Plik jest zbyt duży.\n\n"
+                f"Rozmiar: {file_size_mb:.1f} MB\n"
+                f"Limit: {MTPROTO_MAX_FILE_SIZE_MB} MB"
+            )
+            return
 
-    progress_msg = await message.reply_text("Pobieranie pliku video...")
+    progress_msg = await message.reply_text(
+        f"Pobieranie pliku video ({file_size_mb:.1f} MB)..."
+        + (" (MTProto)" if use_mtproto else "")
+    )
 
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
     try:
-        tg_file = await context.bot.get_file(video_info['file_id'])
-
         title = video_info['title']
         ext = video_info['ext']
 
@@ -975,14 +1558,27 @@ async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         video_path = os.path.join(chat_download_path, f"{timestamp}_{safe_title}{ext}")
 
-        await tg_file.download_to_drive(video_path)
+        if use_mtproto:
+            from bot.mtproto import download_file_mtproto
+            success = await download_file_mtproto(
+                bot_token=get_runtime_value("TELEGRAM_BOT_TOKEN", ""),
+                chat_id=chat_id,
+                message_id=message.message_id,
+                dest_path=video_path,
+            )
+            if not success:
+                await progress_msg.edit_text("Błąd pobierania pliku przez MTProto.")
+                return
+        else:
+            tg_file = await context.bot.get_file(video_info['file_id'])
+            await tg_file.download_to_drive(video_path)
 
         # Extract audio from video
         await progress_msg.edit_text("Ekstrakcja audio z video...")
         mp3_path = os.path.splitext(video_path)[0] + '.mp3'
         result = subprocess.run(
             ['ffmpeg', '-i', video_path, '-vn', '-acodec', 'libmp3lame', '-q:a', '2', mp3_path],
-            capture_output=True, timeout=180
+            capture_output=True, timeout=FFMPEG_TIMEOUT
         )
         if result.returncode != 0:
             logging.error(f"ffmpeg video audio extraction failed: {result.stderr.decode()}")
@@ -995,8 +1591,14 @@ async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
         mp3_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
 
         # Store info for callback handlers
-        context.user_data['audio_file_path'] = mp3_path
-        context.user_data['audio_file_title'] = title
+        _set_session_context_value(
+            context, chat_id, "audio_file_path", mp3_path,
+            legacy_key="audio_file_path",
+        )
+        _set_session_context_value(
+            context, chat_id, "audio_file_title", title,
+            legacy_key="audio_file_title",
+        )
 
         duration_info = ""
         if video_info.get('duration'):

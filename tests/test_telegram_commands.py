@@ -4,6 +4,7 @@ Unit tests for Telegram command handlers.
 
 import asyncio
 import os
+import subprocess
 from pathlib import Path
 from collections import defaultdict
 from datetime import datetime, timedelta
@@ -12,6 +13,13 @@ from unittest.mock import Mock, AsyncMock
 
 from bot import telegram_commands as tc
 
+
+def _set_runtime_values(monkeypatch, **values):
+    monkeypatch.setattr(tc, "get_runtime_value", lambda key, default=None: values.get(key, default))
+
+
+def _set_authorized_users(monkeypatch, users):
+    monkeypatch.setattr(tc, "get_runtime_authorized_users", lambda: users)
 
 
 def _async(coro):
@@ -44,7 +52,7 @@ class TestStart:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         tc.block_until[111] = 0
 
         _async(tc.start(update, context))
@@ -56,7 +64,7 @@ class TestStart:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         tc.block_until[111] = 0
 
         _async(tc.start(update, context))
@@ -64,7 +72,7 @@ class TestStart:
         assert "awaiting_pin" not in context.user_data
         update.message.reply_text.assert_awaited_once_with(
             "Witaj, User!\n\n"
-            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
             "aby pobrać film lub audio."
         )
 
@@ -72,7 +80,7 @@ class TestStart:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         tc.block_until[111] = datetime.now().timestamp() + 30
 
         _async(tc.start(update, context))
@@ -87,8 +95,8 @@ class TestHandlePin:
         context = _make_context()
         context.user_data.update({"awaiting_pin": True, "pending_url": "https://youtube.com/watch?v=abc"})
 
-        monkeypatch.setattr(tc, "PIN_CODE", "12345678")
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_runtime_values(monkeypatch, PIN_CODE="12345678")
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "failed_attempts", defaultdict(int))
         monkeypatch.setattr(tc, "manage_authorized_user", lambda *args, **kwargs: True)
 
@@ -107,7 +115,7 @@ class TestHandlePin:
         assert called["url"] == "https://youtube.com/watch?v=abc"
         update.message.reply_text.assert_awaited_once_with(
             "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-            "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn) "
+            "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
             "aby pobrać film lub audio."
         )
 
@@ -116,8 +124,8 @@ class TestHandlePin:
         context = _make_context()
         context.user_data.update({"awaiting_pin": True})
 
-        monkeypatch.setattr(tc, "PIN_CODE", "12345678")
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_runtime_values(monkeypatch, PIN_CODE="12345678")
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "failed_attempts", defaultdict(int))
 
         handled = _async(tc.handle_pin(update, context))
@@ -132,9 +140,9 @@ class TestHandlePin:
         context = _make_context()
         context.user_data.update({"awaiting_pin": True})
 
-        monkeypatch.setattr(tc, "PIN_CODE", "12345678")
+        _set_runtime_values(monkeypatch, PIN_CODE="12345678")
         monkeypatch.setattr(tc, "MAX_ATTEMPTS", 1)
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         attempts = defaultdict(int)
         monkeypatch.setattr(tc, "failed_attempts", attempts)
 
@@ -152,7 +160,7 @@ class TestHandleYoutubeLink:
         update = _make_update(text="https://youtube.com/watch?v=abc", user_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
 
         _async(tc.handle_youtube_link(update, context))
@@ -165,7 +173,7 @@ class TestHandleYoutubeLink:
         update = _make_update(text="0:10-0:20", user_id=333, chat_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {333})
+        _set_authorized_users(monkeypatch, {333})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
         monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: True)
@@ -192,7 +200,7 @@ class TestHandleYoutubeLink:
         update = _make_update(text="https://example.com/not-valid", user_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {333})
+        _set_authorized_users(monkeypatch, {333})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
         monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: False)
@@ -206,7 +214,7 @@ class TestHandleYoutubeLink:
         update = _make_update(text="https://youtube.com/watch?v=ok", user_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {333})
+        _set_authorized_users(monkeypatch, {333})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
         monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: True)
@@ -275,7 +283,7 @@ class TestAudioUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
 
         _async(tc.handle_audio_upload(update, context))
@@ -299,7 +307,7 @@ class TestAudioUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {555})
+        _set_authorized_users(monkeypatch, {555})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: False)
 
@@ -321,7 +329,7 @@ class TestAudioUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {555})
+        _set_authorized_users(monkeypatch, {555})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
 
@@ -339,9 +347,10 @@ class TestAudioUpload:
 
 
 class TestAudioFileProcessing:
-    def test_process_audio_file_rejects_large_files(self):
+    def test_process_audio_file_rejects_large_files(self, monkeypatch):
         update = _make_update(user_id=777, chat_id=777)
         context = _make_context()
+        monkeypatch.setattr("bot.mtproto.is_mtproto_available", lambda: False)
 
         result = _async(tc.process_audio_file(update, context, {
             "file_id": "big1",
@@ -395,7 +404,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
 
         _async(tc.status_command(update, context))
 
@@ -408,7 +417,7 @@ class TestStatusAndStatsCommands:
         (tmp_path / "a.mp4").write_bytes(b"a" * 2048)
         (tmp_path / "b.mp4").write_bytes(b"b" * 2048)
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(tc, "DOWNLOAD_PATH", str(tmp_path))
         monkeypatch.setattr(tc, "get_disk_usage", lambda: (80.0, 20.0, 100.0, 80.0))
 
@@ -423,7 +432,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
 
         _async(tc.history_command(update, context))
 
@@ -433,7 +442,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(
             tc,
             "get_download_stats",
@@ -454,7 +463,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(
             tc,
             "get_download_stats",
@@ -487,7 +496,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
 
         _async(tc.cleanup_command(update, context))
 
@@ -497,7 +506,7 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(tc, "cleanup_old_files", lambda *_args, **_kwargs: 0)
         monkeypatch.setattr(tc, "get_disk_usage", lambda: (80.0, 20.0, 100.0, 80.0))
 
@@ -509,8 +518,8 @@ class TestStatusAndStatsCommands:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {1, 2, 111})
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "111")
+        _set_authorized_users(monkeypatch, {1, 2, 111})
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
 
         _async(tc.users_command(update, context))
 
@@ -524,7 +533,7 @@ class TestHandleYoutubeLinkTimeRange:
         update = _make_update(text="1:00-10:00", user_id=333, chat_id=333)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {333})
+        _set_authorized_users(monkeypatch, {333})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
         monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: True)
@@ -675,8 +684,8 @@ class TestUsersCommand:
         update = _make_update(user_id=user_id)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {user_id, *range(1, 11)})
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "111")
+        _set_authorized_users(monkeypatch, {user_id, *range(1, 11)})
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
 
         _async(tc.users_command(update, context))
 
@@ -696,7 +705,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Test"
         user.language_code = "pl"
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "12345")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="12345")
 
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=2, blocked=False))
 
@@ -716,7 +725,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Test"
         user.language_code = "pl"
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="")
 
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=1, blocked=False))
 
@@ -732,7 +741,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Test"
         user.language_code = "pl"
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "12345")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="12345")
 
         # Should not raise
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=1, blocked=False))
@@ -747,7 +756,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Test"
         user.language_code = "pl"
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "not_a_number")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="not_a_number")
 
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=1, blocked=False))
 
@@ -763,7 +772,7 @@ class TestNotifyAdminPinFailure:
         user.first_name = "Blocked"
         user.language_code = None
 
-        monkeypatch.setattr(tc, "ADMIN_CHAT_ID", "12345")
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="12345")
 
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=3, blocked=True))
 
@@ -777,7 +786,7 @@ class TestHistoryWithNewFields:
         update = _make_update(user_id=111)
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {111})
+        _set_authorized_users(monkeypatch, {111})
         monkeypatch.setattr(
             tc,
             "get_download_stats",
@@ -831,7 +840,7 @@ class TestVideoUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", set())
+        _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
 
         _async(tc.handle_video_upload(update, context))
@@ -852,7 +861,7 @@ class TestVideoUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {888})
+        _set_authorized_users(monkeypatch, {888})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: False)
 
@@ -873,7 +882,7 @@ class TestVideoUpload:
         message.document = None
         context = _make_context()
 
-        monkeypatch.setattr(tc, "authorized_users", {888})
+        _set_authorized_users(monkeypatch, {888})
         monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
         monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
 
@@ -888,9 +897,10 @@ class TestVideoUpload:
 
         assert called["called"] is True
 
-    def test_process_video_file_rejects_large_files(self):
+    def test_process_video_file_rejects_large_files(self, monkeypatch):
         update = _make_update(user_id=888, chat_id=888)
         context = _make_context()
+        monkeypatch.setattr("bot.mtproto.is_mtproto_available", lambda: False)
 
         _async(tc.process_video_file(update, context, {
             "file_id": "big_vid",
@@ -958,6 +968,58 @@ class TestVideoUpload:
 
         assert tc._extract_video_info(message) is None
 
+    def test_process_video_file_downloads_extracts_and_sets_context(self, tmp_path, monkeypatch):
+        update = _make_update(user_id=888, chat_id=888)
+        context = _make_context()
+        progress_message = Mock()
+        progress_message.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=progress_message)
+
+        monkeypatch.setattr(tc, "DOWNLOAD_PATH", str(tmp_path / "downloads"))
+        os.makedirs(tc.DOWNLOAD_PATH, exist_ok=True)
+
+        tg_file = AsyncMock()
+
+        async def download_to_drive(path):
+            Path(path).write_bytes(b"fake-video-data")
+
+        tg_file.download_to_drive = download_to_drive
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+
+        # Mock subprocess.run (ffmpeg) to create the output mp3 file
+        original_run = subprocess.run
+
+        def fake_subprocess_run(cmd, **kwargs):
+            if cmd[0] == 'ffmpeg':
+                # Find output path (last argument)
+                mp3_path = cmd[-1]
+                Path(mp3_path).write_bytes(b"fake-mp3-data")
+                result = Mock()
+                result.returncode = 0
+                result.stderr = b""
+                return result
+            return original_run(cmd, **kwargs)
+
+        monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+
+        _async(tc.process_video_file(
+            update,
+            context,
+            {
+                "file_id": "vid1",
+                "file_size": 5000,
+                "duration": 30,
+                "mime_type": "video/mp4",
+                "title": "test_video",
+                "ext": ".mp4",
+            },
+        ))
+
+        assert "audio_file_path" in context.user_data
+        assert context.user_data["audio_file_title"] == "test_video"
+        assert context.user_data["audio_file_path"].endswith(".mp3")
+        assert progress_message.edit_text.await_count >= 1
+
 
 class TestMultiPlatformUI:
     def test_process_youtube_link_hides_flac_and_time_range_for_tiktok(self, monkeypatch):
@@ -1009,3 +1071,45 @@ class TestMultiPlatformUI:
         ]
         assert "Audio (FLAC)" in buttons
         assert "✂️ Zakres czasowy" in buttons
+
+    def test_process_youtube_link_shows_audio_only_for_castbox(self, monkeypatch):
+        update = _make_update(user_id=444, chat_id=444)
+        context = _make_context()
+        progress_message = Mock()
+        progress_message.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=progress_message)
+
+        monkeypatch.setattr(tc, "get_video_info", lambda *_: {
+            "title": "Podcast Episode",
+            "duration": 0,
+        })
+        monkeypatch.setattr(tc, "estimate_file_size", lambda *_: 10)
+        monkeypatch.setattr(tc, "detect_platform", lambda *_: "castbox")
+        monkeypatch.setattr(tc, "normalize_url", lambda url: url)
+
+        _async(tc.process_youtube_link(update, context, "https://castbox.fm/episode/Test-id123"))
+
+        buttons = [
+            button.text
+            for row in progress_message.edit_text.await_args.kwargs["reply_markup"].inline_keyboard
+            for button in row
+        ]
+        assert "Audio (MP3)" in buttons
+        assert "Transkrypcja audio" in buttons
+        # Podcast: no video, no FLAC, no time range, no formats list
+        assert "Najlepsza jakość video" not in buttons
+        assert "Audio (FLAC)" not in buttons
+        assert "✂️ Zakres czasowy" not in buttons
+        assert "Lista formatów" not in buttons
+
+    def test_castbox_channel_url_rejected(self, monkeypatch):
+        update = _make_update(user_id=444, chat_id=444)
+        context = _make_context()
+
+        monkeypatch.setattr(tc, "detect_platform", lambda *_: "castbox")
+        monkeypatch.setattr(tc, "normalize_url", lambda url: url)
+
+        _async(tc.process_youtube_link(update, context, "https://castbox.fm/channel/Podcast-id123"))
+
+        call_text = update.message.reply_text.await_args.args[0]
+        assert "kanału nie jest obsługiwany" in call_text

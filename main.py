@@ -20,9 +20,10 @@ from telegram.ext import (
     filters,
 )
 
-from bot.config import BOT_TOKEN
+from bot.config import get_runtime_value, initialize_runtime
 from bot.cleanup import monitor_disk_space, periodic_cleanup
 from bot.cli import parse_arguments, cli_mode, curses_main
+from bot.runtime import attach_runtime, build_app_runtime
 from bot.telegram_commands import (
     start,
     help_command,
@@ -60,44 +61,38 @@ async def set_bot_commands(application):
     logging.info("Set Telegram bot menu commands")
 
 
-def main():
-    """Main function - entry point for the bot."""
-    # Parse command line arguments
-    args = parse_arguments()
+def start_background_services() -> None:
+    """Start background maintenance services used by the Telegram bot."""
 
-    # Check for CLI mode
-    if args.cli:
-        cli_mode(args)
-        return
-
-    # Check for interactive mode (no arguments)
-    if len(sys.argv) == 1 and sys.stdin.isatty():
-        # If running interactively without arguments, could start curses menu
-        # But default is to start Telegram bot
-        pass
-
-    # Start cleanup thread
     cleanup_thread = threading.Thread(target=periodic_cleanup, daemon=True)
     cleanup_thread.start()
     logging.info("Started automatic file cleanup thread")
 
-    # Initial disk space check
     monitor_disk_space()
 
-    # Create bot application
+
+def build_application(runtime=None):
+    """Create and configure the Telegram application object."""
+
     application = (
         ApplicationBuilder()
-        .token(BOT_TOKEN)
+        .token(get_runtime_value("TELEGRAM_BOT_TOKEN", ""))
         .connect_timeout(30)
         .read_timeout(60)
         .write_timeout(60)
         .build()
     )
 
-    # Set bot commands menu
-    application.job_queue.run_once(lambda context: set_bot_commands(application), when=1)
+    if runtime is not None:
+        attach_runtime(application, runtime)
 
-    # Register handlers
+    application.job_queue.run_once(lambda context: set_bot_commands(application), when=1)
+    return application
+
+
+def register_handlers(application) -> None:
+    """Register all Telegram command, message, and callback handlers."""
+
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("status", status_command))
@@ -140,7 +135,24 @@ def main():
 
     application.add_handler(CallbackQueryHandler(handle_callback))
 
-    # Start the bot
+
+def main():
+    """Main function - entry point for the bot."""
+    args = parse_arguments()
+
+    if args.cli:
+        initialize_runtime()
+        cli_mode(args)
+        return
+
+    if len(sys.argv) == 1 and sys.stdin.isatty():
+        pass
+
+    initialize_runtime()
+    start_background_services()
+    application = build_application(runtime=build_app_runtime())
+    register_handlers(application)
+
     logging.info("Starting Telegram bot...")
     application.run_polling()
 

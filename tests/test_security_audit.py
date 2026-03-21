@@ -87,22 +87,22 @@ class TestIsAdmin:
 
     def test_admin_matches(self):
         from bot.telegram_commands import _is_admin
-        with patch('bot.telegram_commands.ADMIN_CHAT_ID', '12345'):
+        with patch('bot.telegram_commands.get_runtime_value', lambda key, default=None: '12345' if key == 'ADMIN_CHAT_ID' else default):
             assert _is_admin(12345) is True
 
     def test_admin_does_not_match(self):
         from bot.telegram_commands import _is_admin
-        with patch('bot.telegram_commands.ADMIN_CHAT_ID', '12345'):
+        with patch('bot.telegram_commands.get_runtime_value', lambda key, default=None: '12345' if key == 'ADMIN_CHAT_ID' else default):
             assert _is_admin(99999) is False
 
     def test_no_admin_configured_all_are_admin(self):
         from bot.telegram_commands import _is_admin
-        with patch('bot.telegram_commands.ADMIN_CHAT_ID', ''):
+        with patch('bot.telegram_commands.get_runtime_value', lambda key, default=None: '' if key == 'ADMIN_CHAT_ID' else default):
             assert _is_admin(99999) is True
 
     def test_invalid_admin_chat_id(self):
         from bot.telegram_commands import _is_admin
-        with patch('bot.telegram_commands.ADMIN_CHAT_ID', 'not_a_number'):
+        with patch('bot.telegram_commands.get_runtime_value', lambda key, default=None: 'not_a_number' if key == 'ADMIN_CHAT_ID' else default):
             assert _is_admin(12345) is False
 
 
@@ -205,17 +205,15 @@ class TestPinValidation:
                 log_msg = str(call)
                 assert 'abc123' not in log_msg, "PIN value should not appear in logs"
 
-    def test_pin_validation_accepts_any_length_digits(self):
-        """Verify PIN validation accepts any length numeric PIN."""
+    def test_pin_validation_rejects_non_8_digit_numeric_pin(self):
+        """Verify PIN validation requires exactly 8 numeric digits."""
         import logging
         from bot.config import validate_config
 
         with patch.object(logging, 'error') as mock_log:
             validate_config({'PIN_CODE': '1234', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''})
-            # Should NOT log an error about format (4-digit PIN is valid)
-            for call in mock_log.call_args_list:
-                log_msg = str(call)
-                assert 'format invalid' not in log_msg
+            error_msgs = [str(call) for call in mock_log.call_args_list]
+            assert any('format invalid' in msg for msg in error_msgs)
 
     def test_default_pin_raises_error_level(self):
         """Verify default PIN triggers error-level log, not just warning."""
@@ -246,6 +244,24 @@ class TestConfigFilePermissions:
             validate_config({'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''})
             mock_chmod.assert_called_once()
 
+    def test_validate_config_uses_provided_config_path(self):
+        """Verify config permission checks use the explicit config path."""
+        from bot.config import validate_config
+
+        with patch('bot.config.os.path.exists', return_value=True), \
+             patch('bot.config.os.stat') as mock_stat, \
+             patch('bot.config.os.chmod') as mock_chmod:
+            mock_stat.return_value = Mock()
+            mock_stat.return_value.st_mode = 0o100644
+
+            validate_config(
+                {'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''},
+                config_file_path='/tmp/custom_api_key.md',
+            )
+
+            mock_stat.assert_called_once_with('/tmp/custom_api_key.md')
+            mock_chmod.assert_called_once_with('/tmp/custom_api_key.md', 0o600)
+
 
 # --- Fix 7: authorized users lock ---
 
@@ -255,7 +271,8 @@ class TestAuthorizedUsersLock:
     def test_auth_lock_exists(self):
         """Verify _auth_lock is defined in config module."""
         from bot.config import _auth_lock
-        assert isinstance(_auth_lock, type(threading.Lock()))
+        assert hasattr(_auth_lock, "acquire")
+        assert hasattr(_auth_lock, "release")
 
     def test_manage_authorized_user_uses_lock(self):
         """Verify manage_authorized_user source code uses _auth_lock."""
@@ -287,6 +304,14 @@ class TestInitExports:
     def test_bot_token_not_in_all(self):
         import bot
         assert 'BOT_TOKEN' not in bot.__all__
+
+    def test_init_does_not_mask_import_errors(self):
+        import inspect
+        import bot
+
+        source = inspect.getsource(bot)
+        assert "except ImportError" not in source
+        assert "= None" not in source
 
 
 # --- Fix 2: exception message hiding ---

@@ -13,6 +13,7 @@ mutagen = "^1.47.0"
 python-telegram-bot = "^21.0"
 requests = "^2.31.0"
 python-dotenv = "^1.0.0"
+Pillow = "^10.0.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0.0"
@@ -82,12 +83,6 @@ exclude = [
     "tests/",
     "downloads/",
 ]
-
-[tool.pytest.ini_options]
-testpaths = ["tests"]
-python_files = ["test_*.py", "*_test.py"]
-addopts = "-ra -q --strict-markers"
-asyncio_mode = "auto"
 
 [tool.coverage.run]
 source = ["bot"]

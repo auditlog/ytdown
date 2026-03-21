@@ -33,6 +33,7 @@ class DummyFilter:
 def test_main_cli_mode_calls_cli(monkeypatch):
     args = Namespace(cli=True, url=None, list_formats=False, format=None, audio_only=False, audio_quality="192")
     monkeypatch.setattr(app_main, "parse_arguments", lambda: args)
+    monkeypatch.setattr(app_main, "initialize_runtime", Mock())
 
     cli_called = Mock()
     monkeypatch.setattr(app_main, "cli_mode", cli_called)
@@ -46,6 +47,7 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
     args = Namespace(cli=False, url=None, list_formats=False, format=None, audio_only=False, audio_quality="192")
     app = Mock()
     app.add_handler = Mock()
+    app.bot_data = {}
     app.job_queue = Mock()
     app.job_queue.run_once = Mock()
     app.run_polling = Mock()
@@ -58,6 +60,8 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
     builder.build.return_value = app
 
     monkeypatch.setattr(app_main, "parse_arguments", lambda: args)
+    monkeypatch.setattr(app_main, "initialize_runtime", Mock())
+    monkeypatch.setattr(app_main, "get_runtime_value", lambda key, default=None: "test-token" if key == "TELEGRAM_BOT_TOKEN" else default)
     monkeypatch.setattr(app_main, "ApplicationBuilder", lambda: builder)
     monkeypatch.setattr(app_main, "monitor_disk_space", Mock())
     monkeypatch.setattr(app_main, "periodic_cleanup", Mock())
@@ -90,5 +94,6 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
     app_main.main()
 
     assert builder.token.called
+    assert "app_runtime" in app.bot_data
     app.run_polling.assert_called_once()
     assert app.add_handler.call_count >= 7
