@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
-from telegram.error import BadRequest
+from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.helpers import escape_markdown
 
 # Thread pool for running sync functions
@@ -125,7 +125,8 @@ def create_progress_hook(chat_id):
 
 async def safe_edit_message(query, text, reply_markup=None, parse_mode=None):
     """
-    Safely edits message, ignoring 'message not modified' error.
+    Safely edits message, ignoring 'message not modified' error
+    and transient network errors (so status updates don't crash the handler).
     """
     try:
         await query.edit_message_text(
@@ -136,6 +137,8 @@ async def safe_edit_message(query, text, reply_markup=None, parse_mode=None):
     except BadRequest as e:
         if "Message is not modified" not in str(e):
             raise
+    except (NetworkError, TimedOut) as e:
+        logging.warning(f"Network error updating status message: {e}")
 
 
 async def send_long_message(bot, chat_id, text, header="", parse_mode='Markdown'):
