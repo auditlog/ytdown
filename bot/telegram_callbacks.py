@@ -56,12 +56,9 @@ from bot.downloader import (
     get_available_subtitles,
     download_subtitles,
     parse_subtitle_file,
-    strip_playlist_params,
     download_thumbnail,
     download_photo,
-    COOKIES_FILE,
 )
-from bot.spotify import download_direct_audio
 from bot.services.download_service import (
     ensure_size_within_limit,
     estimate_download_size,
@@ -74,6 +71,13 @@ from bot.services.transcription_service import (
     load_transcript_result,
     run_transcription_with_progress,
     transcript_too_long_for_summary,
+)
+from bot.services.spotify_service import download_resolved_audio
+from bot.services.playlist_service import (
+    build_single_video_url,
+    download_playlist_item,
+    load_playlist,
+    parse_playlist_download_choice,
 )
 
 
@@ -1051,7 +1055,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
         # Strip playlist params, download as single video
         url = user_urls.get(chat_id)
         if url:
-            clean_url = strip_playlist_params(url)
+            clean_url = build_single_video_url(url)
             user_playlist_data.pop(chat_id, None)
             user_urls[chat_id] = clean_url
 
@@ -1083,8 +1087,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
         url = user_urls.get(chat_id)
         if url:
             await query.edit_message_text("Pobieranie informacji o playliście...")
-            from bot.downloader import get_playlist_info
-            playlist_info = get_playlist_info(url, max_items=MAX_PLAYLIST_ITEMS)
+            playlist_info = load_playlist(url, max_items=MAX_PLAYLIST_ITEMS)
             if not playlist_info or not playlist_info['entries']:
                 await query.edit_message_text(
                     "Nie udało się pobrać informacji o playliście."
@@ -1100,8 +1103,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
         url = user_urls.get(chat_id)
         if url:
             await query.edit_message_text("Pobieranie rozszerzonej listy...")
-            from bot.downloader import get_playlist_info
-            playlist_info = get_playlist_info(url, max_items=MAX_PLAYLIST_ITEMS_EXPANDED)
+            playlist_info = load_playlist(url, max_items=MAX_PLAYLIST_ITEMS_EXPANDED)
             if not playlist_info or not playlist_info['entries']:
                 await query.edit_message_text(
                     "Nie udało się pobrać rozszerzonej listy."
@@ -1129,11 +1131,9 @@ async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
     entries = playlist['entries']
 
-    # Parse format: pl_dl_audio_mp3, pl_dl_video_best, pl_dl_video_720p
-    format_part = callback_data.replace("pl_dl_", "")
-    parts = format_part.split("_", 1)
-    media_type = parts[0]  # 'audio' or 'video'
-    format_choice = parts[1] if len(parts) > 1 else 'best'
+    choice = parse_playlist_download_choice(callback_data)
+    media_type = choice.media_type
+    format_choice = choice.format_choice
 
     total = len(entries)
     succeeded = 0
@@ -1192,91 +1192,21 @@ async def _download_single_playlist_item(
     context, chat_id, url, title, media_type, format_choice, status_msg
 ):
     """Downloads and sends a single playlist item."""
-    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
-    os.makedirs(chat_download_path, exist_ok=True)
-
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    sanitized_title = sanitize_filename(title)
-    output_path = os.path.join(chat_download_path, f"{current_date} {sanitized_title}")
-
-    ydl_opts = {
-        'outtmpl': f"{output_path}.%(ext)s",
-        'quiet': True,
-        'no_warnings': True,
-        'noplaylist': True,
-        'socket_timeout': 30,
-        'retries': 3,
-        'fragment_retries': 3,
-    }
-    if os.path.exists(COOKIES_FILE):
-        ydl_opts['cookiefile'] = COOKIES_FILE
-
-    if media_type == "audio":
-        codec = format_choice if format_choice in ('mp3', 'm4a', 'flac', 'wav', 'ogg', 'opus') else 'mp3'
-        ydl_opts.update({
-            'format': 'bestaudio/best',
-            'postprocessors': [{
-                'key': 'FFmpegExtractAudio',
-                'preferredcodec': codec,
-                'preferredquality': '192',
-            }],
-        })
-    elif media_type == "video":
-        if format_choice == "best":
-            ydl_opts['format'] = 'best'
-        elif format_choice in ("1080p", "720p", "480p", "360p"):
-            height = format_choice.replace('p', '')
-            ydl_opts['format'] = f'best[height<={height}]/bestvideo[height<={height}]+bestaudio/best[height<={height}]'
-        else:
-            ydl_opts['format'] = 'best'
-
-    # Pre-download size check (same guard as download_file)
-    loop = asyncio.get_event_loop()
     try:
-        check_opts = ydl_opts.copy()
-        check_opts['simulate'] = True
-        format_info = await loop.run_in_executor(
-            _executor,
-            lambda: yt_dlp.YoutubeDL(check_opts).extract_info(url, download=False)
+        result = await download_playlist_item(
+            chat_id=chat_id,
+            url=url,
+            title=title,
+            media_type=media_type,
+            format_choice=format_choice,
+            executor=_executor,
         )
-        if format_info:
-            file_size = 0
-            if 'requested_formats' in format_info:
-                file_size = sum(f.get('filesize', 0) or 0 for f in format_info['requested_formats'])
-            else:
-                file_size = format_info.get('filesize', 0) or 0
-            if file_size > 0:
-                size_mb = file_size / (1024 * 1024)
-                if size_mb > MAX_FILE_SIZE_MB:
-                    raise RuntimeError(
-                        f"Plik za duży ({size_mb:.0f} MB, limit: {MAX_FILE_SIZE_MB} MB)"
-                    )
     except RuntimeError:
         raise
-    except Exception:
-        pass  # Size check is best-effort, proceed with download
 
-    # Download in thread pool
-    await loop.run_in_executor(
-        _executor,
-        lambda: yt_dlp.YoutubeDL(ydl_opts).download([url])
-    )
-
-    # Find and send downloaded file
-    _artifact_suffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
-    downloaded_file_path = None
-    for file in os.listdir(chat_download_path):
-        full_path = os.path.join(chat_download_path, file)
-        if sanitized_title in file and full_path.startswith(output_path):
-            if any(file.endswith(s) for s in _artifact_suffixes):
-                continue
-            downloaded_file_path = full_path
-            break
-
-    if not downloaded_file_path:
-        raise FileNotFoundError(f"Downloaded file not found for: {title}")
-
-    file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
+    downloaded_file_path = result.file_path
+    file_size_mb = result.file_size_mb
+    chat_download_path = os.path.dirname(downloaded_file_path)
 
     # Telegram Bot API limit: 50MB for file upload
     if file_size_mb > 50:
@@ -1285,6 +1215,7 @@ async def _download_single_playlist_item(
         )
 
     # Download thumbnail for embed
+    loop = asyncio.get_event_loop()
     item_info = await loop.run_in_executor(
         _executor, get_video_info, url
     )
@@ -1374,79 +1305,20 @@ async def download_spotify_resolved(
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
-    sanitized_title = sanitize_filename(title)
-    output_path = os.path.join(chat_download_path, f"{current_date} {sanitized_title}")
-
     source = resolved['source']
     downloaded_file_path = None
 
     try:
-        if source == 'itunes':
-            # Direct MP3 download from iTunes
-            await update_status("Pobieranie audio z iTunes...")
-            loop = asyncio.get_event_loop()
-            downloaded_file_path = await loop.run_in_executor(
-                _executor,
-                lambda: download_direct_audio(resolved['audio_url'], output_path)
-            )
-
-            # Convert to requested format if not MP3 (iTunes returns MP3)
-            if downloaded_file_path and audio_format != 'mp3' and audio_format in ('m4a', 'flac', 'wav', 'ogg', 'opus'):
-                import subprocess
-                from bot.security import FFMPEG_TIMEOUT
-                converted_path = os.path.splitext(downloaded_file_path)[0] + f'.{audio_format}'
-                try:
-                    result = subprocess.run(
-                        ['ffmpeg', '-i', downloaded_file_path, '-y', converted_path],
-                        capture_output=True, timeout=FFMPEG_TIMEOUT
-                    )
-                    if result.returncode == 0:
-                        os.remove(downloaded_file_path)
-                        downloaded_file_path = converted_path
-                    else:
-                        logging.warning("ffmpeg conversion returned %d, using original MP3", result.returncode)
-                        if os.path.exists(converted_path):
-                            os.remove(converted_path)
-                except Exception as e:
-                    logging.warning("Format conversion failed, using original MP3: %s", e)
-                    if os.path.exists(converted_path):
-                        os.remove(converted_path)
-        elif source == 'youtube':
-            # Download via yt-dlp from YouTube
-            youtube_url = resolved['youtube_url']
-            await update_status("Pobieranie audio z YouTube...")
-
-            ydl_opts = {
-                'outtmpl': f"{output_path}.%(ext)s",
-                'quiet': True,
-                'no_warnings': True,
-                'noplaylist': True,
-                'socket_timeout': 30,
-                'retries': 3,
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': audio_format,
-                    'preferredquality': '192',
-                }],
-            }
-
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(
-                _executor,
-                lambda: yt_dlp.YoutubeDL(ydl_opts).download([youtube_url])
-            )
-
-            # Find downloaded file
-            _artifact_suffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
-            for file in os.listdir(chat_download_path):
-                full_path = os.path.join(chat_download_path, file)
-                if sanitized_title in file and full_path.startswith(output_path):
-                    if any(file.endswith(s) for s in _artifact_suffixes):
-                        continue
-                    downloaded_file_path = full_path
-                    break
+        await update_status(
+            "Pobieranie audio z iTunes..." if source == 'itunes'
+            else "Pobieranie audio z YouTube..."
+        )
+        downloaded_file_path = await download_resolved_audio(
+            resolved=resolved,
+            audio_format=audio_format,
+            output_dir=chat_download_path,
+            executor=_executor,
+        )
 
         if not downloaded_file_path:
             await update_status("Nie udało się pobrać pliku audio.")
@@ -1468,39 +1340,20 @@ async def download_spotify_resolved(
                 )
                 return
 
-            loop = asyncio.get_event_loop()
-
-            current_status = {"text": ""}
-            def progress_callback(status_text):
-                current_status["text"] = status_text
-
-            async def run_transcription_with_progress():
-                future = loop.run_in_executor(
-                    _executor,
-                    lambda: transcribe_mp3_file(downloaded_file_path, chat_download_path, progress_callback, language=None)
-                )
-                while not future.done():
-                    await asyncio.sleep(3)
-                    if current_status["text"]:
-                        await update_status(current_status["text"])
-                return await future
-
-            transcript_path = await run_transcription_with_progress()
+            transcript_path = await run_transcription_with_progress(
+                source_path=downloaded_file_path,
+                output_dir=chat_download_path,
+                executor=_executor,
+                status_callback=update_status,
+            )
 
             if not transcript_path or not os.path.exists(transcript_path):
                 await update_status("Wystąpił błąd podczas transkrypcji.")
                 return
 
-            with open(transcript_path, 'r', encoding='utf-8') as f:
-                transcript_text = f.read()
-
-            # Strip markdown header if present
-            if transcript_text.startswith('# '):
-                lines = transcript_text.split('\n')
-                for i in range(1, len(lines)):
-                    if lines[i].strip():
-                        transcript_text = '\n'.join(lines[i:])
-                        break
+            transcript_result = load_transcript_result(transcript_path)
+            transcript_text = transcript_result.display_text
+            sanitized_title = os.path.splitext(os.path.basename(downloaded_file_path))[0]
 
             if summary and summary_type:
                 if not CONFIG.get("CLAUDE_API_KEY"):
@@ -1509,20 +1362,29 @@ async def download_spotify_resolved(
                         "Podsumowanie niedostępne — brak klucza CLAUDE_API_KEY.\n"
                         "Wysyłam samą transkrypcję."
                     )
-                elif is_text_too_long_for_summary(transcript_text):
+                elif transcript_too_long_for_summary(transcript_text):
                     await update_status(
                         "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
                         "Wysyłam samą transkrypcję."
                     )
                 else:
                     await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
-                    summary_text = await loop.run_in_executor(
-                        _executor,
-                        lambda: generate_summary(transcript_text, summary_type)
+                    summary_result = await generate_summary_artifact(
+                        transcript_text=transcript_text,
+                        summary_type=summary_type,
+                        title=title,
+                        sanitized_title=sanitized_title,
+                        output_dir=chat_download_path,
+                        executor=_executor,
                     )
-                    if summary_text:
+                    if summary_result:
                         summary_header = f"*Podsumowanie: {escape_md(title)}*\n\n"
-                        await send_long_message(context.bot, chat_id, summary_text, header=summary_header)
+                        await send_long_message(
+                            context.bot,
+                            chat_id,
+                            summary_result.summary_text,
+                            header=summary_header,
+                        )
 
             await update_status("Wysyłanie pliku z transkrypcją...")
             with open(transcript_path, 'rb') as tf:
@@ -1537,6 +1399,12 @@ async def download_spotify_resolved(
 
             add_download_record(chat_id, title, user_urls.get(chat_id, ''),
                               "spotify_transcribe", file_size_mb)
+            cleanup_transcription_artifacts(
+                source_media_path=downloaded_file_path,
+                output_dir=chat_download_path,
+                transcript_prefix=sanitized_title,
+            )
+            downloaded_file_path = None
         else:
             # Send audio file
             await update_status(f"Wysyłanie pliku ({file_size_mb:.1f} MB)...")

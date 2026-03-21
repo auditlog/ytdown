@@ -30,7 +30,6 @@ from bot.security import (
     RATE_LIMIT_WINDOW,
     MAX_FILE_SIZE_MB,
     MAX_PLAYLIST_ITEMS,
-    MAX_PLAYLIST_ITEMS_EXPANDED,
     FFMPEG_TIMEOUT,
     failed_attempts,
     block_until,
@@ -58,12 +57,19 @@ from bot.downloader import (
     get_video_info,
     is_playlist_url,
     is_pure_playlist_url,
-    get_playlist_info,
-    strip_playlist_params,
     get_instagram_post_info,
     is_photo_entry,
 )
-from bot.spotify import resolve_spotify_episode, parse_spotify_episode_url
+from bot.spotify import parse_spotify_episode_url
+from bot.services.playlist_service import (
+    build_playlist_message,
+    load_playlist,
+)
+from bot.services.spotify_service import (
+    build_episode_caption_data,
+    get_resolution_error_message,
+    resolve_episode,
+)
 
 
 def escape_md(text: str) -> str:
@@ -675,11 +681,11 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         )
         return
 
-    # Normalize redirect URLs (e.g. Castbox dynamic links)
-    # normalize_url may do HTTP HEAD for short links — run in executor to avoid blocking
-    import asyncio
-    loop = asyncio.get_event_loop()
-    message_text = await loop.run_in_executor(None, normalize_url, message_text)
+    # Only Castbox links require redirect normalization that may hit the network.
+    if "castbox.fm" in message_text:
+        import asyncio
+        loop = asyncio.get_event_loop()
+        message_text = await loop.run_in_executor(None, normalize_url, message_text)
 
     # Validate URL
     if not validate_url(message_text):
@@ -700,46 +706,9 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 def _build_playlist_message(playlist_info: dict) -> tuple[str, InlineKeyboardMarkup]:
-    """Builds playlist listing message and keyboard.
+    """Compatibility wrapper around the playlist service message builder."""
 
-    Returns:
-        Tuple of (message_text, reply_markup).
-    """
-    entries = playlist_info['entries']
-    total = playlist_info.get('playlist_count', len(entries))
-
-    msg = f"*{escape_md(playlist_info['title'])}*\n"
-    msg += f"Filmów: {len(entries)}"
-    if total > len(entries):
-        msg += f" (z {total})"
-    msg += "\n\n"
-
-    for i, entry in enumerate(entries, 1):
-        title = entry.get('title', 'Nieznany')[:50]
-        duration = entry.get('duration')
-        if duration:
-            dur_str = f"{duration // 60}:{duration % 60:02d}"
-        else:
-            dur_str = "?"
-        msg += f"{i}. {escape_md(title)} ({dur_str})\n"
-
-    keyboard = [
-        [InlineKeyboardButton("Pobierz wszystkie — Audio MP3", callback_data="pl_dl_audio_mp3")],
-        [InlineKeyboardButton("Pobierz wszystkie — Audio M4A", callback_data="pl_dl_audio_m4a")],
-        [InlineKeyboardButton("Pobierz wszystkie — Video (najlepsza)", callback_data="pl_dl_video_best")],
-        [InlineKeyboardButton("Pobierz wszystkie — Video 720p", callback_data="pl_dl_video_720p")],
-    ]
-
-    # Show "load more" button when playlist has more items than currently displayed
-    if total > len(entries) and len(entries) < MAX_PLAYLIST_ITEMS_EXPANDED:
-        more_count = min(total, MAX_PLAYLIST_ITEMS_EXPANDED)
-        keyboard.append([InlineKeyboardButton(
-            f"Pokaż więcej (do {more_count})", callback_data="pl_more"
-        )])
-
-    keyboard.append([InlineKeyboardButton("Anuluj", callback_data="pl_cancel")])
-
-    return msg, InlineKeyboardMarkup(keyboard)
+    return build_playlist_message(playlist_info)
 
 
 async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
@@ -750,7 +719,7 @@ async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TY
         "Wykryto playlistę! Pobieranie informacji..."
     )
 
-    playlist_info = get_playlist_info(url, max_items=MAX_PLAYLIST_ITEMS)
+    playlist_info = load_playlist(url, max_items=MAX_PLAYLIST_ITEMS)
 
     if not playlist_info:
         await progress_message.edit_text(
@@ -772,51 +741,26 @@ async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
     """Resolves a Spotify episode URL and shows download options."""
-    import asyncio
-    from concurrent.futures import ThreadPoolExecutor
-
     chat_id = update.effective_chat.id
     progress_message = await update.message.reply_text(
         "Spotify: wyszukiwanie odcinka podcastu..."
     )
 
-    # Resolve in thread pool (network calls)
-    loop = asyncio.get_event_loop()
-    resolved = await loop.run_in_executor(
-        None, lambda: resolve_spotify_episode(url)
-    )
-
-    if not resolved:
-        await progress_message.edit_text(
-            "Nie udało się znaleźć tego odcinka podcastu.\n\n"
-            "Możliwe przyczyny:\n"
-            "- Odcinek jest dostępny wyłącznie na Spotify\n"
-            "- Nieprawidłowy link do odcinka\n\n"
-            "Spróbuj wyszukać ten podcast na YouTube lub innej platformie."
-        )
-        return
-
-    if resolved.get('source') == 'no_credentials':
-        await progress_message.edit_text(
-            "Spotify wymaga skonfigurowania kluczy API.\n\n"
-            "Dodaj do konfiguracji:\n"
-            "- SPOTIFY_CLIENT_ID\n"
-            "- SPOTIFY_CLIENT_SECRET\n\n"
-            "Klucze uzyskasz na developer.spotify.com (utwórz aplikację z Web API)."
-        )
+    resolved = await resolve_episode(url)
+    error_message = get_resolution_error_message(resolved)
+    if error_message:
+        await progress_message.edit_text(error_message)
         return
 
     # Store resolved info for callback handlers
     context.user_data['spotify_resolved'] = resolved
     user_urls[chat_id] = url
 
-    title = resolved.get('title', 'Nieznany odcinek')
-    show_name = resolved.get('show_name') or resolved.get('channel', '')
-    duration = int(resolved.get('duration') or 0)
-    source = resolved['source']
-
-    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
-    source_label = "iTunes" if source == 'itunes' else "YouTube"
+    caption_data = build_episode_caption_data(resolved)
+    title = caption_data['title']
+    show_name = caption_data['show_name']
+    duration_str = caption_data['duration_str']
+    source_label = caption_data['source_label']
 
     show_info = f"\nPodcast: {escape_md(show_name)}" if show_name else ""
 
@@ -836,10 +780,10 @@ async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Processes a media link after PIN authorization."""
     chat_id = update.effective_chat.id
-    # Normalize redirect URLs (safety net for all entry points: PIN flow, callbacks, etc.)
-    # May do HTTP HEAD for Castbox short links — run in executor to avoid blocking
-    import asyncio
-    url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
+    # Only Castbox links require redirect normalization that may hit the network.
+    if "castbox.fm" in url:
+        import asyncio
+        url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
     user_urls[chat_id] = url
     # Clear any previous time range
     user_time_ranges.pop(chat_id, None)

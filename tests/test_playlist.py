@@ -306,8 +306,11 @@ class TestPlaylistCallbacks:
         }
 
         monkeypatch.setattr(tcb, "check_rate_limit", lambda *_: True)
-        monkeypatch.setattr("bot.downloader.get_playlist_info",
-                          lambda url, max_items: expanded_playlist if max_items == MAX_PLAYLIST_ITEMS_EXPANDED else None)
+        monkeypatch.setattr(
+            tcb,
+            "load_playlist",
+            lambda url, max_items: expanded_playlist if max_items == MAX_PLAYLIST_ITEMS_EXPANDED else None,
+        )
 
         _async(tcb.handle_callback(update, context))
 
@@ -350,7 +353,7 @@ class TestProcessPlaylistLink:
             ],
         }
 
-        monkeypatch.setattr(tc, "get_playlist_info", lambda url, max_items: fake_playlist)
+        monkeypatch.setattr(tc, "load_playlist", lambda url, max_items: fake_playlist)
 
         _async(tc.process_playlist_link(update, context, "https://youtube.com/playlist?list=PLtest"))
 
@@ -373,7 +376,7 @@ class TestProcessPlaylistLink:
         progress_msg.edit_text = AsyncMock()
         update.message.reply_text = AsyncMock(return_value=progress_msg)
 
-        monkeypatch.setattr(tc, "get_playlist_info", lambda url, max_items: {
+        monkeypatch.setattr(tc, "load_playlist", lambda url, max_items: {
             'title': 'Empty', 'playlist_count': 0, 'entries': [],
         })
 
@@ -399,7 +402,7 @@ class TestProcessPlaylistLink:
             ],
         }
 
-        monkeypatch.setattr(tc, "get_playlist_info", lambda url, max_items: fake_playlist)
+        monkeypatch.setattr(tc, "load_playlist", lambda url, max_items: fake_playlist)
 
         _async(tc.process_playlist_link(update, context, "https://youtube.com/playlist?list=PLtest"))
 
@@ -425,7 +428,7 @@ class TestProcessPlaylistLink:
             ],
         }
 
-        monkeypatch.setattr(tc, "get_playlist_info", lambda url, max_items: fake_playlist)
+        monkeypatch.setattr(tc, "load_playlist", lambda url, max_items: fake_playlist)
 
         _async(tc.process_playlist_link(update, context, "https://youtube.com/playlist?list=PLtest"))
 
@@ -441,7 +444,7 @@ class TestProcessPlaylistLink:
         progress_msg.edit_text = AsyncMock()
         update.message.reply_text = AsyncMock(return_value=progress_msg)
 
-        monkeypatch.setattr(tc, "get_playlist_info", lambda url, max_items: None)
+        monkeypatch.setattr(tc, "load_playlist", lambda url, max_items: None)
 
         _async(tc.process_playlist_link(update, context, "https://youtube.com/playlist?list=PLtest"))
 
