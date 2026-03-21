@@ -73,7 +73,8 @@ class TestPoetryConfiguration:
             "mutagen",
             "python-telegram-bot",
             "requests",
-            "python-dotenv"
+            "python-dotenv",
+            "Pillow",
         ]
 
         for dep in required_deps:
@@ -200,11 +201,23 @@ class TestRequirementsFile:
             "mutagen",
             "python-telegram-bot",
             "requests",
-            "python-dotenv"
+            "python-dotenv",
+            "Pillow",
         ]
 
         for dep in required_deps:
             assert dep in content, f"Missing dependency in requirements.txt: {dep}"
+
+    def test_requirements_txt_documents_optional_dependencies(self):
+        """Test that requirements.txt keeps optional runtime dependencies explicit."""
+        project_root = Path(__file__).parent.parent
+        requirements_path = project_root / "requirements.txt"
+
+        with open(requirements_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        assert "pyrogram" in content
+        assert "instaloader" in content
 
 
 class TestProjectStructure:

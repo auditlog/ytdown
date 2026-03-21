@@ -5,7 +5,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 ## Funkcje
 
 ### Podstawowe
-- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp + instaloader), Spotify podcasty (via iTunes/YouTube)
+- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp), Spotify podcasty (via iTunes/YouTube)
 - Pobieranie video w różnych formatach (1080p, 720p, 480p, 360p)
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
@@ -24,7 +24,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 | YouTube | youtube.com, youtu.be, music.youtube.com | Pełne wsparcie (video, audio, napisy, zakres czasowy) |
 | Vimeo | vimeo.com, player.vimeo.com | Video, audio, transkrypcja |
 | TikTok | tiktok.com, vm.tiktok.com, m.tiktok.com | Uproszczone menu (krótkie video) |
-| Instagram | instagram.com | Reels, posty video, zdjęcia i karuzele. Wymaga cookies.txt + instaloader |
+| Instagram | instagram.com | Reels i posty video przez yt-dlp. Zdjęcia i karuzele wymagają dodatkowo `instaloader` oraz `cookies.txt` |
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
 | Spotify | open.spotify.com | Odcinki podcastów. Wymaga SPOTIFY_CLIENT_ID/SECRET. Audio z iTunes lub YouTube |
 
@@ -53,6 +53,18 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 - ffmpeg (zainstalowany w systemie)
 - Poetry (opcjonalnie, zalecane) lub pip
 
+### Zależności opcjonalne
+
+- `pyrogram` - potrzebny do pobierania dużych plików z Telegrama przez MTProto
+- `instaloader` - potrzebny do zdjęć i karuzel z Instagrama
+
+Instalacja opcjonalnych dodatków:
+
+```bash
+pip install pyrogram
+pip install instaloader
+```
+
 ## Instalacja
 
 ### Opcja 1: Instalacja z Poetry (zalecane)
@@ -76,6 +88,8 @@ poetry shell
 poetry run python main.py
 ```
 
+Poetry instaluje zależności z `pyproject.toml`. Biblioteki opcjonalne, takie jak `instaloader`, doinstaluj osobno, jeśli chcesz używać tych funkcji.
+
 ### Opcja 2: Instalacja z pip (tradycyjna)
 
 ```bash
@@ -90,6 +104,12 @@ source venv/bin/activate  # Linux/macOS
 
 # Zainstaluj zależności
 pip install -r requirements.txt
+```
+
+Jeśli chcesz obsługi MTProto lub zdjęć/karuzel z Instagrama, doinstaluj również zależności opcjonalne:
+
+```bash
+pip install instaloader
 ```
 
 ### Instalacja ffmpeg
@@ -130,6 +150,8 @@ ADMIN_CHAT_ID=twój_telegram_user_id
 SPOTIFY_CLIENT_ID=twój_spotify_client_id
 SPOTIFY_CLIENT_SECRET=twój_spotify_client_secret
 ```
+
+`PIN_CODE` musi mieć dokładnie 8 cyfr.
 
 Klucze Spotify uzyskasz na [Spotify Developer Dashboard](https://developer.spotify.com/) — utwórz aplikację z Web API.
 
@@ -176,6 +198,10 @@ Plik `cookies.txt` jest potrzebny gdy:
 - Instagram wymaga logowania do treści
 - LinkedIn wymaga logowania do postów video
 - TikTok blokuje pobieranie bez sesji
+
+Dodatkowo:
+- zdjęcia i karuzele z Instagrama wymagają zainstalowanego `instaloader`
+- duże pliki z Telegrama wymagają `pyrogram` oraz `TELEGRAM_API_ID` i `TELEGRAM_API_HASH`
 
 Jak uzyskać cookies:
 1. Zainstaluj rozszerzenie **"Get cookies.txt LOCALLY"** w przeglądarce (Chrome/Firefox)
