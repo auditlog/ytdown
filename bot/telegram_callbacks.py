@@ -74,7 +74,7 @@ from bot.services.playlist_service import (
     load_playlist,
     parse_playlist_download_choice,
 )
-from bot.runtime import record_download_for
+from bot.runtime import get_app_runtime, record_download_for
 from bot.session_store import download_progress as _download_progress
 
 
@@ -278,6 +278,46 @@ def parse_summary_option(option_data):
     return summary_option
 
 
+def _get_session_value(context: ContextTypes.DEFAULT_TYPE, chat_id: int, field_name: str, legacy_map):
+    """Read one chat-scoped value from runtime session store when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        return runtime.session_store.get_field(chat_id, field_name)
+    return legacy_map.get(chat_id)
+
+
+def _set_session_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    value,
+    legacy_map,
+) -> None:
+    """Write one chat-scoped value through runtime session store when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.set_field(chat_id, field_name, value)
+        return
+    legacy_map[chat_id] = value
+
+
+def _clear_session_value(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    legacy_map,
+) -> None:
+    """Clear one chat-scoped value through runtime session store when available."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.pop_field(chat_id, field_name, None)
+        return
+    legacy_map.pop(chat_id, None)
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles all callback queries."""
     query = update.callback_query
@@ -312,7 +352,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await transcribe_audio_file(update, context, summary=True, summary_type=option)
         return
 
-    url = user_urls.get(chat_id)
+    url = _get_session_value(context, chat_id, "current_url", user_urls)
 
     if not url:
         await query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
@@ -409,7 +449,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "time_range":
         await show_time_range_options(update, context, url)
     elif data == "time_range_clear":
-        user_time_ranges.pop(chat_id, None)
+        _clear_session_value(context, chat_id, "time_range", user_time_ranges)
         await back_to_main_menu(update, context, url)
     elif data.startswith("time_range_preset_"):
         # Handle preset time ranges like "first_5min", "last_10min"
@@ -572,7 +612,11 @@ async def _download_and_send_ig_photos(
                     await asyncio.sleep(1)
 
         total_size = sum(os.path.getsize(p) for p in downloaded_paths) / (1024 * 1024)
-        record_download_for(context, chat_id, title, user_urls.get(chat_id, ''), "photo", total_size)
+        record_download_for(
+            context, chat_id, title,
+            _get_session_value(context, chat_id, "current_url", user_urls) or '',
+            "photo", total_size,
+        )
         await safe_edit_message(query, f"Wysłano {len(downloaded_paths)} zdjęć!")
 
     except Exception as e:
@@ -694,7 +738,7 @@ async def download_file(
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
-    time_range = user_time_ranges.get(chat_id)
+    time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
     try:
         plan = prepare_download_plan(
             url=url,
@@ -1047,17 +1091,17 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
     chat_id = update.effective_chat.id
 
     if data == "pl_cancel":
-        user_playlist_data.pop(chat_id, None)
+        _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
         await query.edit_message_text("Pobieranie playlisty anulowane.")
         return
 
     if data == "pl_single":
         # Strip playlist params, download as single video
-        url = user_urls.get(chat_id)
+        url = _get_session_value(context, chat_id, "current_url", user_urls)
         if url:
             clean_url = build_single_video_url(url)
-            user_playlist_data.pop(chat_id, None)
-            user_urls[chat_id] = clean_url
+            _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
+            _set_session_value(context, chat_id, "current_url", clean_url, user_urls)
 
             media_name = get_media_label(context.user_data.get('platform'))
             await query.edit_message_text(f"Pobieranie informacji o {media_name}...")
@@ -1084,7 +1128,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
 
     if data == "pl_full":
         # Fetch and show full playlist
-        url = user_urls.get(chat_id)
+        url = _get_session_value(context, chat_id, "current_url", user_urls)
         if url:
             await query.edit_message_text("Pobieranie informacji o playliście...")
             playlist_info = load_playlist(url, max_items=MAX_PLAYLIST_ITEMS)
@@ -1093,14 +1137,14 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
                     "Nie udało się pobrać informacji o playliście."
                 )
                 return
-            user_playlist_data[chat_id] = playlist_info
+            _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
             msg, reply_markup = _build_playlist_message(playlist_info)
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
         return
 
     if data == "pl_more":
         # Re-fetch playlist with expanded limit
-        url = user_urls.get(chat_id)
+        url = _get_session_value(context, chat_id, "current_url", user_urls)
         if url:
             await query.edit_message_text("Pobieranie rozszerzonej listy...")
             playlist_info = load_playlist(url, max_items=MAX_PLAYLIST_ITEMS_EXPANDED)
@@ -1109,7 +1153,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
                     "Nie udało się pobrać rozszerzonej listy."
                 )
                 return
-            user_playlist_data[chat_id] = playlist_info
+            _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
             msg, reply_markup = _build_playlist_message(playlist_info)
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode='Markdown')
         return
@@ -1124,7 +1168,7 @@ async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     query = update.callback_query
     chat_id = update.effective_chat.id
 
-    playlist = user_playlist_data.get(chat_id)
+    playlist = _get_session_value(context, chat_id, "playlist_data", user_playlist_data)
     if not playlist:
         await query.edit_message_text("Sesja playlisty wygasła. Wyślij link ponownie.")
         return
@@ -1185,7 +1229,7 @@ async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     await context.bot.send_message(chat_id=chat_id, text=summary)
 
     # Cleanup session
-    user_playlist_data.pop(chat_id, None)
+    _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
 
 
 async def _download_single_playlist_item(
@@ -1398,7 +1442,8 @@ async def download_spotify_resolved(
                 )
 
             record_download_for(
-                context, chat_id, title, user_urls.get(chat_id, ''),
+                context, chat_id, title,
+                _get_session_value(context, chat_id, "current_url", user_urls) or '',
                 "spotify_transcribe", file_size_mb,
             )
             cleanup_transcription_artifacts(
@@ -1417,7 +1462,8 @@ async def download_spotify_resolved(
                     read_timeout=120, write_timeout=120,
                 )
             record_download_for(
-                context, chat_id, title, user_urls.get(chat_id, ''),
+                context, chat_id, title,
+                _get_session_value(context, chat_id, "current_url", user_urls) or '',
                 f"spotify_audio_{audio_format}", file_size_mb,
             )
 
@@ -1457,7 +1503,7 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     # Show time range info if set
-    time_range = user_time_ranges.get(chat_id)
+    time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
     time_range_info = ""
     if time_range:
         time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
@@ -1486,7 +1532,7 @@ async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
 
     # Current time range
-    time_range = user_time_ranges.get(chat_id)
+    time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
     current_range = ""
     if time_range:
         current_range = f"\n\n✂️ Aktualny zakres: {time_range['start']} - {time_range['end']}"
@@ -1554,12 +1600,12 @@ async def apply_time_range_preset(update: Update, context: ContextTypes.DEFAULT_
             return f"{int(seconds // 3600)}:{int((seconds % 3600) // 60):02d}:{int(seconds % 60):02d}"
         return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
 
-    user_time_ranges[chat_id] = {
+    _set_session_value(context, chat_id, "time_range", {
         'start': format_time(start_sec),
         'end': format_time(end_sec),
         'start_sec': start_sec,
         'end_sec': end_sec
-    }
+    }, user_time_ranges)
 
     await back_to_main_menu(update, context, url)
 
