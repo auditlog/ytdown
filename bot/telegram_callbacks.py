@@ -62,6 +62,12 @@ from bot.downloader import (
     COOKIES_FILE,
 )
 from bot.spotify import download_direct_audio
+from bot.services.download_service import (
+    ensure_size_within_limit,
+    estimate_download_size,
+    execute_download,
+    prepare_download_plan,
+)
 
 
 def escape_md(text: str) -> str:
@@ -304,8 +310,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Sesja wygasła. Wyślij link ponownie.")
         return
 
-    # normalize_url may do HTTP HEAD for Castbox short links — run in executor
-    url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
+    # Only Castbox links need redirect normalization that may hit the network.
+    if "castbox.fm" in url:
+        url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
 
     # Instagram photo/carousel callbacks
     if data.startswith("dl_ig_"):
@@ -680,185 +687,64 @@ async def download_file(
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
-    current_date = datetime.now().strftime("%Y-%m-%d")
+    time_range = user_time_ranges.get(chat_id)
+    try:
+        plan = prepare_download_plan(
+            url=url,
+            media_type=media_type,
+            format_choice=format,
+            chat_download_path=chat_download_path,
+            time_range=time_range,
+            transcribe=transcribe,
+            use_format_id=use_format_id,
+            audio_quality=audio_quality,
+        )
+    except ValueError:
+        await update_status("Nieobsługiwana jakość audio. Spróbuj zmienić opcję.")
+        return
 
-    info = get_video_info(url)
-    if not info:
+    if not plan:
         await update_status(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
         return
 
-    title = info.get('title', 'Nieznany tytuł')
-    duration = int(info.get('duration') or 0)
-    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
-
-    sanitized_title = sanitize_filename(title)
-    output_path = os.path.join(chat_download_path, f"{current_date} {sanitized_title}")
-
-    ydl_opts = {
-        'outtmpl': f"{output_path}.%(ext)s",
-        'quiet': True,
-        'no_warnings': True,
-        'socket_timeout': 30,
-        'retries': 3,
-        'fragment_retries': 3,
-        'ignoreerrors': False,
-        # Download speed optimizations
-        'concurrent_fragment_downloads': 4,  # parallel fragment downloads
-        'throttled_rate': '100K',  # switch server if speed drops below 100KB/s
-        'buffer_size': 1024 * 16,  # 16KB buffer
-        'http_chunk_size': 10485760,  # 10MB chunks
-    }
-    if os.path.exists(COOKIES_FILE):
-        ydl_opts['cookiefile'] = COOKIES_FILE
-
-    # Apply time range if set
-    time_range = user_time_ranges.get(chat_id)
-    if time_range:
-        # Use download_sections format: "*start-end"
-        start = time_range.get('start', '0:00')
-        end = time_range.get('end', duration_str)
-        ydl_opts['download_ranges'] = lambda info, ydl: [{'start_time': time_range.get('start_sec', 0), 'end_time': time_range.get('end_sec', duration)}]
-        ydl_opts['force_keyframes_at_cuts'] = True
-        logging.info(f"Applying time range: {start} - {end}")
-
-    if media_type == "audio" or transcribe:
-        if use_format_id and not transcribe:
-            ydl_opts['format'] = format
-            ydl_opts['postprocessors'] = []
-        else:
-            audio_format_to_use = "mp3" if transcribe else format
-            normalized_quality = str(audio_quality).strip()
-            if not is_valid_audio_quality(audio_format_to_use, normalized_quality):
-                await update_status("Nieobsługiwana jakość audio. Spróbuj zmienić opcję.")
-                return
-
-            ydl_opts.update({
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': audio_format_to_use,
-                    'preferredquality': normalized_quality,
-                }],
-            })
-    elif media_type == "video":
-        if format == "best":
-            ydl_opts['format'] = 'best'
-        elif format in ["1080p", "720p", "480p", "360p"]:
-            height = format.replace('p', '')
-            ydl_opts['format'] = f'best[height<={height}]/bestvideo[height<={height}]+bestaudio/best[height<={height}]'
-        else:
-            ydl_opts['format'] = format
+    info = plan.info
+    title = plan.title
+    duration_str = plan.duration_str
+    sanitized_title = plan.sanitized_title
 
     try:
         # Check file size first
         await update_status(f"Sprawdzanie rozmiaru pliku...\n({duration_str})")
-
-        check_opts = ydl_opts.copy()
-        check_opts['simulate'] = True
-
-        with yt_dlp.YoutubeDL(check_opts) as ydl:
-            format_info = ydl.extract_info(url, download=False)
-
-            selected_format = None
-            if 'requested_formats' in format_info:
-                total_size = 0
-                for fmt in format_info['requested_formats']:
-                    if fmt.get('filesize'):
-                        total_size += fmt['filesize']
-                if total_size > 0:
-                    selected_format = {'filesize': total_size}
-            elif 'filesize' in format_info:
-                selected_format = format_info
-
-            if selected_format and selected_format.get('filesize'):
-                size_mb = selected_format['filesize'] / (1024 * 1024)
-
-                # Adjust size estimate for time range (proportional to duration)
-                if time_range and duration > 0:
-                    start_sec = time_range.get('start_sec', 0)
-                    end_sec = time_range.get('end_sec', duration)
-                    range_duration = end_sec - start_sec
-                    if range_duration > 0:
-                        size_mb = size_mb * (range_duration / duration)
-                        logging.info(f"Adjusted size estimate for time range: {size_mb:.1f} MB (original: {selected_format['filesize'] / (1024 * 1024):.1f} MB)")
-
-                if size_mb > MAX_FILE_SIZE_MB:
-                    await update_status(
-                        f"Wybrany format jest zbyt duży!\n\n"
-                        f"Rozmiar: {size_mb:.1f} MB\n"
-                        f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
-                        f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
-                    )
-                    return
+        size_mb = await asyncio.get_event_loop().run_in_executor(
+            _executor,
+            lambda: estimate_download_size(plan)
+        )
+        if not ensure_size_within_limit(size_mb, max_size_mb=MAX_FILE_SIZE_MB):
+            await update_status(
+                f"Wybrany format jest zbyt duży!\n\n"
+                f"Rozmiar: {size_mb:.1f} MB\n"
+                f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
+                f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
+            )
+            return
 
         # Download file with progress tracking
         time_range_info = ""
         if time_range:
             time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
         await update_status(f"Rozpoczynam pobieranie...\nCzas trwania: {duration_str}{time_range_info}")
-
-        # Add progress hook
-        ydl_opts['progress_hooks'] = [create_progress_hook(chat_id)]
-        _download_progress[chat_id] = {'status': 'starting', 'updated': time.time()}
-
-        # Run download in thread pool with progress updates
-        loop = asyncio.get_event_loop()
-
-        async def run_download_with_progress():
-            # Start download in background
-            future = loop.run_in_executor(
-                _executor,
-                lambda: yt_dlp.YoutubeDL(ydl_opts).download([url])
-            )
-
-            # Update status while downloading
-            last_update = ""
-            while not future.done():
-                progress = _download_progress.get(chat_id, {})
-                if progress.get('status') == 'downloading':
-                    percent = progress.get('percent', '?%')
-                    downloaded = format_bytes(progress.get('downloaded', 0))
-                    total = format_bytes(progress.get('total', 0))
-                    speed = format_bytes(progress.get('speed', 0)) + "/s" if progress.get('speed') else "?"
-                    eta = format_eta(progress.get('eta'))
-
-                    status_text = (
-                        f"Pobieranie: {percent}\n\n"
-                        f"Pobrano: {downloaded} / {total}\n"
-                        f"Prędkość: {speed}\n"
-                        f"Pozostało: {eta}\n\n"
-                        f"Czas trwania: {duration_str}"
-                    )
-
-                    if status_text != last_update:
-                        last_update = status_text
-                        await update_status(status_text)
-
-                await asyncio.sleep(1)
-
-            # Clean up progress state
-            _download_progress.pop(chat_id, None)
-            return await future
-
-        await run_download_with_progress()
-
-        # Find downloaded file (exclude transcription/summary artifacts)
-        _artifact_suffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
-        downloaded_file_path = None
-        for file in os.listdir(chat_download_path):
-            full_path = os.path.join(chat_download_path, file)
-            if sanitized_title in file and full_path.startswith(output_path):
-                if any(file.endswith(s) for s in _artifact_suffixes):
-                    continue
-                downloaded_file_path = full_path
-                break
-
-        if not downloaded_file_path:
-            await update_status("Nie można znaleźć pobranego pliku.")
-            return
-
-        # Get file size
-        file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
+        download_result = await execute_download(
+            plan,
+            chat_id=chat_id,
+            executor=_executor,
+            progress_hook_factory=create_progress_hook,
+            progress_state=_download_progress,
+            status_callback=update_status,
+            format_bytes=format_bytes,
+            format_eta=format_eta,
+        )
+        downloaded_file_path = download_result.file_path
+        file_size_mb = download_result.file_size_mb
 
         if transcribe:
             await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nRozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut.")
