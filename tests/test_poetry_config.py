@@ -268,6 +268,12 @@ class TestProjectStructure:
             assert "def main()" in content
             assert 'if __name__ == "__main__"' in content
 
+    def test_no_legacy_node_manifests_in_project_root(self):
+        """Test that unused Node manifests are not kept in the Python project root."""
+        project_root = Path(__file__).parent.parent
+        assert not (project_root / "package.json").exists()
+        assert not (project_root / "package-lock.json").exists()
+
 
 @pytest.mark.skipif(
     not shutil.which("poetry"),

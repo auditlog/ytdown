@@ -56,6 +56,11 @@ def test_get_basic_ydl_opts_contains_expected_fields():
     opts = get_basic_ydl_opts()
     assert opts["quiet"] is True
     assert opts["no_warnings"] is True
+    assert "progress_hooks" not in opts
+
+
+def test_get_basic_ydl_opts_can_enable_progress_hooks():
+    opts = get_basic_ydl_opts(include_progress_hooks=True)
     assert len(opts["progress_hooks"]) == 1
 
 

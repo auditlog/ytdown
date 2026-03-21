@@ -177,7 +177,7 @@ def progress_hook(d):
         print(f"\nError during download: {d.get('error')}")
 
 
-def get_basic_ydl_opts():
+def get_basic_ydl_opts(*, include_progress_hooks: bool = False):
     """
     Returns basic configuration for yt-dlp.
 
@@ -187,8 +187,9 @@ def get_basic_ydl_opts():
     opts = {
         'quiet': True,
         'no_warnings': True,
-        'progress_hooks': [progress_hook],
     }
+    if include_progress_hooks:
+        opts['progress_hooks'] = [progress_hook]
     if os.path.exists(COOKIES_FILE):
         opts['cookiefile'] = COOKIES_FILE
     return opts

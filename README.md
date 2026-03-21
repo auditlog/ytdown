@@ -213,6 +213,20 @@ Bot automatycznie wykrywa brak cookies i wyświetla odpowiedni komunikat.
 
 **UWAGA**: Plik `cookies.txt` zawiera dane sesji — nie udostępniaj go i nie commituj do repozytorium! Jest ignorowany przez git.
 
+### Pliki runtime i lokalne artefakty
+
+Te pliki nie są częścią kodu aplikacji i powinny pozostać lokalne:
+
+- `.env`
+- `api_key.md`
+- `cookies.txt`
+- `authorized_users.json`
+- `download_history.json`
+- `downloads/`
+- `backup/`
+
+Repozytorium powinno zawierać kod, testy i konfigurację projektu, ale nie lokalne sekrety, backupy ani dane runtime.
+
 ## Uruchomienie
 
 ### Bot Telegram
