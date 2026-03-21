@@ -389,11 +389,43 @@ def get_download_stats(user_id=None):
     }
 
 
-# Initialize configuration on module load
-CONFIG = load_config(ensure_downloads_dir=True)
-BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
-PIN_CODE = CONFIG["PIN_CODE"]
-ADMIN_CHAT_ID = CONFIG.get("ADMIN_CHAT_ID", "")
+CONFIG: dict = {}
+BOT_TOKEN = ""
+PIN_CODE = ""
+ADMIN_CHAT_ID = ""
+authorized_users: set[int] = set()
 
-# Load authorized users from JSON file
-authorized_users = load_authorized_users()
+
+def initialize_runtime(
+    *,
+    config_file_path: str = CONFIG_FILE_PATH,
+    env: Mapping[str, str | None] | None = None,
+    load_env_file: bool = True,
+    ensure_downloads_dir: bool = True,
+) -> dict:
+    """Load runtime configuration and update exported globals in place."""
+
+    loaded_config = load_config(
+        config_file_path=config_file_path,
+        env=env,
+        load_env_file=load_env_file,
+        ensure_downloads_dir=ensure_downloads_dir,
+    )
+    loaded_users = load_authorized_users()
+
+    CONFIG.clear()
+    CONFIG.update(loaded_config)
+
+    global BOT_TOKEN, PIN_CODE, ADMIN_CHAT_ID
+    BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
+    PIN_CODE = CONFIG["PIN_CODE"]
+    ADMIN_CHAT_ID = CONFIG.get("ADMIN_CHAT_ID", "")
+
+    authorized_users.clear()
+    authorized_users.update(loaded_users)
+
+    return CONFIG
+
+
+# Initialize runtime state on module load for backward compatibility.
+initialize_runtime()

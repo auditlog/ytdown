@@ -84,3 +84,30 @@ def test_load_config_optional_download_dir_creation(tmp_path, monkeypatch):
 
     config.load_config(str(cfg), env={}, load_env_file=False, ensure_downloads_dir=True)
     assert created == [(config.DOWNLOAD_PATH, True)]
+
+
+def test_initialize_runtime_updates_exported_globals_in_place(tmp_path):
+    cfg = tmp_path / "api_key.md"
+    _write_file(
+        cfg,
+        """
+        TELEGRAM_BOT_TOKEN=file_token
+        PIN_CODE=87654321
+        """.strip(),
+    )
+
+    original_config = config.CONFIG
+    original_users = config.authorized_users
+
+    result = config.initialize_runtime(
+        config_file_path=str(cfg),
+        env={},
+        load_env_file=False,
+        ensure_downloads_dir=False,
+    )
+
+    assert result is original_config
+    assert config.CONFIG is original_config
+    assert config.authorized_users is original_users
+    assert config.BOT_TOKEN == "file_token"
+    assert config.PIN_CODE == "87654321"
