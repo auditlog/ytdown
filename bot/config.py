@@ -12,6 +12,7 @@ import os
 import re
 import logging
 import threading
+from dataclasses import dataclass
 from datetime import datetime
 from collections.abc import Mapping
 from bot.repositories import (
@@ -41,6 +42,14 @@ DOWNLOAD_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 
 # Path to authorized users file
 AUTHORIZED_USERS_FILE = "authorized_users.json"
+
+
+@dataclass
+class RuntimeServices:
+    """Runtime persistence services initialized during bootstrap."""
+
+    authorized_users_repository: AuthorizedUsersRepository
+    download_history_repository: DownloadHistoryRepository
 
 def _read_config_file(file_path: str) -> dict:
     """Reads key/value pairs from api_key.md-like config file."""
@@ -200,8 +209,7 @@ def load_authorized_users():
     Returns:
         set: Set of user_id for authorized users
     """
-    repository = AuthorizedUsersRepository(AUTHORIZED_USERS_FILE, lock=_auth_lock)
-    return repository.load()
+    return get_authorized_users_repository().load()
 
 
 def save_authorized_users(authorized_users_set):
@@ -211,8 +219,7 @@ def save_authorized_users(authorized_users_set):
     Args:
         authorized_users_set: Set of authorized user IDs
     """
-    repository = AuthorizedUsersRepository(AUTHORIZED_USERS_FILE, lock=_auth_lock)
-    repository.save(authorized_users_set)
+    get_authorized_users_repository().save(authorized_users_set)
 
 
 # Path to download history file
@@ -228,6 +235,58 @@ _history_lock = threading.RLock()
 _auth_lock = threading.RLock()
 
 
+def build_runtime_services() -> RuntimeServices:
+    """Build runtime persistence services for the current repository paths."""
+
+    return RuntimeServices(
+        authorized_users_repository=AuthorizedUsersRepository(
+            AUTHORIZED_USERS_FILE,
+            lock=_auth_lock,
+        ),
+        download_history_repository=DownloadHistoryRepository(
+            DOWNLOAD_HISTORY_FILE,
+            max_entries=MAX_HISTORY_ENTRIES,
+            lock=_history_lock,
+        ),
+    )
+
+
+RUNTIME_SERVICES = build_runtime_services()
+
+
+def _refresh_runtime_services_if_needed() -> RuntimeServices:
+    """Rebuild runtime services when repository paths changed at runtime."""
+
+    global RUNTIME_SERVICES
+
+    services = RUNTIME_SERVICES
+    users_path_changed = services.authorized_users_repository.path != AUTHORIZED_USERS_FILE
+    history_path_changed = services.download_history_repository.path != DOWNLOAD_HISTORY_FILE
+
+    if users_path_changed or history_path_changed:
+        RUNTIME_SERVICES = build_runtime_services()
+
+    return RUNTIME_SERVICES
+
+
+def get_runtime_services() -> RuntimeServices:
+    """Return active runtime persistence services."""
+
+    return _refresh_runtime_services_if_needed()
+
+
+def get_authorized_users_repository() -> AuthorizedUsersRepository:
+    """Return active authorized users repository."""
+
+    return get_runtime_services().authorized_users_repository
+
+
+def get_download_history_repository() -> DownloadHistoryRepository:
+    """Return active download history repository."""
+
+    return get_runtime_services().download_history_repository
+
+
 def load_download_history():
     """
     Loads download history from JSON file.
@@ -235,12 +294,7 @@ def load_download_history():
     Returns:
         list: List of download records
     """
-    repository = DownloadHistoryRepository(
-        DOWNLOAD_HISTORY_FILE,
-        max_entries=MAX_HISTORY_ENTRIES,
-        lock=_history_lock,
-    )
-    return repository.load()
+    return get_download_history_repository().load()
 
 
 def save_download_history(history):
@@ -250,12 +304,7 @@ def save_download_history(history):
     Args:
         history: List of download records
     """
-    repository = DownloadHistoryRepository(
-        DOWNLOAD_HISTORY_FILE,
-        max_entries=MAX_HISTORY_ENTRIES,
-        lock=_history_lock,
-    )
-    repository.save(history)
+    get_download_history_repository().save(history)
 
 
 def add_download_record(
@@ -278,11 +327,6 @@ def add_download_record(
         selected_format: Raw format string passed to yt-dlp (optional)
         error_message: Error description when status is "failure" (optional)
     """
-    repository = DownloadHistoryRepository(
-        DOWNLOAD_HISTORY_FILE,
-        max_entries=MAX_HISTORY_ENTRIES,
-        lock=_history_lock,
-    )
     record = DownloadRecord(
         timestamp=datetime.now().isoformat(),
         user_id=user_id,
@@ -298,7 +342,7 @@ def add_download_record(
         selected_format=selected_format,
         error_message=str(error_message)[:200] if error_message else None,
     )
-    repository.append(record)
+    get_download_history_repository().append(record)
 
 
 def get_download_stats(user_id=None):
@@ -311,12 +355,7 @@ def get_download_stats(user_id=None):
     Returns:
         dict: Statistics dictionary
     """
-    repository = DownloadHistoryRepository(
-        DOWNLOAD_HISTORY_FILE,
-        max_entries=MAX_HISTORY_ENTRIES,
-        lock=_history_lock,
-    )
-    return repository.stats(user_id=user_id)
+    return get_download_history_repository().stats(user_id=user_id)
 
 
 CONFIG: dict = {}
@@ -334,6 +373,7 @@ def initialize_runtime(
     ensure_downloads_dir: bool = True,
 ) -> dict:
     """Load runtime configuration and update exported globals in place."""
+    global RUNTIME_SERVICES
 
     loaded_config = load_config(
         config_file_path=config_file_path,
@@ -341,7 +381,8 @@ def initialize_runtime(
         load_env_file=load_env_file,
         ensure_downloads_dir=ensure_downloads_dir,
     )
-    loaded_users = load_authorized_users()
+    RUNTIME_SERVICES = build_runtime_services()
+    loaded_users = get_authorized_users_repository().load()
 
     CONFIG.clear()
     CONFIG.update(loaded_config)

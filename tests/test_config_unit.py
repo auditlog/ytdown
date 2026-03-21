@@ -111,3 +111,24 @@ def test_initialize_runtime_updates_exported_globals_in_place(tmp_path):
     assert config.authorized_users is original_users
     assert config.BOT_TOKEN == "file_token"
     assert config.PIN_CODE == "87654321"
+
+
+def test_initialize_runtime_refreshes_runtime_services_paths(tmp_path, monkeypatch):
+    cfg = tmp_path / "api_key.md"
+    users_file = tmp_path / "authorized_users.json"
+    history_file = tmp_path / "download_history.json"
+    _write_file(cfg, "TELEGRAM_BOT_TOKEN=file_token\nPIN_CODE=87654321")
+
+    monkeypatch.setattr(config, "AUTHORIZED_USERS_FILE", str(users_file))
+    monkeypatch.setattr(config, "DOWNLOAD_HISTORY_FILE", str(history_file))
+
+    config.initialize_runtime(
+        config_file_path=str(cfg),
+        env={},
+        load_env_file=False,
+        ensure_downloads_dir=False,
+    )
+
+    services = config.get_runtime_services()
+    assert services.authorized_users_repository.path == str(users_file)
+    assert services.download_history_repository.path == str(history_file)
