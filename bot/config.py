@@ -10,12 +10,15 @@ Handles loading and validation of configuration from various sources:
 
 import os
 import re
-import json
-import shutil
 import logging
 import threading
 from datetime import datetime
 from collections.abc import Mapping
+from bot.repositories import (
+    AuthorizedUsersRepository,
+    DownloadHistoryRepository,
+    DownloadRecord,
+)
 
 # Configuration file path
 CONFIG_FILE_PATH = "api_key.md"
@@ -197,18 +200,8 @@ def load_authorized_users():
     Returns:
         set: Set of user_id for authorized users
     """
-    try:
-        if os.path.exists(AUTHORIZED_USERS_FILE):
-            with open(AUTHORIZED_USERS_FILE, 'r') as f:
-                data = json.load(f)
-                return set(int(user_id) for user_id in data.get('authorized_users', []))
-        else:
-            logging.info(f"File {AUTHORIZED_USERS_FILE} does not exist. Creating new.")
-            return set()
-    except (json.JSONDecodeError, ValueError, IOError) as e:
-        logging.warning(f"Error loading {AUTHORIZED_USERS_FILE}: {e}")
-        logging.warning("Using empty authorized users list.")
-        return set()
+    repository = AuthorizedUsersRepository(AUTHORIZED_USERS_FILE, lock=_auth_lock)
+    return repository.load()
 
 
 def save_authorized_users(authorized_users_set):
@@ -218,28 +211,8 @@ def save_authorized_users(authorized_users_set):
     Args:
         authorized_users_set: Set of authorized user IDs
     """
-    try:
-        data = {
-            'authorized_users': [str(user_id) for user_id in authorized_users_set],
-            'last_updated': datetime.now().isoformat(),
-            'version': '1.0'
-        }
-
-        # Write to temp file then move (atomic write)
-        temp_file = AUTHORIZED_USERS_FILE + '.tmp'
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2)
-
-        shutil.move(temp_file, AUTHORIZED_USERS_FILE)
-
-        # Set secure permissions (Unix only)
-        if hasattr(os, 'chmod'):
-            os.chmod(AUTHORIZED_USERS_FILE, 0o600)
-
-        logging.debug(f"Saved {len(authorized_users_set)} authorized users to {AUTHORIZED_USERS_FILE}")
-
-    except (IOError, OSError) as e:
-        logging.error(f"Error saving {AUTHORIZED_USERS_FILE}: {e}")
+    repository = AuthorizedUsersRepository(AUTHORIZED_USERS_FILE, lock=_auth_lock)
+    repository.save(authorized_users_set)
 
 
 # Path to download history file
@@ -249,10 +222,10 @@ DOWNLOAD_HISTORY_FILE = "download_history.json"
 MAX_HISTORY_ENTRIES = 500
 
 # Lock for thread-safe history operations
-_history_lock = threading.Lock()
+_history_lock = threading.RLock()
 
 # Lock for thread-safe authorized users operations
-_auth_lock = threading.Lock()
+_auth_lock = threading.RLock()
 
 
 def load_download_history():
@@ -262,16 +235,12 @@ def load_download_history():
     Returns:
         list: List of download records
     """
-    try:
-        if os.path.exists(DOWNLOAD_HISTORY_FILE):
-            with open(DOWNLOAD_HISTORY_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                return data.get('downloads', [])
-        else:
-            return []
-    except (json.JSONDecodeError, ValueError, IOError) as e:
-        logging.warning(f"Error loading {DOWNLOAD_HISTORY_FILE}: {e}")
-        return []
+    repository = DownloadHistoryRepository(
+        DOWNLOAD_HISTORY_FILE,
+        max_entries=MAX_HISTORY_ENTRIES,
+        lock=_history_lock,
+    )
+    return repository.load()
 
 
 def save_download_history(history):
@@ -281,26 +250,12 @@ def save_download_history(history):
     Args:
         history: List of download records
     """
-    try:
-        # Keep only the last MAX_HISTORY_ENTRIES
-        if len(history) > MAX_HISTORY_ENTRIES:
-            history = history[-MAX_HISTORY_ENTRIES:]
-
-        data = {
-            'downloads': history,
-            'last_updated': datetime.now().isoformat(),
-            'version': '1.0'
-        }
-
-        temp_file = DOWNLOAD_HISTORY_FILE + '.tmp'
-        with open(temp_file, 'w', encoding='utf-8') as f:
-            json.dump(data, f, indent=2, ensure_ascii=False)
-
-        shutil.move(temp_file, DOWNLOAD_HISTORY_FILE)
-        logging.debug(f"Saved {len(history)} download records to {DOWNLOAD_HISTORY_FILE}")
-
-    except (IOError, OSError) as e:
-        logging.error(f"Error saving {DOWNLOAD_HISTORY_FILE}: {e}")
+    repository = DownloadHistoryRepository(
+        DOWNLOAD_HISTORY_FILE,
+        max_entries=MAX_HISTORY_ENTRIES,
+        lock=_history_lock,
+    )
+    repository.save(history)
 
 
 def add_download_record(
@@ -323,31 +278,27 @@ def add_download_record(
         selected_format: Raw format string passed to yt-dlp (optional)
         error_message: Error description when status is "failure" (optional)
     """
-    record = {
-        'timestamp': datetime.now().isoformat(),
-        'user_id': user_id,
-        'title': title,
-        'url': url,
-        'format': format_type,
-        'status': status,
-    }
-
-    if file_size_mb is not None:
-        record['file_size_mb'] = round(file_size_mb, 2)
-
-    if time_range:
-        record['time_range'] = f"{time_range.get('start', '0:00')}-{time_range.get('end', 'end')}"
-
-    if selected_format:
-        record['selected_format'] = selected_format
-
-    if error_message:
-        record['error_message'] = str(error_message)[:200]
-
-    with _history_lock:
-        history = load_download_history()
-        history.append(record)
-        save_download_history(history)
+    repository = DownloadHistoryRepository(
+        DOWNLOAD_HISTORY_FILE,
+        max_entries=MAX_HISTORY_ENTRIES,
+        lock=_history_lock,
+    )
+    record = DownloadRecord(
+        timestamp=datetime.now().isoformat(),
+        user_id=user_id,
+        title=title,
+        url=url,
+        format=format_type,
+        status=status,
+        file_size_mb=round(file_size_mb, 2) if file_size_mb is not None else None,
+        time_range=(
+            f"{time_range.get('start', '0:00')}-{time_range.get('end', 'end')}"
+            if time_range else None
+        ),
+        selected_format=selected_format,
+        error_message=str(error_message)[:200] if error_message else None,
+    )
+    repository.append(record)
 
 
 def get_download_stats(user_id=None):
@@ -360,33 +311,12 @@ def get_download_stats(user_id=None):
     Returns:
         dict: Statistics dictionary
     """
-    with _history_lock:
-        history = load_download_history()
-
-    if user_id:
-        history = [h for h in history if h.get('user_id') == user_id]
-
-    total_downloads = len(history)
-    total_size = sum(h.get('file_size_mb', 0) for h in history)
-
-    # Count by format
-    format_counts = {}
-    for h in history:
-        fmt = h.get('format', 'unknown')
-        format_counts[fmt] = format_counts.get(fmt, 0) + 1
-
-    # Count by status (old records without status default to "success")
-    success_count = sum(1 for h in history if h.get('status', 'success') == 'success')
-    failure_count = sum(1 for h in history if h.get('status', 'success') == 'failure')
-
-    return {
-        'total_downloads': total_downloads,
-        'total_size_mb': round(total_size, 2),
-        'format_counts': format_counts,
-        'success_count': success_count,
-        'failure_count': failure_count,
-        'recent': history[-10:][::-1] if history else []  # Last 10, newest first
-    }
+    repository = DownloadHistoryRepository(
+        DOWNLOAD_HISTORY_FILE,
+        max_entries=MAX_HISTORY_ENTRIES,
+        lock=_history_lock,
+    )
+    return repository.stats(user_id=user_id)
 
 
 CONFIG: dict = {}
