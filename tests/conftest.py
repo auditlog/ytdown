@@ -106,10 +106,11 @@ def reset_module_state():
     # Reset security module state
     try:
         from bot import security
-        from bot.session_store import session_store
+        from bot.session_store import security_store, session_store
         security.failed_attempts.clear()
         security.block_until.clear()
         security.user_requests.clear()
+        security_store.reset()
         session_store.reset()
     except ImportError:
         pass
@@ -119,10 +120,11 @@ def reset_module_state():
     # Cleanup after test
     try:
         from bot import security
-        from bot.session_store import session_store
+        from bot.session_store import security_store, session_store
         security.failed_attempts.clear()
         security.block_until.clear()
         security.user_requests.clear()
+        security_store.reset()
         session_store.reset()
     except ImportError:
         pass

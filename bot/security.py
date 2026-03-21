@@ -12,7 +12,16 @@ from typing import DefaultDict
 from urllib.parse import urlparse, parse_qs
 
 from bot.config import authorized_users, save_authorized_users, _auth_lock
-from bot.session_store import user_playlist_data, user_time_ranges, user_urls
+from bot.session_store import (
+    SecurityRuntimeState,
+    block_until,
+    failed_attempts,
+    security_store,
+    user_playlist_data,
+    user_requests,
+    user_time_ranges,
+    user_urls,
+)
 
 
 # Maximum failed attempts before blocking
@@ -71,33 +80,19 @@ class SecurityState:
     block_until: DefaultDict[int, float]
     user_requests: DefaultDict[int, list[float]]
 
-
-def _new_state() -> SecurityState:
-    """Create a new empty security state."""
-
-    return SecurityState(
-        failed_attempts=defaultdict(int),
-        block_until=defaultdict(float),
-        user_requests=defaultdict(list),
-    )
-
-
-_security_state = _new_state()
-
-# Public aliases kept for backward compatibility and test patchability.
-failed_attempts = _security_state.failed_attempts
-block_until = _security_state.block_until
-user_requests = _security_state.user_requests
-
-
 def get_security_state() -> SecurityState:
     """Returns an isolated copy of the active state."""
 
+    snapshot = security_store.snapshot()
     return SecurityState(
-        failed_attempts=defaultdict(int, failed_attempts),
-        block_until=defaultdict(float, block_until),
+        failed_attempts=defaultdict(int, {
+            user_id: state.failed_attempts for user_id, state in snapshot.items()
+        }),
+        block_until=defaultdict(float, {
+            user_id: state.block_until for user_id, state in snapshot.items()
+        }),
         user_requests=defaultdict(list, {
-            user_id: list(values) for user_id, values in user_requests.items()
+            user_id: list(state.user_requests) for user_id, state in snapshot.items()
         }),
     )
 
@@ -105,22 +100,23 @@ def get_security_state() -> SecurityState:
 def set_security_state(state: SecurityState) -> SecurityState:
     """Replace active state values with values from provided state object."""
 
-    failed_attempts.clear()
-    block_until.clear()
-    user_requests.clear()
+    next_state = {}
+    for user_id in set(state.failed_attempts) | set(state.block_until) | set(state.user_requests):
+        next_state[user_id] = SecurityRuntimeState(
+            failed_attempts=state.failed_attempts.get(user_id, 0),
+            block_until=state.block_until.get(user_id, 0.0),
+            user_requests=list(state.user_requests.get(user_id, [])),
+        )
 
-    failed_attempts.update(state.failed_attempts)
-    block_until.update(state.block_until)
-    user_requests.update({
-        user_id: list(values) for user_id, values in state.user_requests.items()
-    })
+    security_store.replace(next_state)
     return get_security_state()
 
 
 def reset_security_state() -> SecurityState:
     """Clears and returns a fresh security state."""
 
-    return set_security_state(_new_state())
+    security_store.reset()
+    return get_security_state()
 
 
 def check_rate_limit(
