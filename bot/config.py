@@ -416,5 +416,27 @@ def get_runtime_authorized_users() -> set[int]:
     return authorized_users
 
 
+def add_runtime_authorized_user(user_id: int) -> bool:
+    """Add one authorized user to runtime state and persist it."""
+
+    if user_id in authorized_users:
+        return False
+
+    authorized_users.add(user_id)
+    save_authorized_users(authorized_users)
+    return True
+
+
+def remove_runtime_authorized_user(user_id: int) -> bool:
+    """Remove one authorized user from runtime state and persist it."""
+
+    if user_id not in authorized_users:
+        return False
+
+    authorized_users.discard(user_id)
+    save_authorized_users(authorized_users)
+    return True
+
+
 # Initialize runtime state on module load for backward compatibility.
 initialize_runtime()

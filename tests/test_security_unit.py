@@ -7,36 +7,34 @@ from bot import security
 
 
 def test_manage_authorized_user_add_remove(monkeypatch):
-    monkeypatch.setattr(security, "save_authorized_users", lambda users: None)
+    authorized_users = set()
+    monkeypatch.setattr(
+        security,
+        "add_runtime_authorized_user",
+        lambda user_id: False if user_id in authorized_users else not authorized_users.add(user_id),
+    )
+    monkeypatch.setattr(
+        security,
+        "remove_runtime_authorized_user",
+        lambda user_id: False if user_id not in authorized_users else not authorized_users.remove(user_id),
+    )
 
-    original = set(security.authorized_users)
-    try:
-        security.authorized_users = set()
+    assert security.manage_authorized_user(1001, "add") is True
+    assert 1001 in authorized_users
 
-        assert security.manage_authorized_user(1001, "add") is True
-        assert 1001 in security.authorized_users
+    # Adding the same user twice should remain idempotent
+    assert security.manage_authorized_user(1001, "add") is True
+    assert list(authorized_users).count(1001) == 1
 
-        # Adding the same user twice should remain idempotent
-        assert security.manage_authorized_user(1001, "add") is True
-        assert list(security.authorized_users).count(1001) == 1
+    assert security.manage_authorized_user(1001, "remove") is True
+    assert 1001 not in authorized_users
 
-        assert security.manage_authorized_user(1001, "remove") is True
-        assert 1001 not in security.authorized_users
-
-        assert security.manage_authorized_user(1001, "remove") is True
-        assert 1001 not in security.authorized_users
-    finally:
-        security.authorized_users = original
+    assert security.manage_authorized_user(1001, "remove") is True
+    assert 1001 not in authorized_users
 
 
 def test_manage_authorized_user_unknown_action(monkeypatch):
-    monkeypatch.setattr(security, "save_authorized_users", lambda users: None)
-    original = set(security.authorized_users)
-    try:
-        security.authorized_users = set()
-        assert security.manage_authorized_user(1002, "invalid") is False
-    finally:
-        security.authorized_users = original
+    assert security.manage_authorized_user(1002, "invalid") is False
 
 
 def test_check_rate_limit_resets_old_requests():

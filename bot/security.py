@@ -11,7 +11,11 @@ from dataclasses import dataclass
 from typing import DefaultDict
 from urllib.parse import urlparse, parse_qs
 
-from bot.config import authorized_users, save_authorized_users, _auth_lock
+from bot.config import (
+    _auth_lock,
+    add_runtime_authorized_user,
+    remove_runtime_authorized_user,
+)
 from bot.session_store import (
     SecurityRuntimeState,
     block_until,
@@ -371,18 +375,14 @@ def manage_authorized_user(user_id, action='add'):
     try:
         with _auth_lock:
             if action == 'add':
-                if user_id not in authorized_users:
-                    authorized_users.add(user_id)
-                    save_authorized_users(authorized_users)
+                if add_runtime_authorized_user(user_id):
                     logging.info(f"Added user {user_id} to authorized")
                     return True
                 logging.info(f"User {user_id} is already authorized")
                 return True
 
             if action == 'remove':
-                if user_id in authorized_users:
-                    authorized_users.discard(user_id)
-                    save_authorized_users(authorized_users)
+                if remove_runtime_authorized_user(user_id):
                     logging.info(f"Removed user {user_id} from authorized")
                     return True
                 logging.info(f"User {user_id} was not authorized")

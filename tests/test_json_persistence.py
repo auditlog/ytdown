@@ -24,7 +24,6 @@ def test_json_persistence():
     )
     from bot.security import manage_authorized_user
     import bot.config as config_module
-    import bot.security as security_module
 
     print("🧪 Testowanie JSON persistence...")
 
@@ -35,11 +34,9 @@ def test_json_persistence():
     # Override the file path for testing
     config_module.AUTHORIZED_USERS_FILE = test_file
 
-    # Also reset the global authorized_users set in both modules
+    # Reset the runtime authorized users set used by config/runtime helpers
     original_config_users = config_module.authorized_users.copy()
-    original_security_users = security_module.authorized_users
     config_module.authorized_users = set()
-    security_module.authorized_users = config_module.authorized_users
 
     try:
         # Test 1: Loading empty file
@@ -83,9 +80,8 @@ def test_json_persistence():
         # Test 5: manage_authorized_user function
         print("\n5. Test funkcji manage_authorized_user...")
 
-        # Set the global authorized_users to match our test state (both modules)
+        # Set runtime authorized users to match our test state
         config_module.authorized_users = test_users.copy()
-        security_module.authorized_users = config_module.authorized_users
 
         # Add new user
         result = manage_authorized_user(333444, 'add')
@@ -133,7 +129,6 @@ def test_json_persistence():
         # Restore original state in both modules
         config_module.AUTHORIZED_USERS_FILE = original_file
         config_module.authorized_users = original_config_users
-        security_module.authorized_users = original_security_users
 
 if __name__ == "__main__":
     test_json_persistence()
