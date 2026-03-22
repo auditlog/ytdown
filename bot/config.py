@@ -362,6 +362,8 @@ CONFIG: dict = {}
 BOT_TOKEN = ""
 PIN_CODE = ""
 ADMIN_CHAT_ID = ""
+# Legacy bootstrap cache kept for compatibility when code paths run without an
+# attached AppRuntime. Runtime-aware handlers should prefer bot.runtime helpers.
 authorized_users: set[int] = set()
 
 

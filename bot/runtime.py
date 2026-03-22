@@ -1,4 +1,13 @@
-"""Application runtime container built during bootstrap."""
+"""Application runtime container built during bootstrap.
+
+Ownership contract:
+- configuration values that handlers/services need at runtime are read through
+  the attached ``AppRuntime`` when available,
+- authorized user membership belongs to runtime state plus the repository
+  behind it,
+- chat-scoped flow state belongs to ``SessionStore``; ``context.user_data``
+  remains only a compatibility bridge for Telegram-specific behavior.
+"""
 
 from __future__ import annotations
 
@@ -70,6 +79,55 @@ def get_app_runtime(source: Any) -> AppRuntime | None:
             return app_bot_data.get(RUNTIME_KEY)
 
     return None
+
+
+def get_authorized_user_ids_for(source: Any) -> set[int]:
+    """Return the active authorized user set for a runtime-aware caller."""
+
+    runtime = get_app_runtime(source)
+    if runtime is not None:
+        return runtime.authorized_users_set
+    return get_runtime_authorized_users()
+
+
+def add_authorized_user_for(source: Any, user_id: int) -> bool:
+    """Authorize one user through runtime state when available."""
+
+    runtime = get_app_runtime(source)
+    if runtime is None:
+        authorized_users = get_runtime_authorized_users()
+        if user_id in authorized_users:
+            return False
+        authorized_users.add(user_id)
+        get_authorized_users_repository().save(authorized_users)
+        return True
+
+    if user_id in runtime.authorized_users_set:
+        return False
+
+    runtime.authorized_users_set.add(user_id)
+    runtime.authorized_users_repository.save(runtime.authorized_users_set)
+    return True
+
+
+def remove_authorized_user_for(source: Any, user_id: int) -> bool:
+    """Remove one authorized user through runtime state when available."""
+
+    runtime = get_app_runtime(source)
+    if runtime is None:
+        authorized_users = get_runtime_authorized_users()
+        if user_id not in authorized_users:
+            return False
+        authorized_users.discard(user_id)
+        get_authorized_users_repository().save(authorized_users)
+        return True
+
+    if user_id not in runtime.authorized_users_set:
+        return False
+
+    runtime.authorized_users_set.discard(user_id)
+    runtime.authorized_users_repository.save(runtime.authorized_users_set)
+    return True
 
 
 def get_download_stats_for(source: Any, user_id: int | None = None) -> dict:

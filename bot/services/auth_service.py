@@ -1,4 +1,10 @@
-"""Authentication service for PIN-based Telegram access control."""
+"""Authentication service for PIN-based Telegram access control.
+
+The service operates on a mutable auth/session mapping supplied by the
+Telegram layer. In runtime-aware handlers this mapping is backed by
+``SessionStore`` and only mirrors to ``context.user_data`` when compatibility
+requires it.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +23,7 @@ from bot.security import (
 
 @dataclass
 class PendingAction:
-    """Deferred post-login action stored in Telegram user_data."""
+    """Deferred post-login action stored in auth/session state."""
 
     kind: str
     payload: Any

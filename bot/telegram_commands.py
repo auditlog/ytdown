@@ -20,7 +20,6 @@ from datetime import datetime
 from bot.config import (
     DOWNLOAD_PATH,
     get_download_stats,
-    get_runtime_authorized_users,
     get_runtime_value,
 )
 from bot.security import (
@@ -42,7 +41,6 @@ from bot.security import (
     detect_platform,
     normalize_url,
     get_media_label,
-    manage_authorized_user,
     estimate_file_size,
     is_user_blocked,
     get_block_remaining_seconds,
@@ -74,7 +72,12 @@ from bot.services.spotify_service import (
     get_resolution_error_message,
     resolve_episode,
 )
-from bot.runtime import get_app_runtime
+from bot.runtime import (
+    add_authorized_user_for,
+    get_app_runtime,
+    get_authorized_user_ids_for,
+    remove_authorized_user_for,
+)
 
 
 def escape_md(text: str) -> str:
@@ -180,10 +183,7 @@ def _is_admin(user_id: int) -> bool:
 def _get_authorized_user_ids(context: ContextTypes.DEFAULT_TYPE) -> set[int]:
     """Return authorized users from runtime when available."""
 
-    runtime = get_app_runtime(context)
-    if runtime is not None:
-        return runtime.authorized_users_set
-    return get_runtime_authorized_users()
+    return get_authorized_user_ids_for(context)
 
 
 def _is_authorized(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
@@ -604,7 +604,7 @@ async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         authorized_user_ids=_get_authorized_user_ids(context),
         attempts=failed_attempts,
         block_map=block_until,
-        authorize_user=lambda auth_user_id: manage_authorized_user(auth_user_id, 'add'),
+        authorize_user=lambda auth_user_id: add_authorized_user_for(context, auth_user_id),
         max_attempts=MAX_ATTEMPTS,
         block_time=BLOCK_TIME,
     )
@@ -650,7 +650,7 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_id=user_id,
         chat_id=chat_id,
         authorized_user_ids=_get_authorized_user_ids(context),
-        remove_authorized_user=lambda auth_user_id: manage_authorized_user(auth_user_id, 'remove'),
+        remove_authorized_user=lambda auth_user_id: remove_authorized_user_for(context, auth_user_id),
         user_data=_get_auth_state(context, chat_id),
         user_urls=user_urls,
         user_time_ranges=user_time_ranges,

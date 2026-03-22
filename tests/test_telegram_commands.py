@@ -12,6 +12,8 @@ from datetime import datetime, timedelta
 from unittest.mock import Mock, AsyncMock
 
 from bot import telegram_commands as tc
+from bot.runtime import AppRuntime
+from bot.session_store import SessionStore, SecurityStore
 
 
 def _set_runtime_values(monkeypatch, **values):
@@ -19,7 +21,7 @@ def _set_runtime_values(monkeypatch, **values):
 
 
 def _set_authorized_users(monkeypatch, users):
-    monkeypatch.setattr(tc, "get_runtime_authorized_users", lambda: users)
+    monkeypatch.setattr(tc, "get_authorized_user_ids_for", lambda *_args, **_kwargs: users)
 
 
 def _async(coro):
@@ -45,6 +47,21 @@ def _make_context():
     context.user_data = {}
     context.bot = Mock()
     return context
+
+
+def _attach_runtime(context, *, authorized_users=None):
+    runtime = AppRuntime(
+        config={},
+        session_store=SessionStore(),
+        security_store=SecurityStore(),
+        services=Mock(),
+        authorized_users_repository=Mock(),
+        download_history_repository=Mock(),
+        authorized_users_set=set() if authorized_users is None else set(authorized_users),
+    )
+    context.application = Mock()
+    context.application.bot_data = {"app_runtime": runtime}
+    return runtime
 
 
 class TestStart:
@@ -98,7 +115,7 @@ class TestHandlePin:
         _set_runtime_values(monkeypatch, PIN_CODE="12345678")
         _set_authorized_users(monkeypatch, set())
         monkeypatch.setattr(tc, "failed_attempts", defaultdict(int))
-        monkeypatch.setattr(tc, "manage_authorized_user", lambda *args, **kwargs: True)
+        monkeypatch.setattr(tc, "add_authorized_user_for", lambda *_args, **_kwargs: True)
 
         called = {}
 
@@ -118,6 +135,22 @@ class TestHandlePin:
             "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
             "aby pobrać film lub audio."
         )
+
+    def test_handle_pin_uses_runtime_authorized_store(self, monkeypatch):
+        update = _make_update(text="12345678", user_id=222, chat_id=222)
+        context = _make_context()
+        runtime = _attach_runtime(context, authorized_users=set())
+        runtime.session_store.set_field(222, "awaiting_pin", True)
+
+        _set_runtime_values(monkeypatch, PIN_CODE="12345678")
+        monkeypatch.setattr(tc, "failed_attempts", defaultdict(int))
+
+        handled = _async(tc.handle_pin(update, context))
+
+        assert handled is True
+        assert 222 in runtime.authorized_users_set
+        assert runtime.authorized_users_repository.save.call_count == 1
+        assert runtime.session_store.get_field(222, "awaiting_pin") is None
 
     def test_handle_pin_rejects_wrong_pin_and_increments_attempts(self, monkeypatch):
         update = _make_update(text="00000000", user_id=222)
