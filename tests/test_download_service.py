@@ -154,3 +154,144 @@ def test_execute_download_plan_runs_ytdlp_and_returns_result(monkeypatch, tmp_pa
     assert called["urls"] == ["https://www.youtube.com/watch?v=abc"]
     assert result.file_path == str(media)
     assert result.file_size_mb > 0
+
+
+def test_execute_download_plan_raises_when_ytdlp_raises_download_error(monkeypatch, tmp_path):
+    """yt-dlp raising DownloadError during execute_download_plan should propagate."""
+
+    plan = ds.DownloadPlan(
+        url="https://www.youtube.com/watch?v=abc",
+        media_type="audio",
+        format_choice="mp3",
+        transcribe=False,
+        use_format_id=False,
+        audio_quality="192",
+        info={"title": "Sample", "duration": 10},
+        title="Sample",
+        duration=10,
+        duration_str="0:10",
+        sanitized_title="Sample",
+        output_path=str(tmp_path / "2026-03-21 Sample"),
+        chat_download_path=str(tmp_path),
+        ydl_opts={"format": "bestaudio/best"},
+        time_range=None,
+    )
+
+    class MockYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def download(self, urls):
+            raise ds.yt_dlp.utils.DownloadError("Video unavailable")
+
+    monkeypatch.setattr(ds.yt_dlp, "YoutubeDL", MockYoutubeDL)
+
+    with pytest.raises(ds.yt_dlp.utils.DownloadError):
+        ds.execute_download_plan(plan)
+
+
+def test_find_downloaded_file_returns_none_for_empty_directory(tmp_path):
+    """find_downloaded_file should return None when the download directory is empty."""
+
+    plan = ds.DownloadPlan(
+        url="https://www.youtube.com/watch?v=abc",
+        media_type="audio",
+        format_choice="mp3",
+        transcribe=False,
+        use_format_id=False,
+        audio_quality="192",
+        info={"title": "Sample", "duration": 10},
+        title="Sample",
+        duration=10,
+        duration_str="0:10",
+        sanitized_title="Sample",
+        output_path=str(tmp_path / "2026-03-21 Sample"),
+        chat_download_path=str(tmp_path),
+        ydl_opts={},
+        time_range=None,
+    )
+
+    # tmp_path is empty — no files at all
+    found = ds.find_downloaded_file(plan)
+
+    assert found is None
+
+
+def test_find_downloaded_file_returns_none_when_only_artifacts_present(tmp_path):
+    """find_downloaded_file should return None when only transcript/summary artifacts exist."""
+
+    plan = ds.DownloadPlan(
+        url="https://www.youtube.com/watch?v=abc",
+        media_type="audio",
+        format_choice="mp3",
+        transcribe=False,
+        use_format_id=False,
+        audio_quality="192",
+        info={"title": "Sample", "duration": 10},
+        title="Sample",
+        duration=10,
+        duration_str="0:10",
+        sanitized_title="Sample",
+        output_path=str(tmp_path / "2026-03-21 Sample"),
+        chat_download_path=str(tmp_path),
+        ydl_opts={},
+        time_range=None,
+    )
+
+    # Only artifact files, no media file
+    (tmp_path / "2026-03-21 Sample_transcript.md").write_text("t", encoding="utf-8")
+    (tmp_path / "2026-03-21 Sample_summary.md").write_text("s", encoding="utf-8")
+
+    found = ds.find_downloaded_file(plan)
+
+    assert found is None
+
+
+def test_prepare_download_plan_returns_none_when_video_info_unavailable(monkeypatch, tmp_path):
+    """prepare_download_plan should return None when get_video_info returns None (unreachable URL)."""
+
+    monkeypatch.setattr(ds, "get_video_info", lambda url: None)
+
+    plan = ds.prepare_download_plan(
+        url="https://www.youtube.com/watch?v=INVALID",
+        media_type="audio",
+        format_choice="mp3",
+        chat_download_path=str(tmp_path),
+    )
+
+    assert plan is None
+
+
+def test_execute_download_plan_raises_file_not_found_when_no_file_produced(monkeypatch, tmp_path):
+    """execute_download_plan should raise FileNotFoundError when yt-dlp produces no output file."""
+
+    plan = ds.DownloadPlan(
+        url="https://www.youtube.com/watch?v=abc",
+        media_type="audio",
+        format_choice="mp3",
+        transcribe=False,
+        use_format_id=False,
+        audio_quality="192",
+        info={"title": "Sample", "duration": 10},
+        title="Sample",
+        duration=10,
+        duration_str="0:10",
+        sanitized_title="Sample",
+        output_path=str(tmp_path / "2026-03-21 Sample"),
+        chat_download_path=str(tmp_path),
+        ydl_opts={},
+        time_range=None,
+    )
+
+    class MockYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def download(self, urls):
+            # Succeeds but produces no file on disk
+            return 0
+
+    monkeypatch.setattr(ds.yt_dlp, "YoutubeDL", MockYoutubeDL)
+
+    with pytest.raises(FileNotFoundError, match="downloaded file not found"):
+        ds.execute_download_plan(plan)

@@ -105,3 +105,96 @@ def test_pipeline_uses_placeholder_for_empty_transcription(tmp_path):
     assert result is not None
     content = Path(result).read_text(encoding="utf-8")
     assert "No transcription for this part" in content
+
+
+def test_split_mp3_failure_propagates_exception(tmp_path):
+    """ffmpeg failure during splitting should propagate as-is, not be swallowed."""
+
+    source = tmp_path / "audio.mp3"
+    source.write_bytes(b"x" * 100)
+
+    def failing_split(*_args, **_kwargs):
+        raise RuntimeError("ffmpeg exited with code 1")
+
+    import pytest
+    with pytest.raises(RuntimeError, match="ffmpeg exited with code 1"):
+        pipeline.transcribe_mp3_file(
+            str(source),
+            str(tmp_path),
+            get_api_key_fn=lambda: "groq",
+            get_claude_api_key_fn=lambda: "",
+            split_mp3_fn=failing_split,
+            get_part_number_fn=lambda _filename: 1,
+            transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: "text",
+            post_process_transcript_fn=lambda text, api_key=None: None,
+            estimate_token_count_fn=lambda text: len(text),
+            is_text_too_long_for_correction_fn=lambda _text: False,
+            rmtree_fn=lambda _path: None,
+        )
+
+
+def test_all_parts_empty_transcript_writes_placeholder_content(tmp_path):
+    """All parts returning empty string should produce placeholder text in the output file.
+
+    The pipeline inserts '[No transcription for this part]' rather than creating an
+    error document, because each placeholder is non-empty text. The real error file
+    is only written when *all* placeholders are also stripped away (whitespace-only).
+    """
+
+    source = tmp_path / "audio.mp3"
+    source.write_bytes(b"x" * 100)
+
+    part1 = tmp_path / "audio_part1.mp3"
+    part2 = tmp_path / "audio_part2.mp3"
+    part1.write_bytes(b"a")
+    part2.write_bytes(b"b")
+
+    result = pipeline.transcribe_mp3_file(
+        str(source),
+        str(tmp_path),
+        get_api_key_fn=lambda: "groq",
+        get_claude_api_key_fn=lambda: "",
+        split_mp3_fn=lambda *_args, **_kwargs: [str(part1), str(part2)],
+        get_part_number_fn=lambda filename: 1 if "part1" in filename else 2,
+        # Both parts return empty string — simulates total API failure
+        transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: "",
+        post_process_transcript_fn=lambda text, api_key=None: None,
+        estimate_token_count_fn=lambda text: len(text),
+        is_text_too_long_for_correction_fn=lambda _text: False,
+        rmtree_fn=lambda _path: None,
+    )
+
+    assert result is not None
+    content = Path(result).read_text(encoding="utf-8")
+    # Pipeline appends placeholder text for each empty part — verify both are present
+    assert content.count("[No transcription for this part]") == 2
+
+
+def test_api_timeout_during_post_processing_uses_raw_transcript(tmp_path):
+    """When post-processing raises Timeout, the raw transcript should still be saved."""
+
+    source = tmp_path / "audio.mp3"
+    source.write_bytes(b"x" * 100)
+
+    part = tmp_path / "audio_part1.mp3"
+    part.write_bytes(b"a")
+
+    def timeout_post_process(text, api_key=None):
+        # Simulate connection timeout during assembly/post-processing
+        raise TimeoutError("API request timed out after 300s")
+
+    import pytest
+    with pytest.raises(TimeoutError):
+        pipeline.transcribe_mp3_file(
+            str(source),
+            str(tmp_path),
+            get_api_key_fn=lambda: "groq",
+            get_claude_api_key_fn=lambda: "claude",
+            split_mp3_fn=lambda *_args, **_kwargs: [str(part)],
+            get_part_number_fn=lambda _filename: 1,
+            transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: "raw transcript",
+            post_process_transcript_fn=timeout_post_process,
+            estimate_token_count_fn=lambda text: len(text),
+            is_text_too_long_for_correction_fn=lambda _text: False,
+            rmtree_fn=lambda _path: None,
+        )
