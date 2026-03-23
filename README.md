@@ -372,7 +372,7 @@ ytdown/
 │       ├── spotify_service.py      # Resolving odcinków Spotify (iTunes/YouTube)
 │       └── transcription_service.py # Artefakty transkrypcji i podsumowań
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~460 testów)
+├── tests/                          # Testy (~461 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
@@ -384,6 +384,7 @@ ytdown/
 │   ├── test_callback_common.py     # Testy routera callbacków, rate limit, sesji
 │   ├── test_callback_download_handlers.py # Testy pobierania, playlist, time range
 │   ├── test_callback_transcription_handlers.py # Testy transkrypcji, napisów, Spotify
+│   ├── test_telegram_integration.py # Testy integracyjne cross-module (PIN→URL, callback routing)
 │   ├── test_auth_service.py        # Testy auth service (PIN, logout)
 │   ├── test_runtime.py             # Testy runtime auth helperów
 │   ├── test_session_store.py       # Testy SessionStore i session cleanup
