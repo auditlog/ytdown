@@ -148,7 +148,7 @@ class TestGetPlaylistInfo:
             def extract_info(self, url, download=False):
                 return fake_info
 
-        monkeypatch.setattr("bot.downloader.yt_dlp.YoutubeDL", FakeYDL)
+        monkeypatch.setattr("bot.downloader_playlist.yt_dlp.YoutubeDL", FakeYDL)
 
         result = get_playlist_info("https://www.youtube.com/playlist?list=PLtest", max_items=10)
 
@@ -172,7 +172,7 @@ class TestGetPlaylistInfo:
             def extract_info(self, url, download=False):
                 return fake_info
 
-        monkeypatch.setattr("bot.downloader.yt_dlp.YoutubeDL", FakeYDL)
+        monkeypatch.setattr("bot.downloader_playlist.yt_dlp.YoutubeDL", FakeYDL)
 
         result = get_playlist_info("https://www.youtube.com/watch?v=abc")
         assert result is None
@@ -188,7 +188,7 @@ class TestGetPlaylistInfo:
             def extract_info(self, url, download=False):
                 raise Exception("Network error")
 
-        monkeypatch.setattr("bot.downloader.yt_dlp.YoutubeDL", FakeYDL)
+        monkeypatch.setattr("bot.downloader_playlist.yt_dlp.YoutubeDL", FakeYDL)
 
         result = get_playlist_info("https://www.youtube.com/playlist?list=PLtest")
         assert result is None
@@ -214,7 +214,7 @@ class TestGetPlaylistInfo:
             def extract_info(self, url, download=False):
                 return fake_info
 
-        monkeypatch.setattr("bot.downloader.yt_dlp.YoutubeDL", FakeYDL)
+        monkeypatch.setattr("bot.downloader_playlist.yt_dlp.YoutubeDL", FakeYDL)
 
         result = get_playlist_info("https://www.youtube.com/playlist?list=PLtest")
         assert len(result['entries']) == 2

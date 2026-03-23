@@ -9,150 +9,29 @@ import os
 import re
 from datetime import datetime
 from io import BytesIO
-from urllib.parse import urlparse, parse_qs
 
 import requests
 import yt_dlp
+from bot.downloader_playlist import (
+    get_playlist_info,
+    is_playlist_url,
+    is_pure_playlist_url,
+    strip_playlist_params,
+)
+from bot.downloader_validation import (
+    AUDIO_FORMATS,
+    SUPPORTED_AUDIO_FORMATS,
+    is_valid_audio_format,
+    is_valid_audio_quality,
+    is_valid_ytdlp_format_id,
+    normalize_format_id,
+    parse_time_seconds,
+    sanitize_filename,
+)
 
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
 
 IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
-
-FORMAT_ID_PATTERN = re.compile(r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$|^(?:dash-[\da-zA-Z]+)$|^(?:[\da-zA-Z]+-\d+)$")
-SUPPORTED_AUDIO_FORMATS = ("mp3", "m4a", "wav", "flac", "ogg", "opus")
-AUDIO_FORMATS = set(SUPPORTED_AUDIO_FORMATS)
-
-QUALITY_RANGE_BY_CODEC = {
-    "mp3": (0, 330),
-    "opus": (0, 9),
-    "vorbis": (0, 9),
-    "ogg": (0, 9),
-}
-
-
-def sanitize_filename(filename):
-    """
-    Removes invalid characters from filename.
-
-    Args:
-        filename: Original filename
-
-    Returns:
-        str: Sanitized filename safe for filesystem use
-    """
-    invalid_chars = ['/', '\\', ':', '*', '?', '"', '<', '>', '|']
-    for char in invalid_chars:
-        filename = filename.replace(char, '-')
-    # Remove path traversal sequences
-    filename = filename.replace('..', '')
-    # Remove control characters
-    filename = ''.join(c for c in filename if c.isprintable())
-    # Limit length (preserve extension room)
-    if len(filename) > 200:
-        filename = filename[:200]
-    # Fallback for empty filename
-    if not filename.strip():
-        filename = "download"
-    return filename.strip()
-
-
-def is_valid_ytdlp_format_id(format_id):
-    """Returns True if format ID is safe and supported by CLI/TG UI flows."""
-
-    if not isinstance(format_id, str):
-        return False
-    normalized = format_id.strip().lower()
-    return bool(FORMAT_ID_PATTERN.fullmatch(normalized))
-
-
-def is_valid_audio_format(audio_format):
-    """Returns True for allowed audio conversion formats."""
-
-    if not isinstance(audio_format, str):
-        return False
-    return audio_format.strip().lower() in AUDIO_FORMATS
-
-
-def is_valid_audio_quality(audio_format, audio_quality):
-    """Returns True when audio quality is supported for selected codec."""
-
-    if not isinstance(audio_format, str):
-        return False
-
-    normalized_format = audio_format.strip().lower()
-    if normalized_format not in SUPPORTED_AUDIO_FORMATS:
-        return False
-
-    if isinstance(audio_quality, bool):
-        return False
-    try:
-        normalized_quality = int(str(audio_quality).strip())
-    except (TypeError, ValueError):
-        return False
-
-    if normalized_quality < 0:
-        return False
-
-    quality_range = QUALITY_RANGE_BY_CODEC.get(normalized_format)
-    if quality_range is None:
-        return True
-
-    min_quality, max_quality = quality_range
-    return min_quality <= normalized_quality <= max_quality
-
-
-def normalize_format_id(format_id, *, default="best"):
-    """Normalizes shortcut/legacy format aliases."""
-
-    if format_id is None:
-        return None
-
-    normalized = format_id.strip().lower()
-    if normalized == "auto":
-        return default
-    return normalized
-
-
-def parse_time_seconds(time_value):
-    """Converts HH:MM:SS, MM:SS, or seconds input into integer seconds."""
-    if time_value is None:
-        return None
-
-    if isinstance(time_value, bool):
-        return None
-    if isinstance(time_value, int):
-        if time_value < 0:
-            return None
-        return time_value
-    if isinstance(time_value, float):
-        if time_value < 0:
-            return None
-        return int(time_value)
-
-    if not isinstance(time_value, str):
-        return None
-
-    time_str = time_value.strip()
-    if not time_str:
-        return None
-
-    parts = time_str.split(':')
-    if len(parts) not in {1, 2, 3}:
-        return None
-
-    try:
-        values = [int(part) for part in parts]
-    except ValueError:
-        return None
-
-    if any(v < 0 for v in values):
-        return None
-
-    if len(parts) == 1:
-        return values[0]
-    if len(parts) == 2:
-        return values[0] * 60 + values[1]
-    return values[0] * 3600 + values[1] * 60 + values[2]
 
 
 def progress_hook(d):
@@ -513,109 +392,6 @@ def parse_subtitle_file(file_path: str) -> str:
         text_lines.append(cleaned)
 
     return '\n'.join(text_lines)
-
-
-def is_playlist_url(url: str) -> bool:
-    """Detects if URL contains a YouTube playlist parameter.
-
-    Returns True for:
-    - youtube.com/playlist?list=XXX (pure playlist)
-    - youtube.com/watch?v=XXX&list=XXX (video in playlist context)
-    - youtu.be/XXX?list=XXX
-    """
-    try:
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-        hostname = (parsed.hostname or '').lower()
-
-        # Only YouTube supports playlists in this bot
-        youtube_hosts = {'youtube.com', 'www.youtube.com', 'm.youtube.com',
-                         'music.youtube.com', 'youtu.be'}
-        if hostname not in youtube_hosts:
-            return False
-
-        return 'list' in params
-    except Exception:
-        return False
-
-
-def is_pure_playlist_url(url: str) -> bool:
-    """Returns True if URL is a pure playlist (no single video selected)."""
-    try:
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query)
-        return 'list' in params and 'v' not in params and parsed.path in ('/', '/playlist')
-    except Exception:
-        return False
-
-
-def strip_playlist_params(url: str) -> str:
-    """Removes playlist parameters from URL, keeping only the video."""
-    try:
-        parsed = urlparse(url)
-        params = parse_qs(parsed.query, keep_blank_values=True)
-        params.pop('list', None)
-        params.pop('index', None)
-
-        # Rebuild query string
-        new_query = '&'.join(f'{k}={v[0]}' for k, v in params.items() if v)
-        return parsed._replace(query=new_query).geturl()
-    except Exception:
-        return url
-
-
-def get_playlist_info(url: str, max_items: int = 10) -> dict | None:
-    """Fetches playlist metadata using flat extraction.
-
-    Args:
-        url: YouTube playlist URL.
-        max_items: Maximum number of entries to fetch.
-
-    Returns:
-        Dict with title, playlist_count, entries list, or None on error.
-    """
-    try:
-        ydl_opts = {
-            'extract_flat': 'in_playlist',
-            'quiet': True,
-            'no_warnings': True,
-            'playlistend': max_items,
-        }
-        if os.path.exists(COOKIES_FILE):
-            ydl_opts['cookiefile'] = COOKIES_FILE
-
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-
-        if not info:
-            return None
-
-        # yt-dlp returns _type='playlist' for playlists
-        if info.get('_type') != 'playlist':
-            return None
-
-        entries = []
-        for entry in (info.get('entries') or []):
-            if entry is None:
-                continue
-            video_id = entry.get('id', '')
-            entries.append({
-                'url': f"https://www.youtube.com/watch?v={video_id}" if video_id else entry.get('url', ''),
-                'title': entry.get('title', 'Nieznany tytuł'),
-                'duration': entry.get('duration'),
-                'id': video_id,
-            })
-
-        return {
-            'title': info.get('title', 'Playlista'),
-            'playlist_count': info.get('playlist_count') or len(entries),
-            'entries': entries,
-        }
-
-    except Exception as e:
-        logging.error("Error getting playlist info: %s", e)
-        return None
-
 
 def _load_instagram_cookies():
     """Loads Instagram session cookies from the cookies file.

@@ -352,7 +352,9 @@ ytdown/
 │   ├── security.py                 # Rate limiting, walidacja URL, bezpieczeństwo
 │   ├── cleanup.py                  # Czyszczenie plików i monitoring dysku
 │   ├── transcription.py            # Transkrypcja (Groq) i podsumowania (Claude)
-│   ├── downloader.py               # Pobieranie mediów z platform (yt-dlp)
+│   ├── downloader.py               # Fasada pobierania mediów (yt-dlp) — re-eksportuje validation/playlist
+│   ├── downloader_validation.py    # Walidacja formatów, parsowanie czasu, sanityzacja nazw plików
+│   ├── downloader_playlist.py      # Wykrywanie i pobieranie metadanych playlist YouTube
 │   ├── spotify.py                  # Rozwiązywanie Spotify podcastów (iTunes/YouTube)
 │   ├── mtproto.py                  # Upload dużych plików przez MTProto (Pyrogram)
 │   ├── cli.py                      # Interfejs wiersza poleceń
