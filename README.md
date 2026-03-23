@@ -380,7 +380,10 @@ ytdown/
 │   ├── test_command_access_handlers.py # Testy auth, PIN, admin, /help, /status
 │   ├── test_inbound_media_handlers.py  # Testy URL intake, audio upload, platformy
 │   ├── test_video_upload_handlers.py   # Testy upload/przetwarzania video
-│   ├── test_telegram_callbacks.py  # Testy callbacków, pobierania
+│   ├── telegram_callbacks_support.py # Wspólne helpery testów callbacków
+│   ├── test_callback_common.py     # Testy routera callbacków, rate limit, sesji
+│   ├── test_callback_download_handlers.py # Testy pobierania, playlist, time range
+│   ├── test_callback_transcription_handlers.py # Testy transkrypcji, napisów, Spotify
 │   ├── test_auth_service.py        # Testy auth service (PIN, logout)
 │   ├── test_runtime.py             # Testy runtime auth helperów
 │   ├── test_session_store.py       # Testy SessionStore i session cleanup
