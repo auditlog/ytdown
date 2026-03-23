@@ -376,7 +376,10 @@ ytdown/
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
-│   ├── test_telegram_commands.py   # Testy komend, powiadomień admina
+│   ├── telegram_commands_support.py # Wspólne helpery testów komend/handlerów
+│   ├── test_command_access_handlers.py # Testy auth, PIN, admin, /help, /status
+│   ├── test_inbound_media_handlers.py  # Testy URL intake, audio upload, platformy
+│   ├── test_video_upload_handlers.py   # Testy upload/przetwarzania video
 │   ├── test_telegram_callbacks.py  # Testy callbacków, pobierania
 │   ├── test_auth_service.py        # Testy auth service (PIN, logout)
 │   ├── test_runtime.py             # Testy runtime auth helperów
