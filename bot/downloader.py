@@ -1,15 +1,12 @@
 """
-Downloader module for YouTube Downloader Telegram Bot.
+Downloader compatibility facade.
 
-Handles video/audio downloading via yt-dlp.
+Re-exports from narrower downloader modules so existing consumers
+(tests, CLI, external scripts) keep working with ``from bot.downloader import …``.
 """
 
-import logging
 import os
-from datetime import datetime
 
-import requests
-import yt_dlp
 from bot.downloader_media import (
     _load_instagram_cookies as _media_load_instagram_cookies,
     download_photo as _download_photo,
@@ -41,178 +38,17 @@ from bot.downloader_validation import (
     sanitize_filename,
 )
 
-def progress_hook(d):
-    """
-    Progress hook called by yt-dlp to track download progress.
-
-    Args:
-        d: Progress dictionary from yt-dlp
-    """
-    if d['status'] == 'downloading':
-        if d.get('total_bytes'):
-            percent = round(float(d['downloaded_bytes'] / d['total_bytes'] * 100), 1)
-            print(f"\rDownloading: {percent}% [{d['downloaded_bytes']/1024/1024:.1f}MB / {d['total_bytes']/1024/1024:.1f}MB]", end='')
-        elif d.get('total_bytes_estimate'):
-            percent = round(float(d['downloaded_bytes'] / d['total_bytes_estimate'] * 100), 1)
-            print(f"\rDownloading: {percent}% [{d['downloaded_bytes']/1024/1024:.1f}MB / estimated {d['total_bytes_estimate']/1024/1024:.1f}MB]", end='')
-        else:
-            print(f"\rDownloading: [{d['downloaded_bytes']/1024/1024:.1f}MB downloaded]", end='')
-    elif d['status'] == 'finished':
-        print("\nDownload finished, processing...")
-    elif d['status'] == 'error':
-        print(f"\nError during download: {d.get('error')}")
-
-
-def get_basic_ydl_opts(*, include_progress_hooks: bool = False):
-    """
-    Returns basic configuration for yt-dlp.
-
-    Returns:
-        dict: yt-dlp options dictionary
-    """
-    opts = {
-        'quiet': True,
-        'no_warnings': True,
-    }
-    if include_progress_hooks:
-        opts['progress_hooks'] = [progress_hook]
-    if os.path.exists(COOKIES_FILE):
-        opts['cookiefile'] = COOKIES_FILE
-    return opts
+from bot.downloader_core import (  # noqa: E402 — re-exports for compatibility
+    download_youtube_video,
+    get_basic_ydl_opts,
+    progress_hook,
+)
 
 
 def get_video_info(url):
-    """
-    Gets video information without downloading.
+    """Gets video information without downloading."""
 
-    Args:
-        url: YouTube video URL
-
-    Returns:
-        dict or None: Video info dictionary or None on error
-    """
     return _get_video_info(url, cookies_file=COOKIES_FILE)
-
-
-def download_youtube_video(
-    url,
-    format_id=None,
-    audio_only=False,
-    audio_format='mp3',
-    audio_quality='192',
-    time_range_start=None,
-    time_range_end=None,
-    video_duration=None,
-):
-    """
-    Downloads YouTube video or audio.
-
-    Args:
-        url: YouTube video URL
-        format_id: Specific format ID to download
-        audio_only: If True, download audio only
-        audio_format: Audio format (mp3, m4a, wav, flac)
-        audio_quality: Audio quality (bitrate)
-        time_range_start: Start time (HH:MM:SS, MM:SS, or seconds)
-        time_range_end: End time (HH:MM:SS, MM:SS, or seconds)
-        video_duration: Total video duration in seconds (optional, for range validation)
-
-    Returns:
-        bool: True on success, False on error
-    """
-    logging.debug("Starting download for URL: %s, format: %s...", url, format_id)
-    try:
-        normalized_format_id = normalize_format_id(format_id)
-        normalized_audio_format = audio_format.strip().lower() if audio_format else "mp3"
-        normalized_audio_quality = str(audio_quality).strip() if audio_quality is not None else "192"
-        if normalized_audio_format and not is_valid_audio_format(normalized_audio_format):
-            print(f"[ERROR] Unsupported audio format: {normalized_audio_format}")
-            return False
-
-        if audio_only and not is_valid_audio_quality(normalized_audio_format, normalized_audio_quality):
-            print(f"[ERROR] Unsupported audio quality {normalized_audio_quality} for format {normalized_audio_format}")
-            return False
-
-        normalized_time_range_start = parse_time_seconds(time_range_start)
-        normalized_time_range_end = parse_time_seconds(time_range_end)
-
-        if time_range_start is not None and time_range_end is not None:
-            if normalized_time_range_start is None or normalized_time_range_end is None:
-                print("[ERROR] Invalid time range values.")
-                return False
-            if normalized_time_range_start >= normalized_time_range_end:
-                print("[ERROR] Start time must be earlier than end time.")
-                return False
-
-        if (time_range_start is None) != (time_range_end is None):
-            print("[ERROR] Both --start and --to must be provided.")
-            return False
-
-        # Validate time range against video duration when known
-        if video_duration is not None and normalized_time_range_start is not None:
-            if normalized_time_range_start >= video_duration:
-                print(f"[ERROR] Start time ({normalized_time_range_start}s) is at or beyond video duration ({video_duration}s).")
-                return False
-            if normalized_time_range_end > video_duration:
-                print(f"[ERROR] End time ({normalized_time_range_end}s) exceeds video duration ({video_duration}s).")
-                return False
-
-        if normalized_format_id is not None and not is_valid_ytdlp_format_id(normalized_format_id):
-            print(f"[ERROR] Unsupported format id: {normalized_format_id}")
-            return False
-
-        current_date = datetime.now().strftime("%Y-%m-%d")
-
-        ydl_opts = {
-            'outtmpl': f'{current_date} %(title)s.%(ext)s',
-            'progress_hooks': [progress_hook],
-            'quiet': True,
-            'no_warnings': False,
-            'ignoreerrors': False,
-            'socket_timeout': 30,
-            'retries': 3,
-            'fragment_retries': 3,
-        }
-        if os.path.exists(COOKIES_FILE):
-            ydl_opts['cookiefile'] = COOKIES_FILE
-
-        if audio_only:
-            print(f"[DEBUG] Configuring audio-only download ({normalized_audio_format})")
-            ydl_opts.update({
-                'format': 'bestaudio/best',
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': normalized_audio_format,
-                    'preferredquality': normalized_audio_quality,
-                }],
-            })
-        elif format_id:
-            ydl_opts['format'] = normalized_format_id
-            print(f"[DEBUG] Set format: {normalized_format_id}")
-        else:
-            print("[DEBUG] Using default format (best quality)")
-
-        if normalized_time_range_start is not None:
-            ydl_opts['download_sections'] = [{
-                'start_time': normalized_time_range_start,
-                'end_time': normalized_time_range_end,
-            }]
-            ydl_opts['force_keyframes_at_cuts'] = True
-
-        print("[DEBUG] Initializing YoutubeDL...")
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            print("[DEBUG] Starting download...")
-            info = ydl.extract_info(url, download=True)
-            title = info.get('title', 'Unknown title')
-            print(f"[DEBUG] Downloaded file info: Title={title}")
-
-        print(f"\nDownload completed successfully")
-        return True
-
-    except Exception as e:
-        print(f"[DEBUG] Error during download: {str(e)}")
-        print(f"Error: {str(e)}")
-        return False
 
 
 def get_available_subtitles(info: dict) -> dict:

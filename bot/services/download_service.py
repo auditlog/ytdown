@@ -1,4 +1,16 @@
-"""Download service shared by Telegram handlers and future entry points."""
+"""Download service shared by Telegram handlers and future entry points.
+
+Error signaling contract
+------------------------
+- **prepare_download_plan** returns ``None`` when video metadata cannot be
+  fetched (normal for invalid/expired URLs).  Raises ``ValueError`` when
+  caller-supplied parameters are invalid (audio quality, format).
+- **execute_download / execute_download_plan** raise ``FileNotFoundError``
+  when yt-dlp finishes without producing a file.  Any yt-dlp runtime error
+  propagates as-is.
+- **estimate_download_size** returns ``None`` when size cannot be determined
+  (normal — caller should treat as "unknown, allow download").
+"""
 
 from __future__ import annotations
 
@@ -60,7 +72,11 @@ def prepare_download_plan(
     use_format_id: bool = False,
     audio_quality: str = "192",
 ) -> DownloadPlan | None:
-    """Fetch metadata and build yt-dlp options for a media download."""
+    """Fetch metadata and build yt-dlp options for a media download.
+
+    Returns None when video metadata cannot be fetched.
+    Raises ValueError for invalid caller-supplied parameters.
+    """
 
     info = get_video_info(url)
     if not info:
@@ -149,7 +165,10 @@ def prepare_download_plan(
 
 
 def estimate_download_size(plan: DownloadPlan) -> float | None:
-    """Estimate final download size in MB, adjusted for time ranges when available."""
+    """Estimate final download size in MB, adjusted for time ranges when available.
+
+    Returns None when size cannot be determined (caller should allow download).
+    """
 
     check_opts = plan.ydl_opts.copy()
     check_opts['simulate'] = True
@@ -199,7 +218,10 @@ async def execute_download(
     format_bytes: Callable[[int | float | None], str],
     format_eta: Callable[[int | float | None], str],
 ) -> DownloadResult:
-    """Run yt-dlp download and stream progress updates through a callback."""
+    """Run yt-dlp download and stream progress updates through a callback.
+
+    Raises FileNotFoundError when yt-dlp finishes without producing a file.
+    """
 
     ydl_opts = plan.ydl_opts.copy()
     ydl_opts['progress_hooks'] = [progress_hook_factory(chat_id)]
@@ -258,7 +280,10 @@ def ensure_size_within_limit(size_mb: float | None, *, max_size_mb: int = MAX_FI
 
 
 def execute_download_plan(plan: DownloadPlan) -> DownloadResult:
-    """Run a prepared yt-dlp download plan synchronously."""
+    """Run a prepared yt-dlp download plan synchronously.
+
+    Raises FileNotFoundError when yt-dlp finishes without producing a file.
+    """
 
     yt_dlp.YoutubeDL(plan.ydl_opts).download([plan.url])
 
