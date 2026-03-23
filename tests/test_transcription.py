@@ -231,6 +231,7 @@ def test_generate_summary(monkeypatch):
 
 def test_generate_summary_error(monkeypatch):
     monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
+    monkeypatch.setattr(tr.time, "sleep", lambda _seconds: None)
 
     class Resp:
         status_code = 500

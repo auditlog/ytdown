@@ -11,7 +11,7 @@ from telegram.helpers import escape_markdown
 
 from bot.config import DOWNLOAD_PATH
 from bot.downloader_playlist import get_playlist_info, strip_playlist_params
-from bot.security import MAX_PLAYLIST_ITEMS_EXPANDED
+from bot.security_limits import MAX_PLAYLIST_ITEMS_EXPANDED
 from bot.services.download_service import (
     DownloadResult,
     ensure_size_within_limit,

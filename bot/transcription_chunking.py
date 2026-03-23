@@ -11,7 +11,7 @@ import subprocess
 
 from mutagen.mp3 import MP3
 
-from bot.security import FFMPEG_TIMEOUT, MAX_MP3_PART_SIZE_MB
+from bot.security_limits import FFMPEG_TIMEOUT, MAX_MP3_PART_SIZE_MB
 
 
 def find_silence_points(file_path, num_parts, min_duration=0.5, *, subprocess_module=subprocess):

@@ -14,7 +14,7 @@ import yt_dlp
 
 from bot.downloader_metadata import COOKIES_FILE, get_video_info
 from bot.downloader_validation import is_valid_audio_quality, sanitize_filename
-from bot.security import MAX_FILE_SIZE_MB
+from bot.security_limits import MAX_FILE_SIZE_MB
 
 
 ArtifactSuffixes = ('_transcript.md', '_transcript.txt', '_summary.md')

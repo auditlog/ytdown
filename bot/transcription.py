@@ -11,7 +11,7 @@ import time
 from mutagen.mp3 import MP3
 
 from bot.config import get_runtime_value
-from bot.security import FFMPEG_TIMEOUT, MAX_MP3_PART_SIZE_MB
+from bot.security_limits import FFMPEG_TIMEOUT, MAX_MP3_PART_SIZE_MB
 from bot.transcription_chunking import (
     find_silence_points as _find_silence_points,
     get_part_number,
@@ -119,7 +119,7 @@ def post_process_transcript(text):
         text,
         api_key=get_claude_api_key(),
         requests_module=requests,
-        sleep_fn=lambda _seconds: None,
+        sleep_fn=time.sleep,
     )
 
 
@@ -132,5 +132,5 @@ def generate_summary(transcript_text, summary_type):
         summary_type,
         api_key=get_claude_api_key(),
         requests_module=requests,
-        sleep_fn=lambda _seconds: None,
+        sleep_fn=time.sleep,
     )

@@ -50,7 +50,8 @@ from bot.handlers.transcription_callbacks import (
     show_summary_options as _extracted_show_summary_options,
     transcribe_audio_file as _extracted_transcribe_audio_file,
 )
-from bot.security import check_rate_limit, get_media_label, normalize_url, user_urls, user_time_ranges
+from bot.security_policy import get_media_label, normalize_url
+from bot.security_throttling import check_rate_limit
 from bot.services.playlist_service import build_playlist_message, load_playlist
 from bot.services.spotify_service import download_resolved_audio
 from bot.session_context import (
@@ -58,7 +59,7 @@ from bot.session_context import (
     get_session_context_value as _get_session_context_value,
     get_session_value as _get_session_value,
 )
-from bot.session_store import download_progress as _download_progress
+from bot.session_store import download_progress as _download_progress, user_time_ranges, user_urls
 
 
 def escape_md(text: str) -> str:

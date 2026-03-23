@@ -22,16 +22,8 @@ from bot.handlers.common_ui import (
     safe_edit_message,
     send_long_message,
 )
-from bot.security import (
-    MAX_FILE_SIZE_MB,
-    MAX_PLAYLIST_ITEMS,
-    MAX_PLAYLIST_ITEMS_EXPANDED,
-    get_media_label,
-    normalize_url,
-    user_playlist_data,
-    user_time_ranges,
-    user_urls,
-)
+from bot.security_limits import MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED
+from bot.security_policy import get_media_label, normalize_url
 from bot.session_context import (
     clear_session_context_value as _clear_session_context_value,
     clear_session_value as _clear_session_value,
@@ -39,7 +31,12 @@ from bot.session_context import (
     get_session_value as _get_session_value,
     set_session_value as _set_session_value,
 )
-from bot.session_store import download_progress as _download_progress
+from bot.session_store import (
+    download_progress as _download_progress,
+    user_playlist_data,
+    user_time_ranges,
+    user_urls,
+)
 from bot.transcription_limits import CORRECTION_DURATION_LIMIT_MIN, SUMMARY_DURATION_LIMIT_MIN
 from bot.downloader_media import COOKIES_FILE, download_photo, download_thumbnail
 from bot.downloader_metadata import get_video_info

@@ -14,14 +14,13 @@ from telegram.helpers import escape_markdown
 
 from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.handlers.common_ui import safe_edit_message, send_long_message
-from bot.security import get_media_label
+from bot.security_policy import get_media_label
 from bot.session_context import (
     clear_uploaded_audio_state as _clear_uploaded_audio_state,
     clear_session_context_value as _clear_session_context_value,
     get_session_context_value as _get_session_context_value,
     set_session_context_value as _set_session_context_value,
 )
-from bot.transcription import transcribe_mp3_file
 from bot.transcription_limits import CORRECTION_DURATION_LIMIT_MIN, SUMMARY_DURATION_LIMIT_MIN
 from bot.downloader import get_video_info
 from bot.downloader_subtitles import (
@@ -34,6 +33,7 @@ from bot.services.transcription_service import (
     cleanup_transcription_artifacts,
     generate_summary_artifact,
     load_transcript_result,
+    run_transcription_with_progress,
     save_transcript_markdown,
     transcript_too_long_for_summary,
 )
@@ -90,28 +90,12 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         )
         return
 
-    current_status = {"text": ""}
-
-    def progress_callback(status_text):
-        current_status["text"] = status_text
-
-    async def run_local_transcription_with_progress():
-        loop = asyncio.get_event_loop()
-        future = loop.run_in_executor(
-            _executor,
-            lambda: transcribe_mp3_file(mp3_path, chat_download_path, progress_callback, language=None),
-        )
-
-        last_status = ""
-        while not future.done():
-            if current_status["text"] and current_status["text"] != last_status:
-                last_status = current_status["text"]
-                await update_status(f"Transkrypcja w toku...\n\n{last_status}")
-            await asyncio.sleep(2)
-
-        return await future
-
-    transcript_path = await run_local_transcription_with_progress()
+    transcript_path = await run_transcription_with_progress(
+        source_path=mp3_path,
+        output_dir=chat_download_path,
+        executor=_executor,
+        status_callback=lambda text: update_status(f"Transkrypcja w toku...\n\n{text}"),
+    )
 
     if not transcript_path or not os.path.exists(transcript_path):
         await update_status("Wystąpił błąd podczas transkrypcji.")

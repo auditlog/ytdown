@@ -11,9 +11,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
-from bot.security import (
-    BLOCK_TIME,
-    MAX_ATTEMPTS,
+from bot.security_limits import BLOCK_TIME, MAX_ATTEMPTS
+from bot.security_pin import (
     clear_failed_attempts,
     get_block_remaining_seconds,
     is_user_blocked,

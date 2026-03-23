@@ -58,7 +58,7 @@ from bot.runtime import (
     get_authorized_user_ids_for,
     remove_authorized_user_for,
 )
-from bot.security import (
+from bot.security_limits import (
     BLOCK_TIME,
     FFMPEG_TIMEOUT,
     MAX_ATTEMPTS,
@@ -66,21 +66,12 @@ from bot.security import (
     MAX_PLAYLIST_ITEMS,
     RATE_LIMIT_REQUESTS,
     RATE_LIMIT_WINDOW,
-    block_until,
-    check_rate_limit,
-    detect_platform,
-    estimate_file_size,
-    failed_attempts,
-    get_block_remaining_seconds,
-    get_media_label,
-    is_user_blocked,
-    normalize_url,
-    user_playlist_data,
-    user_time_ranges,
-    user_urls,
-    validate_url,
-    validate_youtube_url,
 )
+from bot.security_pin import get_block_remaining_seconds, is_user_blocked
+from bot.security_policy import detect_platform, estimate_file_size, get_media_label, normalize_url, validate_url
+from bot.security_throttling import check_rate_limit
+from bot.session_store import block_until, failed_attempts, user_playlist_data, user_time_ranges, user_urls
+validate_youtube_url = validate_url
 from bot.services.playlist_service import build_playlist_message, load_playlist
 
 

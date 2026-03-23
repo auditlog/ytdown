@@ -349,7 +349,12 @@ ytdown/
 │   ├── session_store.py            # SessionStore — chat-scoped state w pamięci
 │   ├── session_context.py          # Shared session bridge (auth state, flow fields)
 │   ├── repositories.py             # Persystencja JSON (authorized_users, history)
-│   ├── security.py                 # Rate limiting, walidacja URL, bezpieczeństwo
+│   ├── security.py                 # Fasada kompatybilności — deleguje do wyspecjalizowanych security_*
+│   ├── security_limits.py          # Stałe limitów: rate limit, rozmiary plików, timeouty, playlist
+│   ├── security_policy.py          # Walidacja URL, wykrywanie platform, estymacja rozmiaru
+│   ├── security_throttling.py      # Rate limiting per użytkownik
+│   ├── security_pin.py             # Blokowanie po nieudanych próbach PIN
+│   ├── security_authorization.py   # Persystencja autoryzowanych użytkowników
 │   ├── cleanup.py                  # Czyszczenie plików i monitoring dysku
 │   ├── transcription.py            # Fasada kompatybilności — deleguje do wyspecjalizowanych transcription_*
 │   ├── transcription_limits.py     # Stałe limitów, heurystyki tokenów, progi czasowe

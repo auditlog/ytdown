@@ -24,17 +24,12 @@ from bot.downloader_metadata import get_video_info
 from bot.downloader_playlist import get_playlist_info, is_playlist_url, strip_playlist_params
 from bot.downloader_subtitles import download_subtitles, get_available_subtitles, parse_subtitle_file
 from bot.downloader_validation import sanitize_filename
-from bot.security import (
-    MAX_PLAYLIST_ITEMS,
-    check_rate_limit,
-    detect_platform,
-    estimate_file_size,
-    manage_authorized_user,
-    user_playlist_data,
-    user_urls,
-    validate_url,
-    validate_youtube_url,
-)
+from bot.security_authorization import manage_authorized_user
+from bot.security_limits import MAX_PLAYLIST_ITEMS
+from bot.security_policy import detect_platform, estimate_file_size, validate_url
+from bot.security_throttling import check_rate_limit
+from bot.session_store import user_playlist_data, user_urls
+validate_youtube_url = validate_url
 from bot.telegram_callbacks import (
     back_to_main_menu,
     download_file,
