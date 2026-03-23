@@ -8,6 +8,7 @@ import pytest
 
 from bot import telegram_callbacks as callbacks
 from bot import telegram_commands as commands
+from bot.handlers import time_range_callbacks as _trc
 from tests.telegram_callbacks_support import _make_context as _make_callback_context
 from tests.telegram_callbacks_support import _make_update as _make_callback_update
 from tests.telegram_commands_support import (
@@ -57,14 +58,14 @@ def test_callback_time_range_preset_updates_session_and_returns_to_menu(monkeypa
     runtime = _attach_runtime(context, authorized_users=set())
     runtime.session_store.set_field(chat_id, "current_url", url)
 
-    monkeypatch.setattr(callbacks, "get_video_info", lambda *_: {"duration": 900, "title": "Sample"})
+    monkeypatch.setattr(_trc, "get_video_info", lambda *_: {"duration": 900, "title": "Sample"})
 
     returned = {}
 
     async def fake_back_to_main_menu(update_arg, context_arg, back_url):
         returned["url"] = back_url
 
-    monkeypatch.setattr(callbacks, "back_to_main_menu", fake_back_to_main_menu)
+    monkeypatch.setattr(_trc, "back_to_main_menu", fake_back_to_main_menu)
 
     asyncio.run(callbacks.handle_callback(update, context))
 

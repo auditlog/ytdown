@@ -5,6 +5,7 @@ import asyncio
 import pytest
 
 from bot import telegram_callbacks as tc
+from bot.handlers import time_range_callbacks as _trc
 from tests.telegram_callbacks_support import _make_context, _make_update
 
 
@@ -138,8 +139,8 @@ def test_apply_time_range_preset_first_5_sets_range(monkeypatch):
     async def fake_back(update_arg, context_arg, back_url):
         back_calls["url"] = back_url
 
-    monkeypatch.setattr(tc, "get_video_info", lambda *_: {"duration": 370, "title": "Sample"})
-    monkeypatch.setattr(tc, "back_to_main_menu", fake_back)
+    monkeypatch.setattr(_trc, "get_video_info", lambda *_: {"duration": 370, "title": "Sample"})
+    monkeypatch.setattr(_trc, "back_to_main_menu", fake_back)
 
     asyncio.run(tc.apply_time_range_preset(update, context, url, "first_5"))
 
@@ -158,7 +159,7 @@ def test_apply_time_range_preset_zero_duration_shows_error(monkeypatch):
     context = _make_context()
     tc.user_urls[chat_id] = "https://www.youtube.com/watch?v=abc"
 
-    monkeypatch.setattr(tc, "get_video_info", lambda *_: {"duration": 0})
+    monkeypatch.setattr(_trc, "get_video_info", lambda *_: {"duration": 0})
     asyncio.run(tc.apply_time_range_preset(update, context, tc.user_urls[chat_id], "last_5"))
 
     update.callback_query.edit_message_text.assert_awaited_once_with(
