@@ -356,6 +356,7 @@ ytdown/
 │   ├── downloader_validation.py    # Walidacja formatów, parsowanie czasu, sanityzacja nazw plików
 │   ├── downloader_playlist.py      # Wykrywanie i pobieranie metadanych playlist YouTube
 │   ├── downloader_metadata.py      # Pobieranie metadanych video (get_video_info)
+│   ├── downloader_subtitles.py     # Napisy: wykrywanie, pobieranie i parsowanie VTT/SRT
 │   ├── spotify.py                  # Rozwiązywanie Spotify podcastów (iTunes/YouTube)
 │   ├── mtproto.py                  # Upload dużych plików przez MTProto (Pyrogram)
 │   ├── cli.py                      # Interfejs wiersza poleceń

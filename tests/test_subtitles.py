@@ -335,7 +335,7 @@ class TestDownloadSubtitles:
         yield d
         shutil.rmtree(d, ignore_errors=True)
 
-    @patch('bot.downloader.yt_dlp.YoutubeDL')
+    @patch('bot.downloader_subtitles.yt_dlp.YoutubeDL')
     def test_download_manual_subtitles(self, mock_ytdl_class, temp_dir):
         """Downloads manual subtitles and returns file path."""
         mock_ydl = MagicMock()
@@ -363,7 +363,7 @@ class TestDownloadSubtitles:
         assert result == sub_file
         assert os.path.exists(result)
 
-    @patch('bot.downloader.yt_dlp.YoutubeDL')
+    @patch('bot.downloader_subtitles.yt_dlp.YoutubeDL')
     def test_download_auto_subtitles(self, mock_ytdl_class, temp_dir):
         """Downloads auto-generated subtitles."""
         mock_ydl = MagicMock()
@@ -394,7 +394,7 @@ class TestDownloadSubtitles:
         assert call_args['writeautomaticsub'] is True
         assert call_args['writesubtitles'] is False
 
-    @patch('bot.downloader.yt_dlp.YoutubeDL')
+    @patch('bot.downloader_subtitles.yt_dlp.YoutubeDL')
     def test_download_subtitles_not_found(self, mock_ytdl_class, temp_dir):
         """Returns None when subtitle file not created."""
         mock_ydl = MagicMock()
@@ -410,7 +410,7 @@ class TestDownloadSubtitles:
         )
         assert result is None
 
-    @patch('bot.downloader.yt_dlp.YoutubeDL')
+    @patch('bot.downloader_subtitles.yt_dlp.YoutubeDL')
     def test_download_subtitles_exception(self, mock_ytdl_class, temp_dir):
         """Returns None on yt-dlp exception."""
         mock_ytdl_class.side_effect = Exception("Network error")
@@ -423,7 +423,7 @@ class TestDownloadSubtitles:
         )
         assert result is None
 
-    @patch('bot.downloader.yt_dlp.YoutubeDL')
+    @patch('bot.downloader_subtitles.yt_dlp.YoutubeDL')
     def test_download_subtitles_skip_download(self, mock_ytdl_class, temp_dir):
         """Verifies skip_download=True is set in yt-dlp options."""
         mock_ydl = MagicMock()
@@ -441,7 +441,7 @@ class TestDownloadSubtitles:
         call_args = mock_ytdl_class.call_args[0][0]
         assert call_args['skip_download'] is True
 
-    @patch('bot.downloader.yt_dlp.YoutubeDL')
+    @patch('bot.downloader_subtitles.yt_dlp.YoutubeDL')
     def test_download_subtitles_srt_format(self, mock_ytdl_class, temp_dir):
         """Finds SRT subtitle files too."""
         mock_ydl = MagicMock()

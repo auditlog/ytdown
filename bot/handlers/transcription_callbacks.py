@@ -26,13 +26,13 @@ from bot.transcription import (
     CORRECTION_DURATION_LIMIT_MIN,
     SUMMARY_DURATION_LIMIT_MIN,
 )
-from bot.downloader import (
+from bot.downloader import get_video_info
+from bot.downloader_subtitles import (
     download_subtitles,
     get_available_subtitles,
-    get_video_info,
     parse_subtitle_file,
-    sanitize_filename,
 )
+from bot.downloader_validation import sanitize_filename
 from bot.services.transcription_service import (
     cleanup_transcription_artifacts,
     generate_summary_artifact,
