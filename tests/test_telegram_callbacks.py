@@ -9,6 +9,8 @@ import pytest
 from telegram.error import BadRequest
 
 from bot import telegram_callbacks as tc
+from bot.runtime import AppRuntime
+from bot.session_store import SecurityStore, SessionStore
 
 
 def test_format_bytes_formats_values():
@@ -124,6 +126,21 @@ def _make_context():
     return context
 
 
+def _attach_runtime(context):
+    runtime = AppRuntime(
+        config={},
+        session_store=SessionStore(),
+        security_store=SecurityStore(),
+        services=Mock(),
+        authorized_users_repository=Mock(),
+        download_history_repository=Mock(),
+        authorized_users_set=set(),
+    )
+    context.application = Mock()
+    context.application.bot_data = {"app_runtime": runtime}
+    return runtime
+
+
 def test_handle_callback_audio_transcribe_starts_directly(monkeypatch):
     """audio_transcribe callback invokes transcribe_audio_file directly (no language selection)."""
     tc.user_urls.pop(123, None)
@@ -140,6 +157,18 @@ def test_handle_callback_audio_transcribe_starts_directly(monkeypatch):
 
     update.callback_query.answer.assert_awaited_once()
     assert called.get("invoked") is True
+
+
+def test_show_audio_summary_options_reads_title_from_runtime_session():
+    update = _make_update("audio_transcribe_summary", chat_id=321)
+    context = _make_context()
+    runtime = _attach_runtime(context)
+    runtime.session_store.set_field(321, "audio_file_title", "Runtime Recording")
+
+    asyncio.run(tc.show_audio_summary_options(update, context))
+
+    update.callback_query.edit_message_text.assert_awaited_once()
+    assert "Runtime Recording" in update.callback_query.edit_message_text.await_args.args[0]
 
 
 def test_handle_callback_transcribe_shows_subtitle_menu(monkeypatch):

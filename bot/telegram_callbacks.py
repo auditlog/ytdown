@@ -74,7 +74,15 @@ from bot.services.playlist_service import (
     load_playlist,
     parse_playlist_download_choice,
 )
-from bot.runtime import get_app_runtime, record_download_for
+from bot.runtime import record_download_for
+from bot.session_context import (
+    clear_session_context_value as _clear_session_context_value,
+    clear_session_value as _clear_session_value,
+    get_session_context_value as _get_session_context_value,
+    get_session_value as _get_session_value,
+    set_session_context_value as _set_session_context_value,
+    set_session_value as _set_session_value,
+)
 from bot.session_store import download_progress as _download_progress
 
 
@@ -278,113 +286,24 @@ def parse_summary_option(option_data):
     return summary_option
 
 
-def _get_session_value(context: ContextTypes.DEFAULT_TYPE, chat_id: int, field_name: str, legacy_map):
-    """Read one chat-scoped value from runtime session store when available."""
-
-    runtime = get_app_runtime(context)
-    if runtime is not None:
-        return runtime.session_store.get_field(chat_id, field_name)
-    return legacy_map.get(chat_id)
-
-
-def _set_session_value(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-    field_name: str,
-    value,
-    legacy_map,
-) -> None:
-    """Write one chat-scoped value through runtime session store when available."""
-
-    runtime = get_app_runtime(context)
-    if runtime is not None:
-        runtime.session_store.set_field(chat_id, field_name, value)
-        return
-    legacy_map[chat_id] = value
-
-
-def _clear_session_value(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-    field_name: str,
-    legacy_map,
-) -> None:
-    """Clear one chat-scoped value through runtime session store when available."""
-
-    runtime = get_app_runtime(context)
-    if runtime is not None:
-        runtime.session_store.pop_field(chat_id, field_name, None)
-        return
-    legacy_map.pop(chat_id, None)
-
-
-def _get_session_context_value(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-    field_name: str,
-    *,
-    legacy_key: str,
-    default=None,
-):
-    """Read one session-scoped context value from runtime or legacy user_data."""
-
-    runtime = get_app_runtime(context)
-    if runtime is not None:
-        value = runtime.session_store.get_field(chat_id, field_name)
-        if value is not None:
-            return value
-    return context.user_data.get(legacy_key, default)
-
-
-def _set_session_context_value(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-    field_name: str,
-    value,
-    *,
-    legacy_key: str,
-) -> None:
-    """Write one session-scoped context value to runtime and legacy user_data."""
-
-    runtime = get_app_runtime(context)
-    if runtime is not None:
-        runtime.session_store.set_field(chat_id, field_name, value)
-        context.user_data.pop(legacy_key, None)
-        return
-    context.user_data[legacy_key] = value
-
-
-def _clear_session_context_value(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-    field_name: str,
-    *,
-    legacy_key: str,
-) -> None:
-    """Clear one session-scoped context value from runtime and legacy user_data."""
-
-    runtime = get_app_runtime(context)
-    if runtime is not None:
-        runtime.session_store.pop_field(chat_id, field_name, None)
-    context.user_data.pop(legacy_key, None)
-
-
 def _clear_uploaded_audio_state(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
 ) -> None:
     """Clear temporary uploaded-audio state from runtime and legacy user_data."""
 
-    runtime = get_app_runtime(context)
-    if runtime is not None:
-        runtime.session_store.clear_fields(
-            chat_id,
-            "audio_file_path",
-            "audio_file_title",
-        )
-
-    context.user_data.pop("audio_file_path", None)
-    context.user_data.pop("audio_file_title", None)
+    _clear_session_context_value(
+        context,
+        chat_id,
+        "audio_file_path",
+        legacy_key="audio_file_path",
+    )
+    _clear_session_context_value(
+        context,
+        chat_id,
+        "audio_file_title",
+        legacy_key="audio_file_title",
+    )
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1688,7 +1607,7 @@ async def apply_time_range_preset(update: Update, context: ContextTypes.DEFAULT_
 
 async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE, summary=False, summary_type=None):
     """
-    Transcribes an uploaded audio file (MP3 path stored in user_data).
+    Transcribes an uploaded audio file stored in chat session state.
 
     Reuses the existing transcription pipeline from transcribe_mp3_file().
     """
