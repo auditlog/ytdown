@@ -356,7 +356,7 @@ ytdown/
 │   ├── spotify.py                  # Rozwiązywanie Spotify podcastów (iTunes/YouTube)
 │   ├── mtproto.py                  # Upload dużych plików przez MTProto (Pyrogram)
 │   ├── cli.py                      # Interfejs wiersza poleceń
-│   ├── telegram_commands.py        # Router komend — deleguje do handler layer
+│   ├── telegram_commands.py        # Cienki wrapper kompatybilności — deleguje do handler layer
 │   ├── telegram_callbacks.py       # Router callbacków — wrappery kompatybilności
 │   ├── handlers/                   # Wydzielone flow handlery (bez cross-importów do routerów)
 │   │   ├── command_access.py       # Auth/admin/info: /start, PIN, /logout, /help, /status
