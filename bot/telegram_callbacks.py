@@ -14,7 +14,6 @@ from concurrent.futures import ThreadPoolExecutor
 import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
-from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.helpers import escape_markdown
 
 # Thread pool for running sync functions
@@ -23,6 +22,13 @@ _executor = ThreadPoolExecutor(max_workers=2)
 from bot.config import (
     DOWNLOAD_PATH,
     get_runtime_value,
+)
+from bot.handlers.callback_parsing import parse_download_callback, parse_summary_option
+from bot.handlers.common_ui import (
+    format_bytes,
+    format_eta,
+    safe_edit_message,
+    send_long_message,
 )
 from bot.security import (
     MAX_FILE_SIZE_MB,
@@ -92,29 +98,6 @@ def escape_md(text: str) -> str:
     return escape_markdown(text, version=1)
 
 
-def format_bytes(bytes_value):
-    """Formats bytes to human readable string."""
-    if bytes_value is None:
-        return "?"
-    for unit in ['B', 'KB', 'MB', 'GB']:
-        if bytes_value < 1024:
-            return f"{bytes_value:.1f} {unit}"
-        bytes_value /= 1024
-    return f"{bytes_value:.1f} TB"
-
-
-def format_eta(seconds):
-    """Formats seconds to human readable time string."""
-    if seconds is None or seconds < 0:
-        return "?"
-    if seconds < 60:
-        return f"{int(seconds)}s"
-    elif seconds < 3600:
-        return f"{int(seconds // 60)}m {int(seconds % 60)}s"
-    else:
-        return f"{int(seconds // 3600)}h {int((seconds % 3600) // 60)}m"
-
-
 def create_progress_hook(chat_id):
     """Creates a progress hook for yt-dlp that updates global progress state."""
     def hook(d):
@@ -146,145 +129,6 @@ def create_progress_hook(chat_id):
     return hook
 
 
-async def safe_edit_message(query, text, reply_markup=None, parse_mode=None):
-    """
-    Safely edits message, ignoring 'message not modified' error
-    and transient network errors (so status updates don't crash the handler).
-    """
-    try:
-        await query.edit_message_text(
-            text,
-            reply_markup=reply_markup,
-            parse_mode=parse_mode
-        )
-    except BadRequest as e:
-        if "Message is not modified" not in str(e):
-            raise
-    except (NetworkError, TimedOut) as e:
-        logging.warning(f"Network error updating status message: {e}")
-
-
-async def send_long_message(bot, chat_id, text, header="", parse_mode='Markdown'):
-    """
-    Splits long text into multiple Telegram messages (max 4000 chars each)
-    and sends them sequentially. Optionally prepends a header to the first chunk.
-
-    Handles lines longer than max_length (e.g. Whisper output without newlines)
-    by splitting at sentence boundaries, commas, or spaces.
-    """
-    max_length = 4000
-    parts = []
-    current = header
-
-    for line in text.split('\n'):
-        # Split oversized lines at natural break points
-        while len(line) > max_length:
-            split_at = max_length
-            for sep in ['. ', '! ', '? ', ', ', ' ']:
-                idx = line.rfind(sep, 0, max_length)
-                if idx > max_length // 2:
-                    split_at = idx + len(sep)
-                    break
-            if current.strip():
-                parts.append(current)
-                current = ""
-            parts.append(line[:split_at])
-            line = line[split_at:]
-
-        if len(current) + len(line) + 2 > max_length:
-            parts.append(current)
-            current = line + '\n'
-        else:
-            current += line + '\n'
-
-    if current.strip():
-        parts.append(current)
-
-    for part in parts:
-        try:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=part,
-                parse_mode=parse_mode,
-                read_timeout=60,
-                write_timeout=60,
-            )
-        except BadRequest:
-            await bot.send_message(
-                chat_id=chat_id,
-                text=part,
-                read_timeout=60,
-                write_timeout=60,
-            )
-
-
-def parse_download_callback(data):
-    """Parses download-related callback data.
-
-    Expected formats:
-      - dl_video_<format>
-      - dl_audio_<codec>
-      - dl_audio_format_<format_id>
-    """
-    if not isinstance(data, str):
-        return None
-
-    if not data.startswith("dl_"):
-        return None
-
-    parts = data.split("_")
-    if len(parts) < 3:
-        return None
-
-    media_type = parts[1]
-    if media_type not in {"audio", "video"}:
-        return None
-
-    if media_type == "audio":
-        if len(parts) == 4 and parts[2] == "format":
-            return {"media_type": "audio", "mode": "format_id", "format": parts[3]}
-        if len(parts) == 3 and parts[2] != "format":
-            return {"media_type": "audio", "mode": "codec", "format": parts[2]}
-        return None
-
-    if media_type == "video":
-        if len(parts) == 3:
-            return {"media_type": "video", "mode": "format_id", "format": parts[2]}
-        return None
-
-    return None
-
-
-def parse_summary_option(option_data):
-    """Parses summary option payloads.
-
-    Expected format:
-      - summary_option_<index>
-      - audio_summary_option_<index>
-    """
-    if not isinstance(option_data, str):
-        return None
-
-    if (
-        not option_data.startswith("summary_option_")
-        and not option_data.startswith("audio_summary_option_")
-    ):
-        return None
-
-    _, _, raw_value = option_data.rpartition("_")
-
-    if not raw_value:
-        return None
-
-    try:
-        summary_option = int(raw_value)
-    except ValueError:
-        return None
-
-    if summary_option < 1 or summary_option > 4:
-        return None
-
-    return summary_option
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
