@@ -1,5 +1,8 @@
 """Unit tests for bot.services.download_service."""
 
+import asyncio
+import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
@@ -295,3 +298,109 @@ def test_execute_download_plan_raises_file_not_found_when_no_file_produced(monke
 
     with pytest.raises(FileNotFoundError, match="downloaded file not found"):
         ds.execute_download_plan(plan)
+
+
+def test_execute_download_async_returns_result(monkeypatch, tmp_path):
+    """execute_download (async) should run yt-dlp and return a DownloadResult."""
+
+    media = tmp_path / "2026-03-21 Sample.mp3"
+    media.write_text("media content", encoding="utf-8")
+
+    plan = ds.DownloadPlan(
+        url="https://www.youtube.com/watch?v=abc",
+        media_type="audio",
+        format_choice="mp3",
+        transcribe=False,
+        use_format_id=False,
+        audio_quality="192",
+        info={"title": "Sample", "duration": 10},
+        title="Sample",
+        duration=10,
+        duration_str="0:10",
+        sanitized_title="Sample",
+        output_path=str(tmp_path / "2026-03-21 Sample"),
+        chat_download_path=str(tmp_path),
+        ydl_opts={"format": "bestaudio/best"},
+        time_range=None,
+    )
+
+    class MockYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def download(self, urls):
+            return 0
+
+    monkeypatch.setattr(ds.yt_dlp, "YoutubeDL", MockYoutubeDL)
+
+    progress_state = {}
+    status_updates = []
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    async def run():
+        return await ds.execute_download(
+            plan,
+            chat_id=123,
+            executor=executor,
+            progress_hook_factory=lambda cid: (lambda d: None),
+            progress_state=progress_state,
+            status_callback=lambda text: status_updates.append(text),
+            format_bytes=lambda b: f"{b}B",
+            format_eta=lambda e: "?",
+        )
+
+    result = asyncio.run(run())
+    executor.shutdown(wait=False)
+
+    assert result.file_path == str(media)
+    assert result.file_size_mb > 0
+    assert 123 not in progress_state
+
+
+def test_execute_download_async_raises_when_no_file(monkeypatch, tmp_path):
+    """execute_download (async) should raise FileNotFoundError when yt-dlp produces no file."""
+
+    plan = ds.DownloadPlan(
+        url="https://www.youtube.com/watch?v=abc",
+        media_type="audio",
+        format_choice="mp3",
+        transcribe=False,
+        use_format_id=False,
+        audio_quality="192",
+        info={"title": "Sample", "duration": 10},
+        title="Sample",
+        duration=10,
+        duration_str="0:10",
+        sanitized_title="Sample",
+        output_path=str(tmp_path / "2026-03-21 Sample"),
+        chat_download_path=str(tmp_path),
+        ydl_opts={},
+        time_range=None,
+    )
+
+    class MockYoutubeDL:
+        def __init__(self, opts):
+            pass
+
+        def download(self, urls):
+            return 0
+
+    monkeypatch.setattr(ds.yt_dlp, "YoutubeDL", MockYoutubeDL)
+
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    async def run():
+        return await ds.execute_download(
+            plan,
+            chat_id=456,
+            executor=executor,
+            progress_hook_factory=lambda cid: (lambda d: None),
+            progress_state={},
+            status_callback=lambda text: None,
+            format_bytes=lambda b: "",
+            format_eta=lambda e: "",
+        )
+
+    with pytest.raises(FileNotFoundError):
+        asyncio.run(run())
+    executor.shutdown(wait=False)
