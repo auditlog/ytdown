@@ -28,6 +28,11 @@ from bot.services.spotify_service import (
     get_resolution_error_message,
     resolve_episode,
 )
+from bot.handlers.common_ui import (
+    build_instagram_photo_keyboard as _shared_build_instagram_photo_keyboard,
+    build_main_keyboard as _shared_build_main_keyboard,
+)
+from bot.handlers.time_range import parse_time_range as _shared_parse_time_range
 from bot.session_context import (
     get_auth_state as _get_auth_state,
     get_session_context_value as _get_session_context_value,
@@ -41,43 +46,47 @@ from bot.spotify import parse_spotify_episode_url
 
 
 async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    raise NotImplementedError
+    from bot.handlers.command_access import handle_pin as _handle_pin
+
+    return await _handle_pin(update, context)
 
 
 def _is_authorized(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
-    raise NotImplementedError
+    from bot.handlers.command_access import _is_authorized as _shared_is_authorized
+
+    return _shared_is_authorized(context, user_id)
 
 
 def parse_time_range(text: str) -> dict | None:
-    raise NotImplementedError
+    return _shared_parse_time_range(text)
 
 
 def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
-    raise NotImplementedError
+    return _shared_build_main_keyboard(platform, large_file=large_file)
 
 
 def _build_instagram_photo_keyboard(photos: list, videos: list) -> list:
-    raise NotImplementedError
+    return _shared_build_instagram_photo_keyboard(photos, videos)
 
 
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
-    raise NotImplementedError
+    return await extracted_process_youtube_link(update, context, url)
 
 
 async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
-    raise NotImplementedError
+    return await extracted_process_playlist_link(update, context, url)
 
 
 async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    raise NotImplementedError
+    return await extracted_process_spotify_episode(update, context, url)
 
 
 async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE, audio_info: dict | None = None):
-    raise NotImplementedError
+    return await extracted_process_audio_file(update, context, audio_info)
 
 
 async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE, video_info: dict | None = None):
-    raise NotImplementedError
+    return await extracted_process_video_file(update, context, video_info)
 
 
 def escape_md(text: str) -> str:

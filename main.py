@@ -24,7 +24,7 @@ from bot.config import initialize_runtime
 from bot.cleanup import monitor_disk_space, periodic_cleanup
 from bot.cli import parse_arguments, cli_mode, curses_main
 from bot.runtime import attach_runtime, build_app_runtime, get_config_value_for
-from bot.telegram_commands import (
+from bot.handlers.command_access import (
     start,
     help_command,
     logout_command,
@@ -32,6 +32,8 @@ from bot.telegram_commands import (
     history_command,
     cleanup_command,
     users_command,
+)
+from bot.handlers.inbound_media import (
     handle_youtube_link,
     handle_audio_upload,
     handle_video_upload,

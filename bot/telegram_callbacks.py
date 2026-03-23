@@ -16,6 +16,8 @@ from bot.config import get_runtime_value
 from bot.downloader_metadata import get_video_info
 from bot.downloader_validation import is_valid_audio_format, is_valid_ytdlp_format_id
 from bot.handlers import download_callbacks as _download_callbacks_module
+from bot.handlers import media_extras_callbacks as _media_extras_callbacks_module
+from bot.handlers import playlist_callbacks as _playlist_callbacks_module
 from bot.handlers import transcription_callbacks as _transcription_callbacks_module
 from bot.handlers.callback_parsing import parse_download_callback, parse_summary_option
 from bot.handlers.common_ui import (
@@ -27,17 +29,21 @@ from bot.handlers.common_ui import (
     send_long_message,
 )
 from bot.handlers.download_callbacks import (
-    _handle_instagram_download as _extracted_handle_instagram_download,
-    _show_spotify_summary_options as _extracted_show_spotify_summary_options,
     apply_time_range_preset as _extracted_apply_time_range_preset,
     back_to_main_menu as _extracted_back_to_main_menu,
     create_progress_hook as _extracted_create_progress_hook,
     download_file as _extracted_download_file,
-    download_playlist as _extracted_download_playlist,
     download_spotify_resolved as _extracted_download_spotify_resolved,
-    handle_formats_list as _extracted_handle_formats_list,
-    handle_playlist_callback as _extracted_handle_playlist_callback,
     show_time_range_options as _extracted_show_time_range_options,
+)
+from bot.handlers.media_extras_callbacks import (
+    _handle_instagram_download as _extracted_handle_instagram_download,
+    _show_spotify_summary_options as _extracted_show_spotify_summary_options,
+    handle_formats_list as _extracted_handle_formats_list,
+)
+from bot.handlers.playlist_callbacks import (
+    download_playlist as _extracted_download_playlist,
+    handle_playlist_callback as _extracted_handle_playlist_callback,
 )
 from bot.handlers.transcription_callbacks import (
     _handle_subtitle_callback as _extracted_handle_subtitle_callback,
@@ -245,6 +251,19 @@ def _sync_download_callback_dependencies() -> None:
     _download_callbacks_module.back_to_main_menu = back_to_main_menu
 
 
+def _sync_playlist_callback_dependencies() -> None:
+    """Keep extracted playlist callback helpers aligned with this module globals."""
+
+    _playlist_callbacks_module.get_video_info = get_video_info
+    _playlist_callbacks_module.load_playlist = load_playlist
+
+
+def _sync_media_extras_dependencies() -> None:
+    """Keep extracted media-extra callback helpers aligned with this module globals."""
+
+    _media_extras_callbacks_module.get_video_info = get_video_info
+
+
 def _sync_transcription_callback_dependencies() -> None:
     """Keep extracted transcription callback helpers aligned with this module globals."""
 
@@ -259,7 +278,7 @@ def create_progress_hook(chat_id):
 
 
 async def _handle_instagram_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url, callback_data: str):
-    _sync_download_callback_dependencies()
+    _sync_media_extras_dependencies()
     return await _extracted_handle_instagram_download(update, context, url, callback_data)
 
 
@@ -296,22 +315,22 @@ async def download_file(
 
 
 async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
-    _sync_download_callback_dependencies()
+    _sync_media_extras_dependencies()
     return await _extracted_handle_formats_list(update, context, url)
 
 
 async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
-    _sync_download_callback_dependencies()
+    _sync_playlist_callback_dependencies()
     return await _extracted_handle_playlist_callback(update, context, data)
 
 
 async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, callback_data: str):
-    _sync_download_callback_dependencies()
+    _sync_playlist_callback_dependencies()
     return await _extracted_download_playlist(update, context, callback_data)
 
 
 async def _show_spotify_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    _sync_download_callback_dependencies()
+    _sync_media_extras_dependencies()
     return await _extracted_show_spotify_summary_options(update, context)
 
 

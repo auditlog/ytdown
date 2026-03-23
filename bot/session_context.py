@@ -57,9 +57,7 @@ class AuthSessionData(MutableMapping[str, object]):
     def _get_pending(self):
         runtime = self._runtime()
         if runtime is not None:
-            pending = runtime.session_store.get_field(self._chat_id, "pending_action")
-            if pending is not None:
-                return pending
+            return runtime.session_store.get_field(self._chat_id, "pending_action")
 
         legacy = self._legacy()
         for kind in ("url", "audio", "video"):
@@ -139,8 +137,7 @@ class AuthSessionData(MutableMapping[str, object]):
             runtime = self._runtime()
             if runtime is not None:
                 value = runtime.session_store.get_field(self._chat_id, "awaiting_pin")
-                if value is not None:
-                    return value
+                return default if value is None else value
             return self._legacy().get(key, default)
 
         if key.startswith("pending_"):
@@ -148,6 +145,8 @@ class AuthSessionData(MutableMapping[str, object]):
             kind = key.removeprefix("pending_")
             if pending is not None and pending.get("kind") == kind:
                 return pending.get("payload")
+            if self._runtime() is not None:
+                return default
             return self._legacy().get(key, default)
 
         return self._legacy().get(key, default)
@@ -249,8 +248,7 @@ def get_session_context_value(
     runtime = get_app_runtime(context)
     if runtime is not None:
         value = runtime.session_store.get_field(chat_id, field_name)
-        if value is not None:
-            return value
+        return default if value is None else value
     return context.user_data.get(legacy_key, default)
 
 

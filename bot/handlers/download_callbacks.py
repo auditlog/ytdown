@@ -64,6 +64,15 @@ from bot.services.transcription_service import (
     transcript_too_long_for_summary,
 )
 from bot.runtime import record_download_for
+from bot.handlers.media_extras_callbacks import (
+    _handle_instagram_download as _extracted_handle_instagram_download,
+    _show_spotify_summary_options as _extracted_show_spotify_summary_options,
+    handle_formats_list as _extracted_handle_formats_list,
+)
+from bot.handlers.playlist_callbacks import (
+    download_playlist as _extracted_download_playlist,
+    handle_playlist_callback as _extracted_handle_playlist_callback,
+)
 
 
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -102,30 +111,7 @@ def create_progress_hook(chat_id):
 
 
 async def _handle_instagram_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url, callback_data: str):
-    query = update.callback_query
-    chat_id = update.effective_chat.id
-
-    carousel = _get_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
-    if not carousel:
-        await safe_edit_message(query, "Sesja wygasła. Wyślij link ponownie.")
-        return
-
-    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
-    os.makedirs(chat_download_path, exist_ok=True)
-
-    title = carousel.get("title", "Instagram post")
-    photos = carousel.get("photos", [])
-    videos = carousel.get("videos", [])
-
-    if callback_data == "dl_ig_photos":
-        await _download_and_send_ig_photos(update, context, photos, title, chat_download_path)
-    elif callback_data == "dl_ig_videos":
-        await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path)
-    elif callback_data == "dl_ig_all":
-        if photos:
-            await _download_and_send_ig_photos(update, context, photos, title, chat_download_path)
-        if videos:
-            await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path)
+    return await _extracted_handle_instagram_download(update, context, url, callback_data)
 
 
 async def _download_and_send_ig_photos(
@@ -576,161 +562,15 @@ async def download_file(
 
 
 async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
-    query = update.callback_query
-    info = get_video_info(url)
-    if not info:
-        chat_id = update.effective_chat.id
-        media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
-        await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
-        return
-
-    title = info.get("title", "Nieznany tytuł")
-    video_formats = []
-    audio_formats = []
-
-    for format_item in info.get("formats", []):
-        format_id = format_item.get("format_id", "N/A")
-        ext = format_item.get("ext", "N/A")
-        resolution = format_item.get("resolution", "N/A")
-
-        if format_item.get("vcodec") == "none":
-            if len(audio_formats) < 5:
-                audio_formats.append({"id": format_id, "desc": f"{format_id}: {ext}, {resolution}"})
-        else:
-            if len(video_formats) < 5:
-                video_formats.append({"id": format_id, "desc": f"{format_id}: {ext}, {resolution}"})
-
-    keyboard = []
-    for format_item in video_formats:
-        keyboard.append([InlineKeyboardButton(f"Video {format_item['desc']}", callback_data=f"dl_video_{format_item['id']}")])
-    for format_item in audio_formats:
-        keyboard.append([InlineKeyboardButton(f"Audio {format_item['desc']}", callback_data=f"dl_audio_format_{format_item['id']}")])
-    keyboard.append([InlineKeyboardButton("Powrót", callback_data="back")])
-
-    await safe_edit_message(
-        query,
-        f"Formaty dla: {title}\n\nWybierz format:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-    )
+    return await _extracted_handle_formats_list(update, context, url)
 
 
 async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
-    query = update.callback_query
-    chat_id = update.effective_chat.id
-
-    if data == "pl_cancel":
-        _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
-        await query.edit_message_text("Pobieranie playlisty anulowane.")
-        return
-
-    if data == "pl_single":
-        url = _get_session_value(context, chat_id, "current_url", user_urls)
-        if url:
-            clean_url = build_single_video_url(url)
-            _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
-            _set_session_value(context, chat_id, "current_url", clean_url, user_urls)
-
-            media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
-            await query.edit_message_text(f"Pobieranie informacji o {media_name}...")
-
-            info = get_video_info(clean_url)
-            if not info:
-                await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
-                return
-
-            title = info.get("title", "Nieznany tytuł")
-            duration = info.get("duration", 0)
-            duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
-            platform = _get_session_context_value(context, chat_id, "platform", legacy_key="platform", default="youtube")
-            keyboard = build_main_keyboard(platform)
-
-            await query.edit_message_text(
-                f"*{escape_md(title)}*\nCzas trwania: {duration_str}\n\nWybierz format do pobrania:",
-                reply_markup=InlineKeyboardMarkup(keyboard),
-                parse_mode="Markdown",
-            )
-        return
-
-    if data == "pl_full":
-        url = _get_session_value(context, chat_id, "current_url", user_urls)
-        if url:
-            await query.edit_message_text("Pobieranie informacji o playliście...")
-            playlist_info = load_playlist(url, max_items=MAX_PLAYLIST_ITEMS)
-            if not playlist_info or not playlist_info["entries"]:
-                await query.edit_message_text("Nie udało się pobrać informacji o playliście.")
-                return
-            _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
-            msg, reply_markup = build_playlist_message(playlist_info)
-            await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
-        return
-
-    if data == "pl_more":
-        url = _get_session_value(context, chat_id, "current_url", user_urls)
-        if url:
-            await query.edit_message_text("Pobieranie rozszerzonej listy...")
-            playlist_info = load_playlist(url, max_items=MAX_PLAYLIST_ITEMS_EXPANDED)
-            if not playlist_info or not playlist_info["entries"]:
-                await query.edit_message_text("Nie udało się pobrać rozszerzonej listy.")
-                return
-            _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
-            msg, reply_markup = build_playlist_message(playlist_info)
-            await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
-        return
-
-    if data.startswith("pl_dl_"):
-        await download_playlist(update, context, data)
+    return await _extracted_handle_playlist_callback(update, context, data)
 
 
 async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, callback_data: str):
-    query = update.callback_query
-    chat_id = update.effective_chat.id
-
-    playlist = _get_session_value(context, chat_id, "playlist_data", user_playlist_data)
-    if not playlist:
-        await query.edit_message_text("Sesja playlisty wygasła. Wyślij link ponownie.")
-        return
-
-    entries = playlist["entries"]
-    choice = parse_playlist_download_choice(callback_data)
-    media_type = choice.media_type
-    format_choice = choice.format_choice
-
-    total = len(entries)
-    succeeded = 0
-    failed_titles = []
-
-    await query.edit_message_text(
-        f"Rozpoczynam pobieranie playlisty ({total} filmów)...\nFormat: {media_type} {format_choice}"
-    )
-
-    for i, entry in enumerate(entries, 1):
-        entry_url = entry["url"]
-        entry_title = entry.get("title", f"Film {i}")
-
-        try:
-            status_msg = await context.bot.send_message(chat_id=chat_id, text=f"[{i}/{total}] Pobieranie: {entry_title}...")
-            await _download_single_playlist_item(context, chat_id, entry_url, entry_title, media_type, format_choice, status_msg)
-            succeeded += 1
-        except Exception as exc:
-            failed_titles.append(entry_title)
-            logging.error("Playlist item %d/%d failed: %s", i, total, exc)
-            try:
-                await status_msg.edit_text(f"[{i}/{total}] Błąd: {entry_title}\n{str(exc)[:100]}")
-            except Exception:
-                pass
-
-        if i < total:
-            await asyncio.sleep(1)
-
-    failed = len(failed_titles)
-    summary = f"Playlista zakończona!\n\nPobrano: {succeeded}/{total}\n"
-    if failed:
-        summary += f"Błędy: {failed}\n"
-        for title in failed_titles[:5]:
-            summary += f"  - {title[:40]}\n"
-
-    await context.bot.send_message(chat_id=chat_id, text=summary)
-    _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
+    return await _extracted_download_playlist(update, context, callback_data)
 
 
 async def _download_single_playlist_item(context, chat_id, url, title, media_type, format_choice, status_msg):
@@ -801,22 +641,7 @@ async def _download_single_playlist_item(context, chat_id, url, title, media_typ
 
 
 async def _show_spotify_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    chat_id = update.effective_chat.id
-    resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved", default={})
-    title = resolved.get("title", "Odcinek podcastu")
-    keyboard = [
-        [InlineKeyboardButton("1. Krótkie podsumowanie", callback_data="summary_option_1")],
-        [InlineKeyboardButton("2. Szczegółowe podsumowanie", callback_data="summary_option_2")],
-        [InlineKeyboardButton("3. Podsumowanie w punktach", callback_data="summary_option_3")],
-        [InlineKeyboardButton("4. Podział na zadania", callback_data="summary_option_4")],
-    ]
-    await safe_edit_message(
-        query,
-        f"*{escape_md(title)}*\n\nWybierz rodzaj podsumowania:",
-        reply_markup=InlineKeyboardMarkup(keyboard),
-        parse_mode="Markdown",
-    )
+    return await _extracted_show_spotify_summary_options(update, context)
 
 
 async def download_spotify_resolved(

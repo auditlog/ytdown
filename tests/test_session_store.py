@@ -9,6 +9,7 @@ from bot.session_store import (
     user_urls,
 )
 from bot.session_context import clear_transient_flow_state
+from bot.session_context import get_auth_state, get_session_context_value
 from bot.runtime import AppRuntime
 from bot.session_store import SecurityStore
 from unittest.mock import Mock
@@ -127,3 +128,49 @@ def test_clear_transient_flow_state_clears_runtime_session_fields():
     assert runtime.session_store.get_field(55, "audio_file_title") is None
     assert runtime.session_store.get_field(55, "subtitle_pending") is None
     assert context.user_data == {}
+
+
+def test_auth_state_with_runtime_does_not_read_legacy_pending_values():
+    context = Mock()
+    context.user_data = {"awaiting_pin": True, "pending_url": "https://legacy.example/url"}
+    runtime = AppRuntime(
+        config={},
+        session_store=SessionStore(),
+        security_store=SecurityStore(),
+        services=Mock(),
+        authorized_users_repository=Mock(),
+        download_history_repository=Mock(),
+        authorized_users_set=set(),
+    )
+    context.application = Mock()
+    context.application.bot_data = {"app_runtime": runtime}
+
+    auth_state = get_auth_state(context, 77)
+
+    assert auth_state.get("awaiting_pin") is None
+    assert auth_state.get("pending_url") is None
+
+
+def test_session_context_value_with_runtime_ignores_legacy_user_data():
+    context = Mock()
+    context.user_data = {"spotify_resolved": {"title": "Legacy"}}
+    runtime = AppRuntime(
+        config={},
+        session_store=SessionStore(),
+        security_store=SecurityStore(),
+        services=Mock(),
+        authorized_users_repository=Mock(),
+        download_history_repository=Mock(),
+        authorized_users_set=set(),
+    )
+    context.application = Mock()
+    context.application.bot_data = {"app_runtime": runtime}
+
+    value = get_session_context_value(
+        context,
+        88,
+        "spotify_resolved",
+        legacy_key="spotify_resolved",
+    )
+
+    assert value is None

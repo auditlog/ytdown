@@ -39,15 +39,21 @@ from bot.session_context import (
 
 
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
-    raise NotImplementedError
+    from bot.handlers.inbound_media import process_youtube_link as _process_youtube_link
+
+    return await _process_youtube_link(update, context, url)
 
 
 async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE, audio_info):
-    raise NotImplementedError
+    from bot.handlers.inbound_media import process_audio_file as _process_audio_file
+
+    return await _process_audio_file(update, context, audio_info)
 
 
 async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE, video_info):
-    raise NotImplementedError
+    from bot.handlers.inbound_media import process_video_file as _process_video_file
+
+    return await _process_video_file(update, context, video_info)
 
 
 def _is_admin(user_id: int) -> bool:

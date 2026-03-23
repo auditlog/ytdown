@@ -375,9 +375,12 @@ ytdown/
 │   ├── handlers/                   # Wydzielone flow handlery (bez cross-importów do routerów)
 │   │   ├── command_access.py       # Auth/admin/info: /start, PIN, /logout, /help, /status
 │   │   ├── inbound_media.py        # Intake URL-i, upload audio/video, playlist entry
-│   │   ├── download_callbacks.py   # Download flow, progress, playlist, Instagram, Spotify
+│   │   ├── download_callbacks.py   # Core download flow i progress
+│   │   ├── playlist_callbacks.py   # Playlist callback flows (browse, download items)
+│   │   ├── media_extras_callbacks.py # Instagram photos/videos, format list, Spotify summary
 │   │   ├── transcription_callbacks.py # Transkrypcja, napisy, podsumowania
 │   │   ├── callback_parsing.py     # Parsery callback payload (download, summary)
+│   │   ├── time_range.py           # Wspólny parser zakresów czasowych
 │   │   └── common_ui.py           # Centralny hub UI: klawiatury, Markdown, formatowanie
 │   └── services/                   # Logika biznesowa niezależna od Telegrama
 │       ├── auth_service.py         # PIN, login/logout, security state reset
@@ -386,7 +389,7 @@ ytdown/
 │       ├── spotify_service.py      # Resolving odcinków Spotify (iTunes/YouTube)
 │       └── transcription_service.py # Artefakty transkrypcji i podsumowań
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~475 testów)
+├── tests/                          # Testy (~477 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
