@@ -343,7 +343,7 @@ Bot oferuje 4 typy streszczeń AI (Claude Haiku 4.5):
 ytdown/
 ├── main.py                         # Entry point aplikacji
 ├── bot/                            # Główny pakiet aplikacji
-│   ├── __init__.py                 # Eksporty pakietu
+│   ├── __init__.py                 # Publiczne API pakietu (moduły, nie funkcje)
 │   ├── config.py                   # Bootstrap konfiguracji + aktywny cache autoryzacji runtime
 │   ├── runtime.py                  # Kontener AppRuntime, config accessors i auth helpery
 │   ├── session_store.py            # SessionStore — chat-scoped state w pamięci
