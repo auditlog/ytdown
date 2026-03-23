@@ -7,6 +7,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import main as app_main
+from bot.runtime import AppRuntime
+from bot.session_store import SecurityStore, SessionStore
 
 
 def test_set_bot_commands_configures_menu():
@@ -61,10 +63,22 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
 
     monkeypatch.setattr(app_main, "parse_arguments", lambda: args)
     monkeypatch.setattr(app_main, "initialize_runtime", Mock())
-    monkeypatch.setattr(app_main, "get_runtime_value", lambda key, default=None: "test-token" if key == "TELEGRAM_BOT_TOKEN" else default)
     monkeypatch.setattr(app_main, "ApplicationBuilder", lambda: builder)
     monkeypatch.setattr(app_main, "monitor_disk_space", Mock())
     monkeypatch.setattr(app_main, "periodic_cleanup", Mock())
+    monkeypatch.setattr(
+        app_main,
+        "build_app_runtime",
+        lambda: AppRuntime(
+            config={"TELEGRAM_BOT_TOKEN": "test-token"},
+            session_store=SessionStore(),
+            security_store=SecurityStore(),
+            services=Mock(),
+            authorized_users_repository=Mock(),
+            download_history_repository=Mock(),
+            authorized_users_set=set(),
+        ),
+    )
 
     # Avoid Telegram-specific filter operations in handler registration
     filters = SimpleNamespace(
@@ -97,3 +111,34 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
     assert "app_runtime" in app.bot_data
     app.run_polling.assert_called_once()
     assert app.add_handler.call_count >= 7
+
+
+def test_build_application_reads_token_from_runtime_config(monkeypatch):
+    app = Mock()
+    app.bot_data = {}
+    app.job_queue = Mock()
+    app.job_queue.run_once = Mock()
+
+    builder = Mock()
+    builder.token.return_value = builder
+    builder.connect_timeout.return_value = builder
+    builder.read_timeout.return_value = builder
+    builder.write_timeout.return_value = builder
+    builder.build.return_value = app
+
+    monkeypatch.setattr(app_main, "ApplicationBuilder", lambda: builder)
+
+    runtime = AppRuntime(
+        config={"TELEGRAM_BOT_TOKEN": "runtime-token"},
+        session_store=SessionStore(),
+        security_store=SecurityStore(),
+        services=Mock(),
+        authorized_users_repository=Mock(),
+        download_history_repository=Mock(),
+        authorized_users_set=set(),
+    )
+    built_app = app_main.build_application(runtime=runtime)
+
+    assert built_app is app
+    builder.token.assert_called_once_with("runtime-token")
+    assert app.bot_data["app_runtime"] is runtime

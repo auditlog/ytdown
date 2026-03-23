@@ -344,8 +344,8 @@ ytdown/
 ├── main.py                         # Entry point aplikacji
 ├── bot/                            # Główny pakiet aplikacji
 │   ├── __init__.py                 # Eksporty pakietu
-│   ├── config.py                   # Konfiguracja, bootstrap i legacy auth cache
-│   ├── runtime.py                  # Kontener AppRuntime i runtime-aware helpery
+│   ├── config.py                   # Bootstrap konfiguracji (.env / api_key.md / env vars)
+│   ├── runtime.py                  # Kontener AppRuntime, config accessors i auth helpery
 │   ├── session_store.py            # SessionStore — chat-scoped state w pamięci
 │   ├── session_context.py          # Shared session bridge (auth state, flow fields)
 │   ├── repositories.py             # Persystencja JSON (authorized_users, history)

@@ -68,6 +68,15 @@ def attach_runtime(application: Any, runtime: AppRuntime) -> AppRuntime:
 def get_app_runtime(source: Any) -> AppRuntime | None:
     """Read the application runtime from PTB application/context objects."""
 
+    if isinstance(source, AppRuntime):
+        return source
+
+    config = getattr(source, "config", None)
+    if isinstance(config, dict):
+        candidate = getattr(source, "authorized_users_set", None)
+        if candidate is not None:
+            return source
+
     bot_data = getattr(source, "bot_data", None)
     if isinstance(bot_data, dict):
         return bot_data.get(RUNTIME_KEY)
@@ -88,6 +97,21 @@ def get_authorized_user_ids_for(source: Any) -> set[int]:
     if runtime is not None:
         return runtime.authorized_users_set
     return get_runtime_authorized_users()
+
+
+def get_config_for(source: Any) -> dict[str, Any]:
+    """Return active configuration for a runtime-aware caller."""
+
+    runtime = get_app_runtime(source)
+    if runtime is not None:
+        return runtime.config
+    return get_runtime_config()
+
+
+def get_config_value_for(source: Any, key: str, default: Any = None) -> Any:
+    """Return one configuration value for a runtime-aware caller."""
+
+    return get_config_for(source).get(key, default)
 
 
 def add_authorized_user_for(source: Any, user_id: int) -> bool:
