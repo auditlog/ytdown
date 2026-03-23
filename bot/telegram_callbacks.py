@@ -24,6 +24,7 @@ from bot.config import (
     get_runtime_value,
 )
 from bot.handlers import download_callbacks as _download_callbacks_module
+from bot.handlers import transcription_callbacks as _transcription_callbacks_module
 from bot.handlers.download_callbacks import (
     _handle_instagram_download as _extracted_handle_instagram_download,
     _show_spotify_summary_options as _extracted_show_spotify_summary_options,
@@ -36,6 +37,16 @@ from bot.handlers.download_callbacks import (
     handle_formats_list as _extracted_handle_formats_list,
     handle_playlist_callback as _extracted_handle_playlist_callback,
     show_time_range_options as _extracted_show_time_range_options,
+)
+from bot.handlers.transcription_callbacks import (
+    _handle_subtitle_callback as _extracted_handle_subtitle_callback,
+    _handle_subtitle_summary_callback as _extracted_handle_subtitle_summary_callback,
+    _parse_subtitle_callback as _extracted_parse_subtitle_callback,
+    handle_subtitle_download as _extracted_handle_subtitle_download,
+    show_audio_summary_options as _extracted_show_audio_summary_options,
+    show_subtitle_source_menu as _extracted_show_subtitle_source_menu,
+    show_subtitle_summary_options as _extracted_show_subtitle_summary_options,
+    transcribe_audio_file as _extracted_transcribe_audio_file,
 )
 from bot.handlers.callback_parsing import parse_download_callback, parse_summary_option
 from bot.handlers.common_ui import (
@@ -2010,6 +2021,15 @@ def _sync_download_callback_dependencies() -> None:
     _download_callbacks_module.back_to_main_menu = back_to_main_menu
 
 
+def _sync_transcription_callback_dependencies() -> None:
+    """Keep extracted transcription callback helpers aligned with this module globals."""
+
+    _transcription_callbacks_module.get_video_info = get_video_info
+    _transcription_callbacks_module.get_runtime_value = get_runtime_value
+    _transcription_callbacks_module.show_summary_options = show_summary_options
+    _transcription_callbacks_module.download_file = download_file
+
+
 def create_progress_hook(chat_id):
     return _extracted_create_progress_hook(chat_id)
 
@@ -2089,3 +2109,58 @@ async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_
 async def apply_time_range_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, url, preset):
     _sync_download_callback_dependencies()
     return await _extracted_apply_time_range_preset(update, context, url, preset)
+
+
+async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE, summary=False, summary_type=None):
+    _sync_transcription_callback_dependencies()
+    return await _extracted_transcribe_audio_file(update, context, summary=summary, summary_type=summary_type)
+
+
+async def show_audio_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_transcription_callback_dependencies()
+    return await _extracted_show_audio_summary_options(update, context)
+
+
+async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, url, with_summary=False):
+    _sync_transcription_callback_dependencies()
+    return await _extracted_show_subtitle_source_menu(update, context, url, with_summary=with_summary)
+
+
+def _parse_subtitle_callback(data: str):
+    return _extracted_parse_subtitle_callback(data)
+
+
+async def _handle_subtitle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, url, data):
+    _sync_transcription_callback_dependencies()
+    return await _extracted_handle_subtitle_callback(update, context, url, data)
+
+
+async def _handle_subtitle_summary_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, url, data):
+    _sync_transcription_callback_dependencies()
+    return await _extracted_handle_subtitle_summary_callback(update, context, url, data)
+
+
+async def show_subtitle_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_transcription_callback_dependencies()
+    return await _extracted_show_subtitle_summary_options(update, context)
+
+
+async def handle_subtitle_download(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url,
+    lang,
+    auto,
+    summary=False,
+    summary_type=None,
+):
+    _sync_transcription_callback_dependencies()
+    return await _extracted_handle_subtitle_download(
+        update,
+        context,
+        url,
+        lang,
+        auto,
+        summary=summary,
+        summary_type=summary_type,
+    )
