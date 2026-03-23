@@ -209,7 +209,7 @@ def load_authorized_users():
     Returns:
         set: Set of user_id for authorized users
     """
-    return get_authorized_users_repository().load()
+    return _replace_runtime_authorized_users(get_authorized_users_repository().load())
 
 
 def save_authorized_users(authorized_users_set):
@@ -219,7 +219,9 @@ def save_authorized_users(authorized_users_set):
     Args:
         authorized_users_set: Set of authorized user IDs
     """
-    get_authorized_users_repository().save(authorized_users_set)
+    normalized_users = {int(user_id) for user_id in authorized_users_set}
+    get_authorized_users_repository().save(normalized_users)
+    return _replace_runtime_authorized_users(normalized_users)
 
 
 # Path to download history file
@@ -362,9 +364,19 @@ CONFIG: dict = {}
 BOT_TOKEN = ""
 PIN_CODE = ""
 ADMIN_CHAT_ID = ""
-# Legacy bootstrap cache kept for compatibility when code paths run without an
-# attached AppRuntime. Runtime-aware handlers should prefer bot.runtime helpers.
+# Active runtime cache for authorization state. It remains available for legacy
+# code paths without an attached AppRuntime, but mutations should still flow
+# through the helper API below so the repository and in-memory cache stay in
+# sync.
 authorized_users: set[int] = set()
+
+
+def _replace_runtime_authorized_users(user_ids) -> set[int]:
+    """Replace runtime authorized-user cache in place and return it."""
+
+    authorized_users.clear()
+    authorized_users.update(int(user_id) for user_id in user_ids)
+    return authorized_users
 
 
 def initialize_runtime(
@@ -384,7 +396,7 @@ def initialize_runtime(
         ensure_downloads_dir=ensure_downloads_dir,
     )
     RUNTIME_SERVICES = build_runtime_services()
-    loaded_users = get_authorized_users_repository().load()
+    loaded_users = load_authorized_users()
 
     CONFIG.clear()
     CONFIG.update(loaded_config)
@@ -393,9 +405,7 @@ def initialize_runtime(
     BOT_TOKEN = CONFIG["TELEGRAM_BOT_TOKEN"]
     PIN_CODE = CONFIG["PIN_CODE"]
     ADMIN_CHAT_ID = CONFIG.get("ADMIN_CHAT_ID", "")
-
-    authorized_users.clear()
-    authorized_users.update(loaded_users)
+    _replace_runtime_authorized_users(loaded_users)
 
     return CONFIG
 
@@ -424,8 +434,7 @@ def add_runtime_authorized_user(user_id: int) -> bool:
     if user_id in authorized_users:
         return False
 
-    authorized_users.add(user_id)
-    save_authorized_users(authorized_users)
+    save_authorized_users({*authorized_users, user_id})
     return True
 
 
@@ -435,8 +444,9 @@ def remove_runtime_authorized_user(user_id: int) -> bool:
     if user_id not in authorized_users:
         return False
 
-    authorized_users.discard(user_id)
-    save_authorized_users(authorized_users)
+    save_authorized_users(
+        {authorized_id for authorized_id in authorized_users if authorized_id != user_id}
+    )
     return True
 
 

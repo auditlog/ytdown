@@ -132,3 +132,47 @@ def test_initialize_runtime_refreshes_runtime_services_paths(tmp_path, monkeypat
     services = config.get_runtime_services()
     assert services.authorized_users_repository.path == str(users_file)
     assert services.download_history_repository.path == str(history_file)
+
+
+def test_load_authorized_users_refreshes_runtime_cache_in_place(tmp_path, monkeypatch):
+    users_file = tmp_path / "authorized_users.json"
+    users_file.write_text(
+        '{"authorized_users": ["101", "202"], "last_updated": "", "version": "1.0"}',
+        encoding="utf-8",
+    )
+    original_users = config.authorized_users
+    original_snapshot = original_users.copy()
+
+    monkeypatch.setattr(config, "AUTHORIZED_USERS_FILE", str(users_file))
+
+    try:
+        loaded_users = config.load_authorized_users()
+
+        assert loaded_users is original_users
+        assert config.authorized_users is original_users
+        assert loaded_users == {101, 202}
+    finally:
+        original_users.clear()
+        original_users.update(original_snapshot)
+
+
+def test_save_authorized_users_refreshes_runtime_cache_in_place(tmp_path, monkeypatch):
+    users_file = tmp_path / "authorized_users.json"
+    original_users = config.authorized_users
+    original_snapshot = original_users.copy()
+    original_users.clear()
+    original_users.update({1})
+
+    monkeypatch.setattr(config, "AUTHORIZED_USERS_FILE", str(users_file))
+
+    try:
+        saved_users = config.save_authorized_users({"303", 404})
+
+        assert saved_users is original_users
+        assert config.authorized_users is original_users
+        assert config.authorized_users == {303, 404}
+        assert '"303"' in users_file.read_text(encoding="utf-8")
+        assert '"404"' in users_file.read_text(encoding="utf-8")
+    finally:
+        original_users.clear()
+        original_users.update(original_snapshot)
