@@ -23,6 +23,20 @@ from bot.config import (
     DOWNLOAD_PATH,
     get_runtime_value,
 )
+from bot.handlers import download_callbacks as _download_callbacks_module
+from bot.handlers.download_callbacks import (
+    _handle_instagram_download as _extracted_handle_instagram_download,
+    _show_spotify_summary_options as _extracted_show_spotify_summary_options,
+    apply_time_range_preset as _extracted_apply_time_range_preset,
+    back_to_main_menu as _extracted_back_to_main_menu,
+    create_progress_hook as _extracted_create_progress_hook,
+    download_file as _extracted_download_file,
+    download_playlist as _extracted_download_playlist,
+    download_spotify_resolved as _extracted_download_spotify_resolved,
+    handle_formats_list as _extracted_handle_formats_list,
+    handle_playlist_callback as _extracted_handle_playlist_callback,
+    show_time_range_options as _extracted_show_time_range_options,
+)
 from bot.handlers.callback_parsing import parse_download_callback, parse_summary_option
 from bot.handlers.common_ui import (
     format_bytes,
@@ -1985,3 +1999,93 @@ async def handle_subtitle_download(
             0, None, selected_format=f"sub_{lang}",
         )
         await update_status("Napisy zostały wysłane!")
+
+
+def _sync_download_callback_dependencies() -> None:
+    """Keep extracted download callback helpers aligned with this module globals."""
+
+    _download_callbacks_module.get_video_info = get_video_info
+    _download_callbacks_module.load_playlist = load_playlist
+    _download_callbacks_module.download_resolved_audio = download_resolved_audio
+    _download_callbacks_module.back_to_main_menu = back_to_main_menu
+
+
+def create_progress_hook(chat_id):
+    return _extracted_create_progress_hook(chat_id)
+
+
+async def _handle_instagram_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url, callback_data: str):
+    _sync_download_callback_dependencies()
+    return await _extracted_handle_instagram_download(update, context, url, callback_data)
+
+
+async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type, format, url, transcribe=False, summary=False, summary_type=None, use_format_id=False, audio_quality='192'):
+    _sync_download_callback_dependencies()
+    return await _extracted_download_file(
+        update,
+        context,
+        type,
+        format,
+        url,
+        transcribe=transcribe,
+        summary=summary,
+        summary_type=summary_type,
+        use_format_id=use_format_id,
+        audio_quality=audio_quality,
+    )
+
+
+async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    _sync_download_callback_dependencies()
+    return await _extracted_handle_formats_list(update, context, url)
+
+
+async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    _sync_download_callback_dependencies()
+    return await _extracted_handle_playlist_callback(update, context, data)
+
+
+async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, callback_data: str):
+    _sync_download_callback_dependencies()
+    return await _extracted_download_playlist(update, context, callback_data)
+
+
+async def _show_spotify_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_download_callback_dependencies()
+    return await _extracted_show_spotify_summary_options(update, context)
+
+
+async def download_spotify_resolved(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    resolved: dict,
+    audio_format: str = "mp3",
+    transcribe: bool = False,
+    summary: bool = False,
+    summary_type: int | None = None,
+):
+    _sync_download_callback_dependencies()
+    return await _extracted_download_spotify_resolved(
+        update,
+        context,
+        resolved,
+        audio_format=audio_format,
+        transcribe=transcribe,
+        summary=summary,
+        summary_type=summary_type,
+    )
+
+
+async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    _sync_download_callback_dependencies()
+    return await _extracted_back_to_main_menu(update, context, url)
+
+
+async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    _sync_download_callback_dependencies()
+    return await _extracted_show_time_range_options(update, context, url)
+
+
+async def apply_time_range_preset(update: Update, context: ContextTypes.DEFAULT_TYPE, url, preset):
+    _sync_download_callback_dependencies()
+    return await _extracted_apply_time_range_preset(update, context, url, preset)
