@@ -14,7 +14,6 @@ from bot.cleanup import (
 from bot.config import (
     CONFIG,
     DOWNLOAD_PATH,
-    authorized_users,
     load_authorized_users,
     load_config,
     save_authorized_users,
@@ -81,7 +80,6 @@ from bot.transcription import (
 __all__ = [
     "CONFIG",
     "DOWNLOAD_PATH",
-    "authorized_users",
     "load_config",
     "load_authorized_users",
     "save_authorized_users",

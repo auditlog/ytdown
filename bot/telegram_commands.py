@@ -139,19 +139,13 @@ def escape_md(text: str) -> str:
     return _shared_escape_md(text)
 
 
-def get_runtime_authorized_users() -> set[int]:
-    """Legacy compatibility shim for tests patching the old auth accessor."""
-
-    return get_authorized_user_ids_for(None)
-
-
 def _resolve_authorized_user_ids(source) -> set[int]:
-    """Resolve authorized users through runtime-aware and legacy-compatible shims."""
+    """Resolve authorized users through runtime-aware helpers."""
 
     runtime = get_app_runtime(source)
     if runtime is not None:
         return runtime.authorized_users_set
-    return get_runtime_authorized_users()
+    return get_authorized_user_ids_for(None)
 
 
 def _is_admin(user_id: int) -> bool:

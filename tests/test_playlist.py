@@ -22,7 +22,7 @@ def _async(coro):
 
 
 def _set_authorized_users(monkeypatch, users):
-    monkeypatch.setattr(tc, "get_runtime_authorized_users", lambda: users)
+    monkeypatch.setattr(tc, "get_authorized_user_ids_for", lambda *_args, **_kwargs: users)
 
 
 def _make_update(text="", user_id=123456, chat_id=123456):
