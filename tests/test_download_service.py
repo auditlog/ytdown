@@ -112,3 +112,45 @@ def test_find_downloaded_file_skips_artifacts(monkeypatch, tmp_path):
 
     found = ds.find_downloaded_file(plan)
     assert found == str(media)
+
+
+def test_execute_download_plan_runs_ytdlp_and_returns_result(monkeypatch, tmp_path):
+    media = tmp_path / "2026-03-21 Sample.mp3"
+    media.write_text("media", encoding="utf-8")
+
+    plan = ds.DownloadPlan(
+        url="https://www.youtube.com/watch?v=abc",
+        media_type="audio",
+        format_choice="mp3",
+        transcribe=False,
+        use_format_id=False,
+        audio_quality="192",
+        info={"title": "Sample", "duration": 10},
+        title="Sample",
+        duration=10,
+        duration_str="0:10",
+        sanitized_title="Sample",
+        output_path=str(tmp_path / "2026-03-21 Sample"),
+        chat_download_path=str(tmp_path),
+        ydl_opts={"format": "bestaudio/best"},
+        time_range=None,
+    )
+
+    called = {}
+
+    class MockYoutubeDL:
+        def __init__(self, opts):
+            called["opts"] = opts
+
+        def download(self, urls):
+            called["urls"] = urls
+            return 0
+
+    monkeypatch.setattr(ds.yt_dlp, "YoutubeDL", MockYoutubeDL)
+
+    result = ds.execute_download_plan(plan)
+
+    assert called["opts"] == {"format": "bestaudio/best"}
+    assert called["urls"] == ["https://www.youtube.com/watch?v=abc"]
+    assert result.file_path == str(media)
+    assert result.file_size_mb > 0

@@ -386,7 +386,7 @@ ytdown/
 │       ├── spotify_service.py      # Resolving odcinków Spotify (iTunes/YouTube)
 │       └── transcription_service.py # Artefakty transkrypcji i podsumowań
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~461 testów)
+├── tests/                          # Testy (~475 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
@@ -407,6 +407,12 @@ ytdown/
 │   ├── test_downloader.py          # Testy downloadera, walidacji czasu
 │   ├── test_download_history.py    # Testy historii pobrań
 │   ├── test_cli.py                 # Testy CLI
+│   ├── test_download_service.py    # Testy planowania i wykonywania pobrań
+│   ├── test_security_policy.py     # Testy walidacji URL i detekcji platform
+│   ├── test_security_pin_module.py # Testy blokowania PIN
+│   ├── test_security_throttling.py # Testy rate limitingu
+│   ├── test_transcription_providers.py # Testy adapterów Groq/Claude (retry, extraction)
+│   ├── test_transcription_pipeline.py  # Testy orkiestracji pipeline transkrypcji
 │   └── ...                         # Pozostałe testy
 ├── api_key.md                      # Konfiguracja (ignorowany przez git)
 ├── cookies.txt                     # Cookies YouTube (ignorowany przez git)
