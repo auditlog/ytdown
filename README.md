@@ -344,22 +344,44 @@ ytdown/
 ├── main.py                         # Entry point aplikacji
 ├── bot/                            # Główny pakiet aplikacji
 │   ├── __init__.py                 # Eksporty pakietu
-│   ├── config.py                   # Konfiguracja i zarządzanie użytkownikami
+│   ├── config.py                   # Konfiguracja, bootstrap i legacy auth cache
+│   ├── runtime.py                  # Kontener AppRuntime i runtime-aware helpery
+│   ├── session_store.py            # SessionStore — chat-scoped state w pamięci
+│   ├── session_context.py          # Shared session bridge (auth state, flow fields)
+│   ├── repositories.py             # Persystencja JSON (authorized_users, history)
 │   ├── security.py                 # Rate limiting, walidacja URL, bezpieczeństwo
 │   ├── cleanup.py                  # Czyszczenie plików i monitoring dysku
 │   ├── transcription.py            # Transkrypcja (Groq) i podsumowania (Claude)
 │   ├── downloader.py               # Pobieranie mediów z platform (yt-dlp)
 │   ├── spotify.py                  # Rozwiązywanie Spotify podcastów (iTunes/YouTube)
+│   ├── mtproto.py                  # Upload dużych plików przez MTProto (Pyrogram)
 │   ├── cli.py                      # Interfejs wiersza poleceń
-│   ├── telegram_commands.py        # Handlery komend Telegram (/start, /help, etc.)
-│   └── telegram_callbacks.py       # Handlery callbacków (przyciski, pobieranie)
+│   ├── telegram_commands.py        # Router komend — wrappery kompatybilności
+│   ├── telegram_callbacks.py       # Router callbacków — wrappery kompatybilności
+│   ├── handlers/                   # Wydzielone flow handlery
+│   │   ├── command_access.py       # Auth/admin/info: /start, PIN, /logout, /help, /status
+│   │   ├── inbound_media.py        # Intake URL-i, upload audio/video, playlist entry
+│   │   ├── download_callbacks.py   # Download flow, progress, playlist, Instagram, Spotify
+│   │   ├── transcription_callbacks.py # Transkrypcja, napisy, podsumowania
+│   │   ├── callback_parsing.py     # Parsery callback payload (download, summary)
+│   │   └── common_ui.py           # Shared UI: klawiatury, formatowanie, Markdown
+│   └── services/                   # Logika biznesowa niezależna od Telegrama
+│       ├── auth_service.py         # PIN, login/logout, security state reset
+│       ├── download_service.py     # Planowanie i wykonywanie pobrań
+│       ├── playlist_service.py     # Obsługa playlist (budowanie, pobieranie itemów)
+│       ├── spotify_service.py      # Resolving odcinków Spotify (iTunes/YouTube)
+│       └── transcription_service.py # Artefakty transkrypcji i podsumowań
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~320 testów)
+├── tests/                          # Testy (~460 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
-│   ├── test_security_unit.py       # Testy PIN, blokowania, logowania
+│   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
 │   ├── test_telegram_commands.py   # Testy komend, powiadomień admina
 │   ├── test_telegram_callbacks.py  # Testy callbacków, pobierania
+│   ├── test_auth_service.py        # Testy auth service (PIN, logout)
+│   ├── test_runtime.py             # Testy runtime auth helperów
+│   ├── test_session_store.py       # Testy SessionStore i session cleanup
+│   ├── test_repositories.py        # Testy persystencji JSON
 │   ├── test_spotify.py             # Testy Spotify podcastów
 │   ├── test_downloader.py          # Testy downloadera, walidacji czasu
 │   ├── test_download_history.py    # Testy historii pobrań

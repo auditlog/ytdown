@@ -2040,6 +2040,11 @@ async def _handle_instagram_download(update: Update, context: ContextTypes.DEFAU
 
 
 async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type, format, url, transcribe=False, summary=False, summary_type=None, use_format_id=False, audio_quality='192'):
+    """Compatibility wrapper for extracted download flow.
+
+    User-facing fallback remains: "Wystąpił błąd podczas pobierania".
+    """
+
     _sync_download_callback_dependencies()
     return await _extracted_download_file(
         update,

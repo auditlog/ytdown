@@ -8,11 +8,9 @@ and PIN authentication logic.
 import os
 import logging
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardMarkup
 from telegram.ext import ContextTypes
-from telegram.helpers import escape_markdown
 
 from datetime import datetime
 
@@ -37,6 +35,11 @@ from bot.handlers.command_access import (
     start as _extracted_start,
     status_command as _extracted_status_command,
     users_command as _extracted_users_command,
+)
+from bot.handlers.common_ui import (
+    build_instagram_photo_keyboard,
+    build_main_keyboard,
+    escape_md as _shared_escape_md,
 )
 from bot.handlers.inbound_media import (
     _extract_audio_info as _extracted_extract_audio_info,
@@ -118,94 +121,37 @@ from bot.runtime import (
     remove_authorized_user_for,
 )
 
-
-def escape_md(text: str) -> str:
-    """Escapes Markdown v1 special characters in text."""
-    return escape_markdown(text, version=1)
-
-
 def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
-    """Builds the main format selection keyboard, conditional on platform.
+    """Compatibility wrapper for the shared main keyboard builder."""
 
-    Args:
-        platform: Detected platform ('youtube', 'tiktok', etc.)
-        large_file: If True, shows resolution options instead of "best quality"
-
-    Returns:
-        List of InlineKeyboardButton rows for InlineKeyboardMarkup.
-    """
-    is_podcast = platform in ('castbox', 'spotify')
-    hide_flac = platform in ('tiktok', 'castbox', 'spotify')
-    hide_time_range = platform in ('tiktok', 'castbox', 'spotify')
-
-    if is_podcast:
-        # Audio-only platform — no video options, no format list
-        keyboard = [
-            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-        ]
-        return keyboard
-
-    if large_file:
-        keyboard = [
-            [InlineKeyboardButton("Video 1080p (Full HD)", callback_data="dl_video_1080p")],
-            [InlineKeyboardButton("Video 720p (HD)", callback_data="dl_video_720p")],
-            [InlineKeyboardButton("Video 480p (SD)", callback_data="dl_video_480p")],
-            [InlineKeyboardButton("Video 360p (Niska jakość)", callback_data="dl_video_360p")],
-            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-        ]
-    else:
-        keyboard = [
-            [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
-            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
-            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
-        ]
-        if not hide_flac:
-            keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
-        keyboard.extend([
-            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
-            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
-        ])
-
-    if not hide_time_range:
-        keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
-    keyboard.append([
-        InlineKeyboardButton("Lista formatów", callback_data="formats"),
-        InlineKeyboardButton("Miniaturka", callback_data="thumbnail"),
-    ])
-
-    return keyboard
+    return build_main_keyboard(platform, large_file=large_file)
 
 
 def _build_instagram_photo_keyboard(photos: list, videos: list) -> list:
-    """Builds keyboard for Instagram photo/carousel posts.
+    """Compatibility wrapper for the shared Instagram keyboard builder."""
 
-    Args:
-        photos: List of photo entries from yt-dlp.
-        videos: List of video entries from yt-dlp.
+    return build_instagram_photo_keyboard(photos, videos)
 
-    Returns:
-        List of InlineKeyboardButton rows.
-    """
-    keyboard = []
 
-    if photos:
-        label = f"Pobierz zdjęcia ({len(photos)})" if len(photos) > 1 else "Pobierz zdjęcie"
-        keyboard.append([InlineKeyboardButton(label, callback_data="dl_ig_photos")])
+def escape_md(text: str) -> str:
+    """Compatibility wrapper for shared Markdown escaping."""
 
-    if videos:
-        label = f"Pobierz filmy ({len(videos)})" if len(videos) > 1 else "Pobierz film"
-        keyboard.append([InlineKeyboardButton(label, callback_data="dl_ig_videos")])
+    return _shared_escape_md(text)
 
-    if photos and videos:
-        keyboard.append([InlineKeyboardButton("Pobierz wszystko", callback_data="dl_ig_all")])
 
-    return keyboard
+def get_runtime_authorized_users() -> set[int]:
+    """Legacy compatibility shim for tests patching the old auth accessor."""
+
+    return get_authorized_user_ids_for(None)
+
+
+def _resolve_authorized_user_ids(source) -> set[int]:
+    """Resolve authorized users through runtime-aware and legacy-compatible shims."""
+
+    runtime = get_app_runtime(source)
+    if runtime is not None:
+        return runtime.authorized_users_set
+    return get_runtime_authorized_users()
 
 
 def _is_admin(user_id: int) -> bool:
@@ -616,7 +562,7 @@ def _sync_command_access_dependencies() -> None:
 
     _command_access_module.DOWNLOAD_PATH = DOWNLOAD_PATH
     _command_access_module.get_runtime_value = get_runtime_value
-    _command_access_module.get_authorized_user_ids_for = get_authorized_user_ids_for
+    _command_access_module.get_authorized_user_ids_for = _resolve_authorized_user_ids
     _command_access_module.get_download_stats = get_download_stats
     _command_access_module.MAX_ATTEMPTS = MAX_ATTEMPTS
     _command_access_module.BLOCK_TIME = BLOCK_TIME
@@ -656,6 +602,8 @@ def _sync_inbound_media_dependencies() -> None:
     _inbound_media_module.is_pure_playlist_url = is_pure_playlist_url
     _inbound_media_module.get_instagram_post_info = get_instagram_post_info
     _inbound_media_module.is_photo_entry = is_photo_entry
+    _inbound_media_module.load_playlist = load_playlist
+    _inbound_media_module.build_playlist_message = build_playlist_message
     _inbound_media_module.parse_time_range = parse_time_range
     _inbound_media_module.handle_pin = handle_pin
     _inbound_media_module._is_authorized = _is_authorized
@@ -772,6 +720,11 @@ async def handle_audio_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE, audio_info: dict | None = None):
+    """Compatibility wrapper preserving user-safe audio upload error messaging.
+
+    User-facing fallback remains: "Błąd przetwarzania pliku audio. Spróbuj ponownie."
+    """
+
     _sync_inbound_media_dependencies()
     return await _extracted_process_audio_file(update, context, audio_info)
 

@@ -4,7 +4,86 @@ from __future__ import annotations
 
 import logging
 
+from telegram import InlineKeyboardButton
 from telegram.error import BadRequest, NetworkError, TimedOut
+from telegram.helpers import escape_markdown
+
+
+def escape_md(text: str) -> str:
+    """Escape Markdown v1 special characters in text."""
+
+    return escape_markdown(text, version=1)
+
+
+def build_main_keyboard(platform: str, large_file: bool = False) -> list:
+    """Build the main format selection keyboard for a detected platform."""
+
+    is_podcast = platform in ("castbox", "spotify")
+    hide_flac = platform in ("tiktok", "castbox", "spotify")
+    hide_time_range = platform in ("tiktok", "castbox", "spotify")
+
+    if is_podcast:
+        return [
+            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        ]
+
+    if large_file:
+        keyboard = [
+            [InlineKeyboardButton("Video 1080p (Full HD)", callback_data="dl_video_1080p")],
+            [InlineKeyboardButton("Video 720p (HD)", callback_data="dl_video_720p")],
+            [InlineKeyboardButton("Video 480p (SD)", callback_data="dl_video_480p")],
+            [InlineKeyboardButton("Video 360p (Niska jakość)", callback_data="dl_video_360p")],
+            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+            [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+            [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+        ]
+    else:
+        keyboard = [
+            [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
+            [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+            [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+        ]
+        if not hide_flac:
+            keyboard.append([InlineKeyboardButton("Audio (FLAC)", callback_data="dl_audio_flac")])
+        keyboard.extend(
+            [
+                [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
+                [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
+            ]
+        )
+
+    if not hide_time_range:
+        keyboard.append([InlineKeyboardButton("✂️ Zakres czasowy", callback_data="time_range")])
+    keyboard.append(
+        [
+            InlineKeyboardButton("Lista formatów", callback_data="formats"),
+            InlineKeyboardButton("Miniaturka", callback_data="thumbnail"),
+        ]
+    )
+    return keyboard
+
+
+def build_instagram_photo_keyboard(photos: list, videos: list) -> list:
+    """Build keyboard for Instagram photo and carousel download choices."""
+
+    keyboard = []
+
+    if photos:
+        label = f"Pobierz zdjęcia ({len(photos)})" if len(photos) > 1 else "Pobierz zdjęcie"
+        keyboard.append([InlineKeyboardButton(label, callback_data="dl_ig_photos")])
+
+    if videos:
+        label = f"Pobierz filmy ({len(videos)})" if len(videos) > 1 else "Pobierz film"
+        keyboard.append([InlineKeyboardButton(label, callback_data="dl_ig_videos")])
+
+    if photos and videos:
+        keyboard.append([InlineKeyboardButton("Pobierz wszystko", callback_data="dl_ig_all")])
+
+    return keyboard
 
 
 def format_bytes(bytes_value):
