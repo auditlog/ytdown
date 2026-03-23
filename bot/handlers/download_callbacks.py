@@ -260,7 +260,10 @@ async def _download_and_send_ig_videos(
                 file_size = os.path.getsize(downloaded) / (1024 * 1024)
                 if file_size > 50:
                     await safe_edit_message(query, f"Film {i + 1} za duży ({file_size:.0f} MB, limit: 50 MB).")
-                    os.remove(downloaded)
+                    try:
+                        os.remove(downloaded)
+                    except OSError:
+                        pass
                     continue
 
                 with open(downloaded, "rb") as file_obj:
@@ -271,7 +274,10 @@ async def _download_and_send_ig_videos(
                         read_timeout=120,
                         write_timeout=120,
                     )
-                os.remove(downloaded)
+                try:
+                    os.remove(downloaded)
+                except OSError:
+                    pass
                 sent_count += 1
         except Exception as exc:
             logging.error("Error downloading Instagram video %d: %s", i + 1, exc)
@@ -527,9 +533,15 @@ async def download_file(
                             thumb_file.close()
             finally:
                 if thumb_path and os.path.exists(thumb_path):
-                    os.remove(thumb_path)
+                    try:
+                        os.remove(thumb_path)
+                    except OSError:
+                        pass
 
-            os.remove(downloaded_file_path)
+            try:
+                os.remove(downloaded_file_path)
+            except OSError:
+                pass
             record_download_for(context, chat_id, title, url, f"{media_type}_{format}", file_size_mb, time_range, selected_format=format)
             success_recorded = True
             await update_status("Plik został wysłany!")

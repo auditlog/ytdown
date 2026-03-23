@@ -10,10 +10,8 @@ from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
-from telegram.helpers import escape_markdown
-
 from bot.config import DOWNLOAD_PATH, get_runtime_value
-from bot.handlers.common_ui import safe_edit_message, send_long_message
+from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_message
 from bot.security_policy import get_media_label
 from bot.session_context import (
     clear_uploaded_audio_state as _clear_uploaded_audio_state,
@@ -42,9 +40,6 @@ from bot.runtime import record_download_for
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
-
-def escape_md(text: str) -> str:
-    return escape_markdown(text, version=1)
 
 
 async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE, url):

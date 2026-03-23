@@ -155,8 +155,10 @@ async def _noop_status_update(_: str) -> None:
 def cleanup_downloaded_media(file_path: str) -> None:
     """Delete a temporary downloaded media file."""
 
-    if os.path.exists(file_path):
+    try:
         os.remove(file_path)
+    except OSError:
+        pass
 
 
 def find_existing_playlist_item_file(plan) -> str | None:

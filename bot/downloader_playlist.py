@@ -8,10 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 
-COOKIES_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "cookies.txt",
-)
+from bot.config import COOKIES_FILE
 
 
 def is_playlist_url(url: str) -> bool:

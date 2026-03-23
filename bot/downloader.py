@@ -29,6 +29,7 @@ from bot.downloader_subtitles import (
     get_available_subtitles as _get_available_subtitles,
     parse_subtitle_file as _parse_subtitle_file,
 )
+from bot.config import COOKIES_FILE
 from bot.downloader_validation import (
     AUDIO_FORMATS,
     SUPPORTED_AUDIO_FORMATS,
@@ -39,8 +40,6 @@ from bot.downloader_validation import (
     parse_time_seconds,
     sanitize_filename,
 )
-
-COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
 
 def progress_hook(d):
     """
@@ -121,7 +120,7 @@ def download_youtube_video(
     Returns:
         bool: True on success, False on error
     """
-    logging.debug(f"Starting download for URL: {url}, format: {format_id}...")
+    logging.debug("Starting download for URL: %s, format: %s...", url, format_id)
     try:
         normalized_format_id = normalize_format_id(format_id)
         normalized_audio_format = audio_format.strip().lower() if audio_format else "mp3"

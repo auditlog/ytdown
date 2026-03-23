@@ -40,6 +40,9 @@ DEFAULT_CONFIG = {
 # Download directory (absolute path based on project root)
 DOWNLOAD_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads")
 
+# Path to cookies file used by yt-dlp
+COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
+
 # Path to authorized users file
 AUTHORIZED_USERS_FILE = "authorized_users.json"
 
@@ -128,7 +131,7 @@ def load_config(
     for key, value in overrides.items():
         if value:
             config[key] = value
-            logging.info(f"Using environment variable for {key}")
+            logging.debug("Using environment variable for %s", key)
 
     # Check for required keys
     if not config.get("TELEGRAM_BOT_TOKEN"):

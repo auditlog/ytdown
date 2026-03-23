@@ -98,14 +98,22 @@ async def download_resolved_audio(
                     ),
                 )
                 if result.returncode == 0:
-                    os.remove(downloaded_file_path)
+                    try:
+                        os.remove(downloaded_file_path)
+                    except OSError:
+                        pass
                     downloaded_file_path = converted_path
                 elif os.path.exists(converted_path):
-                    os.remove(converted_path)
+                    try:
+                        os.remove(converted_path)
+                    except OSError:
+                        pass
             except Exception as e:
                 logging.warning("Format conversion failed, using original MP3: %s", e)
-                if os.path.exists(converted_path):
+                try:
                     os.remove(converted_path)
+                except OSError:
+                    pass
         return downloaded_file_path
 
     if source == 'youtube':

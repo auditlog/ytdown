@@ -9,12 +9,8 @@ from datetime import datetime
 
 import yt_dlp
 
+from bot.config import COOKIES_FILE
 from bot.downloader_validation import sanitize_filename
-
-COOKIES_FILE = os.path.join(
-    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "cookies.txt",
-)
 
 
 def get_available_subtitles(info: dict) -> dict:

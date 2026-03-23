@@ -10,8 +10,6 @@ from datetime import datetime
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
-from telegram.helpers import escape_markdown
-
 from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.downloader_media import get_instagram_post_info, is_photo_entry
 from bot.downloader_metadata import get_video_info
@@ -29,8 +27,9 @@ from bot.services.spotify_service import (
     resolve_episode,
 )
 from bot.handlers.common_ui import (
-    build_instagram_photo_keyboard as _shared_build_instagram_photo_keyboard,
-    build_main_keyboard as _shared_build_main_keyboard,
+    build_instagram_photo_keyboard as _build_instagram_photo_keyboard,
+    build_main_keyboard as _build_main_keyboard,
+    escape_md,
 )
 from bot.handlers.time_range import parse_time_range as _shared_parse_time_range
 from bot.session_context import (
@@ -61,13 +60,6 @@ def parse_time_range(text: str) -> dict | None:
     return _shared_parse_time_range(text)
 
 
-def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
-    return _shared_build_main_keyboard(platform, large_file=large_file)
-
-
-def _build_instagram_photo_keyboard(photos: list, videos: list) -> list:
-    return _shared_build_instagram_photo_keyboard(photos, videos)
-
 
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     return await extracted_process_youtube_link(update, context, url)
@@ -88,10 +80,6 @@ async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE,
 async def process_video_file(update: Update, context: ContextTypes.DEFAULT_TYPE, video_info: dict | None = None):
     return await extracted_process_video_file(update, context, video_info)
 
-
-def escape_md(text: str) -> str:
-    """Escapes Markdown v1 special characters in text."""
-    return escape_markdown(text, version=1)
 
 
 async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -583,7 +571,10 @@ async def extracted_process_audio_file(
                 logging.error("ffmpeg conversion failed: %s", result.stderr.decode())
                 await progress_msg.edit_text("Błąd konwersji pliku audio.")
                 return
-            os.remove(raw_path)
+            try:
+                os.remove(raw_path)
+            except OSError:
+                pass
 
         mp3_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
         _set_session_context_value(
@@ -780,7 +771,10 @@ async def extracted_process_video_file(
             await progress_msg.edit_text("Błąd ekstrakcji audio z pliku video.")
             return
 
-        os.remove(video_path)
+        try:
+            os.remove(video_path)
+        except OSError:
+            pass
         mp3_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
         _set_session_context_value(
             context,

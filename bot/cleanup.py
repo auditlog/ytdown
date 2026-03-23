@@ -56,23 +56,23 @@ def cleanup_old_files(directory, max_age_hours=24):
                         deleted_count += 1
                         freed_space_mb += file_size_mb
 
-                        logging.info(f"Deleted old file: {file_path} ({file_size_mb:.2f} MB)")
+                        logging.info("Deleted old file: %s (%.2f MB)", file_path, file_size_mb)
                 except Exception as e:
-                    logging.error(f"Error deleting file {file_path}: {e}")
+                    logging.error("Error deleting file %s: %s", file_path, e)
 
             # Remove empty directories
             try:
                 if not os.listdir(root):
                     os.rmdir(root)
-                    logging.info(f"Deleted empty directory: {root}")
+                    logging.info("Deleted empty directory: %s", root)
             except OSError as e:
                 logging.debug("Skipping empty-directory cleanup for %s: %s", root, e)
 
     except Exception as e:
-        logging.error(f"Error cleaning directory {directory}: {e}")
+        logging.error("Error cleaning directory %s: %s", directory, e)
 
     if deleted_count > 0:
-        logging.info(f"Cleanup finished: deleted {deleted_count} files, freed {freed_space_mb:.2f} MB")
+        logging.info("Cleanup finished: deleted %d files, freed %.2f MB", deleted_count, freed_space_mb)
 
     return deleted_count
 
@@ -94,7 +94,7 @@ def get_disk_usage():
 
         return used_gb, free_gb, total_gb, usage_percent
     except Exception as e:
-        logging.warning(f"shutil.disk_usage failed: {e}")
+        logging.warning("shutil.disk_usage failed: %s", e)
 
     # Method 2: df command (universal for Unix systems)
     try:
@@ -112,7 +112,7 @@ def get_disk_usage():
                     logging.info("Used df command to check disk space")
                     return used_gb, free_gb, total_gb, usage_percent
     except Exception as e:
-        logging.warning(f"df command failed: {e}")
+        logging.warning("df command failed: %s", e)
 
     # Method 3: os.statvfs (fallback for older systems)
     try:
@@ -127,7 +127,7 @@ def get_disk_usage():
             logging.info("Used os.statvfs to check disk space")
             return used_gb, free_gb, total_gb, usage_percent
     except Exception as e:
-        logging.warning(f"os.statvfs failed: {e}")
+        logging.warning("os.statvfs failed: %s", e)
 
     # If all methods failed
     logging.error("All disk space checking methods failed")
@@ -140,11 +140,11 @@ def monitor_disk_space():
     """
     used_gb, free_gb, total_gb, usage_percent = get_disk_usage()
 
-    logging.info(f"Disk space: {used_gb:.1f}/{total_gb:.1f} GB used ({usage_percent:.1f}%), {free_gb:.1f} GB free")
+    logging.info("Disk space: %.1f/%.1f GB used (%.1f%%), %.1f GB free", used_gb, total_gb, usage_percent, free_gb)
 
     # Warning when low space
     if free_gb < 10:
-        logging.warning(f"WARNING: Low disk space! Only {free_gb:.1f} GB remaining.")
+        logging.warning("WARNING: Low disk space! Only %.1f GB remaining.", free_gb)
 
         # Aggressive cleanup when very low space
         if free_gb < 5:
@@ -173,7 +173,7 @@ def periodic_cleanup():
             deleted_count = cleanup_old_files(DOWNLOAD_PATH, max_age_hours=24)
 
             if deleted_count > 0:
-                logging.info(f"Periodic cleanup: deleted {deleted_count} old files")
+                logging.info("Periodic cleanup: deleted %d old files", deleted_count)
 
         except Exception as e:
-            logging.error(f"Error during periodic cleanup: {e}")
+            logging.error("Error during periodic cleanup: %s", e)

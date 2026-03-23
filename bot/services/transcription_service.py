@@ -136,10 +136,16 @@ def cleanup_transcription_artifacts(
 ) -> None:
     """Remove original media and per-part transcript chunks after final delivery."""
 
-    os.remove(source_media_path)
+    try:
+        os.remove(source_media_path)
+    except OSError:
+        pass
     for file_name in os.listdir(output_dir):
         if file_name.startswith(f"{transcript_prefix}_part") and file_name.endswith("_transcript.txt"):
-            os.remove(os.path.join(output_dir, file_name))
+            try:
+                os.remove(os.path.join(output_dir, file_name))
+            except OSError:
+                pass
 
 
 def save_transcript_markdown(
