@@ -41,13 +41,10 @@ from bot.session_context import (
 )
 from bot.session_store import download_progress as _download_progress
 from bot.transcription import CORRECTION_DURATION_LIMIT_MIN, SUMMARY_DURATION_LIMIT_MIN
-from bot.downloader import (
-    download_photo,
-    download_thumbnail,
-    get_available_subtitles,
-    get_video_info,
-    sanitize_filename,
-)
+from bot.downloader_media import COOKIES_FILE, download_photo, download_thumbnail
+from bot.downloader_metadata import get_video_info
+from bot.downloader_subtitles import get_available_subtitles
+from bot.downloader_validation import sanitize_filename
 from bot.services.download_service import (
     ensure_size_within_limit,
     estimate_download_size,
@@ -259,9 +256,8 @@ async def _download_and_send_ig_videos(
             "no_warnings": True,
             "noplaylist": True,
         }
-        from bot.downloader import COOKIES_FILE as _cookies
-        if os.path.exists(_cookies):
-            ydl_opts["cookiefile"] = _cookies
+        if os.path.exists(COOKIES_FILE):
+            ydl_opts["cookiefile"] = COOKIES_FILE
 
         try:
             loop = asyncio.get_event_loop()

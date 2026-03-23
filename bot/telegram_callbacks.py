@@ -13,7 +13,8 @@ from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
 from bot.config import get_runtime_value
-from bot.downloader import get_video_info, is_valid_audio_format, is_valid_ytdlp_format_id
+from bot.downloader_metadata import get_video_info
+from bot.downloader_validation import is_valid_audio_format, is_valid_ytdlp_format_id
 from bot.handlers import download_callbacks as _download_callbacks_module
 from bot.handlers import transcription_callbacks as _transcription_callbacks_module
 from bot.handlers.callback_parsing import parse_download_callback, parse_summary_option

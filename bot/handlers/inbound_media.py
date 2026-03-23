@@ -13,13 +13,9 @@ from telegram.ext import ContextTypes
 from telegram.helpers import escape_markdown
 
 from bot.config import DOWNLOAD_PATH, get_runtime_value
-from bot.downloader import (
-    get_instagram_post_info,
-    get_video_info,
-    is_photo_entry,
-    is_playlist_url,
-    is_pure_playlist_url,
-)
+from bot.downloader_media import get_instagram_post_info, is_photo_entry
+from bot.downloader_metadata import get_video_info
+from bot.downloader_playlist import is_playlist_url, is_pure_playlist_url
 from bot.security import (
     FFMPEG_TIMEOUT,
     MAX_FILE_SIZE_MB,

@@ -7,15 +7,14 @@ Handles command-line interface and interactive curses menu.
 import argparse
 import curses
 
-from bot.downloader import (
+from bot.downloader import download_youtube_video, validate_url
+from bot.downloader_metadata import get_video_info
+from bot.downloader_validation import (
     SUPPORTED_AUDIO_FORMATS,
-    get_video_info,
-    download_youtube_video,
     is_valid_audio_format,
     is_valid_audio_quality,
     is_valid_ytdlp_format_id,
     parse_time_seconds,
-    validate_url,
 )
 
 

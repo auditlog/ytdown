@@ -18,20 +18,12 @@ from bot.config import (
     load_config,
     save_authorized_users,
 )
-from bot.downloader import (
-    download_photo,
-    download_subtitles,
-    download_youtube_video,
-    get_available_subtitles,
-    get_instagram_post_info,
-    get_playlist_info,
-    get_video_info,
-    is_photo_entry,
-    is_playlist_url,
-    parse_subtitle_file,
-    sanitize_filename,
-    strip_playlist_params,
-)
+from bot.downloader import download_youtube_video
+from bot.downloader_media import download_photo, get_instagram_post_info, is_photo_entry
+from bot.downloader_metadata import get_video_info
+from bot.downloader_playlist import get_playlist_info, is_playlist_url, strip_playlist_params
+from bot.downloader_subtitles import download_subtitles, get_available_subtitles, parse_subtitle_file
+from bot.downloader_validation import sanitize_filename
 from bot.security import (
     MAX_PLAYLIST_ITEMS,
     check_rate_limit,
