@@ -49,7 +49,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 
 ## Wymagania
 
-- Python 3.12+
+- Python 3.11+
 - ffmpeg (zainstalowany w systemie)
 - Poetry (opcjonalnie, zalecane) lub pip
 
@@ -362,6 +362,7 @@ ytdown/
 │   ├── transcription_providers.py  # Adaptery API: Groq Whisper i Claude (transkrypcja, korekta, podsumowania)
 │   ├── transcription_pipeline.py   # Orkiestracja pipeline'u transkrypcji MP3
 │   ├── downloader.py               # Fasada kompatybilności — deleguje do wyspecjalizowanych downloader_*
+│   ├── downloader_core.py          # Standalone download (progress_hook, download_youtube_video) dla CLI
 │   ├── downloader_validation.py    # Walidacja formatów, parsowanie czasu, sanityzacja nazw plików
 │   ├── downloader_playlist.py      # Wykrywanie i pobieranie metadanych playlist YouTube
 │   ├── downloader_metadata.py      # Pobieranie metadanych video (get_video_info)
@@ -374,11 +375,15 @@ ytdown/
 │   ├── telegram_callbacks.py       # Cienki wrapper kompatybilności — deleguje do handler layer
 │   ├── handlers/                   # Wydzielone flow handlery (bez cross-importów do routerów)
 │   │   ├── command_access.py       # Auth/admin/info: /start, PIN, /logout, /help, /status
-│   │   ├── inbound_media.py        # Intake URL-i, upload audio/video, playlist entry
+│   │   ├── inbound_media.py        # Intake URL-i, routing platform, playlist entry
+│   │   ├── inbound_audio.py        # Upload i przetwarzanie plików audio
+│   │   ├── inbound_video.py        # Upload i przetwarzanie plików video
 │   │   ├── download_callbacks.py   # Core download flow i progress
+│   │   ├── spotify_callbacks.py    # Pobieranie odcinków Spotify (transkrypcja, podsumowania)
 │   │   ├── playlist_callbacks.py   # Playlist callback flows (browse, download items)
 │   │   ├── media_extras_callbacks.py # Instagram photos/videos, format list, Spotify summary
 │   │   ├── transcription_callbacks.py # Transkrypcja, napisy, podsumowania
+│   │   ├── time_range_callbacks.py # Menu zakresów czasowych i presety
 │   │   ├── callback_parsing.py     # Parsery callback payload (download, summary)
 │   │   ├── time_range.py           # Wspólny parser zakresów czasowych
 │   │   └── common_ui.py           # Centralny hub UI: klawiatury, Markdown, formatowanie
@@ -389,7 +394,7 @@ ytdown/
 │       ├── spotify_service.py      # Resolving odcinków Spotify (iTunes/YouTube)
 │       └── transcription_service.py # Artefakty transkrypcji i podsumowań
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~485 testów)
+├── tests/                          # Testy (~575 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
@@ -414,8 +419,12 @@ ytdown/
 │   ├── test_security_policy.py     # Testy walidacji URL i detekcji platform
 │   ├── test_security_pin_module.py # Testy blokowania PIN
 │   ├── test_security_throttling.py # Testy rate limitingu
+│   ├── test_security_authorization.py # Testy manage_authorized_user + thread safety
 │   ├── test_transcription_providers.py # Testy adapterów Groq/Claude (retry, extraction)
 │   ├── test_transcription_pipeline.py  # Testy orkiestracji pipeline transkrypcji
+│   ├── test_transcription_chunking.py  # Testy split_mp3, find_silence_points, get_part_number
+│   ├── test_downloader_media.py    # Testy is_photo_entry, download_photo, thumbnails, Instagram
+│   ├── test_concurrency.py         # Testy współbieżności (SessionStore, rate limit, PIN)
 │   └── ...                         # Pozostałe testy
 ├── api_key.md                      # Konfiguracja (ignorowany przez git)
 ├── cookies.txt                     # Cookies YouTube (ignorowany przez git)
