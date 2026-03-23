@@ -351,7 +351,11 @@ ytdown/
 │   ├── repositories.py             # Persystencja JSON (authorized_users, history)
 │   ├── security.py                 # Rate limiting, walidacja URL, bezpieczeństwo
 │   ├── cleanup.py                  # Czyszczenie plików i monitoring dysku
-│   ├── transcription.py            # Transkrypcja (Groq) i podsumowania (Claude)
+│   ├── transcription.py            # Fasada kompatybilności — deleguje do wyspecjalizowanych transcription_*
+│   ├── transcription_limits.py     # Stałe limitów, heurystyki tokenów, progi czasowe
+│   ├── transcription_chunking.py   # Dzielenie MP3 na części (silence detection, split)
+│   ├── transcription_providers.py  # Adaptery API: Groq Whisper i Claude (transkrypcja, korekta, podsumowania)
+│   ├── transcription_pipeline.py   # Orkiestracja pipeline'u transkrypcji MP3
 │   ├── downloader.py               # Fasada kompatybilności — deleguje do wyspecjalizowanych downloader_*
 │   ├── downloader_validation.py    # Walidacja formatów, parsowanie czasu, sanityzacja nazw plików
 │   ├── downloader_playlist.py      # Wykrywanie i pobieranie metadanych playlist YouTube

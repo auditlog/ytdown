@@ -8,11 +8,9 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Callable
 
-from bot.transcription import (
-    generate_summary,
-    is_text_too_long_for_summary,
-    transcribe_mp3_file,
-)
+from bot.transcription_limits import is_text_too_long_for_summary
+from bot.transcription_pipeline import transcribe_mp3_file
+from bot.transcription_providers import generate_summary
 
 
 @dataclass
