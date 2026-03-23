@@ -50,6 +50,23 @@ class PinResult:
     pending_action: PendingAction | None = None
 
 
+def clear_auth_security_state(
+    *,
+    user_id: int,
+    attempts,
+    block_map,
+) -> None:
+    """Reset authentication-specific security state for a user.
+
+    This clears failed PIN attempts and any active block marker. Rate-limit
+    request history is intentionally preserved because it models transport/API
+    abuse protection rather than login state.
+    """
+
+    clear_failed_attempts(user_id, attempts=attempts)
+    block_map[user_id] = 0.0
+
+
 def build_blocked_message(user_id: int, *, block_map) -> str:
     """Build a standard blocked-user message."""
 
@@ -150,7 +167,11 @@ def handle_pin_input(
         return PinResult(handled=False)
 
     if message_text == pin_code:
-        clear_failed_attempts(user_id, attempts=attempts)
+        clear_auth_security_state(
+            user_id=user_id,
+            attempts=attempts,
+            block_map=block_map,
+        )
         authorize_user(user_id)
         user_data.pop("awaiting_pin", None)
         pending_action = consume_pending_action(user_data)
@@ -204,6 +225,7 @@ def logout_user(
     user_data: dict[str, Any],
     user_urls: dict[int, Any],
     user_time_ranges: dict[int, Any],
+    clear_security_state: Callable[[int], Any] | None = None,
 ) -> bool:
     """Clear auth/session state for a logged-in user."""
 
@@ -214,4 +236,6 @@ def logout_user(
     user_urls.pop(chat_id, None)
     user_time_ranges.pop(chat_id, None)
     user_data.clear()
+    if clear_security_state is not None:
+        clear_security_state(user_id)
     return True

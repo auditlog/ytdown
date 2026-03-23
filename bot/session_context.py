@@ -17,6 +17,27 @@ from telegram.ext import ContextTypes
 
 from bot.runtime import get_app_runtime
 
+TRANSIENT_FLOW_FIELDS = (
+    "current_url",
+    "time_range",
+    "playlist_data",
+    "platform",
+    "spotify_resolved",
+    "instagram_carousel",
+    "audio_file_path",
+    "audio_file_title",
+    "subtitle_pending",
+)
+
+TRANSIENT_FLOW_LEGACY_KEYS = (
+    "platform",
+    "spotify_resolved",
+    "ig_carousel",
+    "audio_file_path",
+    "audio_file_title",
+    "subtitle_pending",
+)
+
 
 class AuthSessionData(MutableMapping[str, object]):
     """Mutable auth state view backed by SessionStore when runtime is present."""
@@ -264,3 +285,46 @@ def clear_session_context_value(
     if runtime is not None:
         runtime.session_store.pop_field(chat_id, field_name, None)
     context.user_data.pop(legacy_key, None)
+
+
+def clear_transient_flow_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    user_urls,
+    user_time_ranges,
+    user_playlist_data,
+) -> None:
+    """Clear transient chat flow state after completion, cancellation, or logout."""
+
+    runtime = get_app_runtime(context)
+    if runtime is not None:
+        runtime.session_store.clear_fields(chat_id, *TRANSIENT_FLOW_FIELDS)
+
+    for legacy_key in TRANSIENT_FLOW_LEGACY_KEYS:
+        context.user_data.pop(legacy_key, None)
+
+    if runtime is None:
+        user_urls.pop(chat_id, None)
+        user_time_ranges.pop(chat_id, None)
+        user_playlist_data.pop(chat_id, None)
+
+
+def clear_uploaded_audio_state(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+) -> None:
+    """Clear temporary audio-upload state after transcription completion or failure."""
+
+    clear_session_context_value(
+        context,
+        chat_id,
+        "audio_file_path",
+        legacy_key="audio_file_path",
+    )
+    clear_session_context_value(
+        context,
+        chat_id,
+        "audio_file_title",
+        legacy_key="audio_file_title",
+    )

@@ -36,6 +36,7 @@ def test_store_and_consume_pending_action():
 def test_handle_pin_input_accepts_correct_pin():
     user_data = {"awaiting_pin": True, "pending_audio": {"file_id": "1"}}
     attempts = defaultdict(int)
+    block_map = defaultdict(float, {123: 88.0})
     authorized = set()
     added = []
 
@@ -46,7 +47,7 @@ def test_handle_pin_input_accepts_correct_pin():
         pin_code="12345678",
         authorized_user_ids=authorized,
         attempts=attempts,
-        block_map=defaultdict(float),
+        block_map=block_map,
         authorize_user=lambda user_id: added.append(user_id),
     )
 
@@ -55,6 +56,8 @@ def test_handle_pin_input_accepts_correct_pin():
     assert result.pending_action.kind == "audio"
     assert added == [123]
     assert "awaiting_pin" not in user_data
+    assert attempts[123] == 0
+    assert block_map[123] == 0.0
 
 
 def test_handle_pin_input_rejects_wrong_pin_and_blocks():
@@ -86,6 +89,7 @@ def test_logout_user_clears_session():
     user_urls = {123: "https://youtube.com/watch?v=abc"}
     user_time_ranges = {123: {"start": "0:10", "end": "0:20"}}
     removed = []
+    cleared = []
 
     success = auth.logout_user(
         user_id=1,
@@ -95,10 +99,12 @@ def test_logout_user_clears_session():
         user_data=user_data,
         user_urls=user_urls,
         user_time_ranges=user_time_ranges,
+        clear_security_state=lambda user_id: cleared.append(user_id),
     )
 
     assert success is True
     assert removed == [1]
+    assert cleared == [1]
     assert user_data == {}
     assert 123 not in user_urls
     assert 123 not in user_time_ranges

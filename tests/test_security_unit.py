@@ -239,6 +239,21 @@ def test_pin_failure_blocks_after_threshold():
     assert attempts[1] == 0
 
 
+def test_clear_auth_security_state_resets_auth_throttle_but_not_rate_limit_history():
+    from bot.services.auth_service import clear_auth_security_state
+
+    attempts = defaultdict(int, {7: 2})
+    block_map = defaultdict(float, {7: 123.0})
+    security.user_requests.clear()
+    security.user_requests[7] = [1.0, 2.0]
+
+    clear_auth_security_state(user_id=7, attempts=attempts, block_map=block_map)
+
+    assert attempts[7] == 0
+    assert block_map[7] == 0.0
+    assert security.user_requests[7] == [1.0, 2.0]
+
+
 def test_register_pin_failure_logs_warning_on_failed_attempt(caplog):
     """Verify logging.warning is emitted for a non-blocking failed PIN attempt."""
     import logging

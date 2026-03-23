@@ -57,6 +57,7 @@ from bot.downloader import (
 )
 from bot.spotify import parse_spotify_episode_url
 from bot.services.auth_service import (
+    clear_auth_security_state,
     handle_pin_input,
     handle_start,
     logout_user,
@@ -72,6 +73,7 @@ from bot.services.spotify_service import (
     resolve_episode,
 )
 from bot.session_context import (
+    clear_transient_flow_state as _clear_transient_flow_state,
     clear_session_context_value as _clear_session_context_value,
     clear_session_value as _clear_session_value,
     get_auth_state as _get_auth_state,
@@ -198,43 +200,6 @@ def _is_authorized(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
     """Check user authorization against runtime-aware state."""
 
     return user_id in _get_authorized_user_ids(context)
-
-
-def _clear_transient_flow_state(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-) -> None:
-    """Clear temporary Telegram flow state from runtime and legacy user_data."""
-
-    runtime = get_app_runtime(context)
-    if runtime is not None:
-        runtime.session_store.clear_fields(
-            chat_id,
-            "current_url",
-            "time_range",
-            "playlist_data",
-            "platform",
-            "spotify_resolved",
-            "instagram_carousel",
-            "audio_file_path",
-            "audio_file_title",
-            "subtitle_pending",
-        )
-
-    for legacy_key in (
-        "platform",
-        "spotify_resolved",
-        "ig_carousel",
-        "audio_file_path",
-        "audio_file_title",
-        "subtitle_pending",
-    ):
-        context.user_data.pop(legacy_key, None)
-
-    if runtime is None:
-        user_urls.pop(chat_id, None)
-        user_time_ranges.pop(chat_id, None)
-        user_playlist_data.pop(chat_id, None)
 
 
 def _get_history_stats(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict:
@@ -414,12 +379,23 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_data=_get_auth_state(context, chat_id),
         user_urls=user_urls,
         user_time_ranges=user_time_ranges,
+        clear_security_state=lambda auth_user_id: clear_auth_security_state(
+            user_id=auth_user_id,
+            attempts=failed_attempts,
+            block_map=block_until,
+        ),
     )
     if not success:
         await update.message.reply_text("Nie jesteś zalogowany.")
         return
 
-    _clear_transient_flow_state(context, chat_id)
+    _clear_transient_flow_state(
+        context,
+        chat_id,
+        user_urls=user_urls,
+        user_time_ranges=user_time_ranges,
+        user_playlist_data=user_playlist_data,
+    )
 
     await update.message.reply_text(
         "Wylogowano pomyślnie.\n\n"

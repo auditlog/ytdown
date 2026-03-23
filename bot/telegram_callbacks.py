@@ -76,6 +76,7 @@ from bot.services.playlist_service import (
 )
 from bot.runtime import record_download_for
 from bot.session_context import (
+    clear_uploaded_audio_state as _clear_uploaded_audio_state,
     clear_session_context_value as _clear_session_context_value,
     clear_session_value as _clear_session_value,
     get_session_context_value as _get_session_context_value,
@@ -284,26 +285,6 @@ def parse_summary_option(option_data):
         return None
 
     return summary_option
-
-
-def _clear_uploaded_audio_state(
-    context: ContextTypes.DEFAULT_TYPE,
-    chat_id: int,
-) -> None:
-    """Clear temporary uploaded-audio state from runtime and legacy user_data."""
-
-    _clear_session_context_value(
-        context,
-        chat_id,
-        "audio_file_path",
-        legacy_key="audio_file_path",
-    )
-    _clear_session_context_value(
-        context,
-        chat_id,
-        "audio_file_title",
-        legacy_key="audio_file_title",
-    )
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
