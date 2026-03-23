@@ -389,7 +389,7 @@ ytdown/
 │       ├── spotify_service.py      # Resolving odcinków Spotify (iTunes/YouTube)
 │       └── transcription_service.py # Artefakty transkrypcji i podsumowań
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~477 testów)
+├── tests/                          # Testy (~485 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset

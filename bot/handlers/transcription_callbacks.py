@@ -22,7 +22,7 @@ from bot.session_context import (
     set_session_context_value as _set_session_context_value,
 )
 from bot.transcription_limits import CORRECTION_DURATION_LIMIT_MIN, SUMMARY_DURATION_LIMIT_MIN
-from bot.downloader import get_video_info
+from bot.downloader_metadata import get_video_info
 from bot.downloader_subtitles import (
     download_subtitles,
     get_available_subtitles,

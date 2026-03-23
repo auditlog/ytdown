@@ -17,15 +17,8 @@ from bot.runtime import (
     get_authorized_user_ids_for,
     remove_authorized_user_for,
 )
-from bot.security import (
-    BLOCK_TIME,
-    MAX_ATTEMPTS,
-    block_until,
-    failed_attempts,
-    user_time_ranges,
-    user_urls,
-    user_playlist_data,
-)
+from bot.security_limits import BLOCK_TIME, MAX_ATTEMPTS
+from bot.session_store import block_until, failed_attempts, user_playlist_data, user_time_ranges, user_urls
 from bot.services.auth_service import (
     clear_auth_security_state,
     handle_pin_input,
@@ -276,7 +269,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if free_gb < 5:
         status_msg += "**KRYTYCZNIE mało miejsca!**\n"
 
-    from bot.downloader import COOKIES_FILE
+    from bot.downloader_media import COOKIES_FILE
     if os.path.exists(COOKIES_FILE):
         cookie_size = os.path.getsize(COOKIES_FILE)
         status_msg += f"\n**cookies.txt:** ✅ ({cookie_size} B)\n"

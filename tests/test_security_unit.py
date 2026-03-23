@@ -4,17 +4,18 @@ from collections import defaultdict
 import time
 
 from bot import security
+from bot import security_authorization
 
 
 def test_manage_authorized_user_add_remove(monkeypatch):
     authorized_users = set()
     monkeypatch.setattr(
-        security,
+        security_authorization,
         "add_runtime_authorized_user",
         lambda user_id: False if user_id in authorized_users else not authorized_users.add(user_id),
     )
     monkeypatch.setattr(
-        security,
+        security_authorization,
         "remove_runtime_authorized_user",
         lambda user_id: False if user_id not in authorized_users else not authorized_users.remove(user_id),
     )

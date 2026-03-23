@@ -257,18 +257,43 @@ def curses_main(stdscr):
     # Close curses mode to display download progress normally
     curses.endwin()
 
-    # Analyze selected option and start download
+    # Build download plan from selected option
     if selected['id'] == 'best':
         print(f"Downloading best quality for: {title}")
-        download_youtube_video(url)
+        media_type, format_choice = "video", "best"
     elif selected['id'].endswith('_convert'):
         audio_format = selected['id'].split('_')[0]
         print(f"Downloading and converting to {audio_format} format for: {title}")
-        download_youtube_video(url, None, True, audio_format, '192')
+        media_type, format_choice = "audio", audio_format
     else:
         print(f"Downloading format {selected['id']} for: {title}")
-        download_youtube_video(url, selected['id'])
+        media_type, format_choice = "video", selected['id']
 
+    download_dir = os.getcwd()
+    os.makedirs(download_dir, exist_ok=True)
+
+    try:
+        plan = prepare_download_plan(
+            url=url,
+            media_type=media_type,
+            format_choice=format_choice,
+            chat_download_path=download_dir,
+            time_range=None,
+            transcribe=False,
+            use_format_id=bool(media_type == "video" and selected['id'] != 'best'),
+            audio_quality='192',
+        )
+    except ValueError as exc:
+        print(f"Error: {exc}")
+        input("Press Enter to exit...")
+        return
+
+    if not plan:
+        print("Error: Could not prepare download plan.")
+        input("Press Enter to exit...")
+        return
+
+    execute_download_plan(plan)
     print("\nDownload completed.")
     input("Press Enter to exit...")
 
