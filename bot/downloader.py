@@ -12,6 +12,7 @@ from io import BytesIO
 
 import requests
 import yt_dlp
+from bot.downloader_metadata import get_video_info as _get_video_info
 from bot.downloader_playlist import (
     get_playlist_info,
     is_playlist_url,
@@ -84,15 +85,7 @@ def get_video_info(url):
     Returns:
         dict or None: Video info dictionary or None on error
     """
-    try:
-        ydl_opts = get_basic_ydl_opts()
-        ydl_opts['noplaylist'] = True  # Always fetch single video info, never full playlist
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            return info
-    except Exception as e:
-        logging.error("Error getting video info for %s: %s", url, e)
-        return None
+    return _get_video_info(url, cookies_file=COOKIES_FILE)
 
 
 def download_youtube_video(

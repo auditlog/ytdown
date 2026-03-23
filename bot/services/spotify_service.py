@@ -10,7 +10,7 @@ from typing import Any
 
 import yt_dlp
 
-from bot.downloader import sanitize_filename
+from bot.downloader_validation import sanitize_filename
 from bot.spotify import download_direct_audio, resolve_spotify_episode
 
 

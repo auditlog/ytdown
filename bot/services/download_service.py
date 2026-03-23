@@ -12,12 +12,8 @@ from typing import Any, Callable
 
 import yt_dlp
 
-from bot.downloader import (
-    COOKIES_FILE,
-    get_video_info,
-    is_valid_audio_quality,
-    sanitize_filename,
-)
+from bot.downloader_metadata import COOKIES_FILE, get_video_info
+from bot.downloader_validation import is_valid_audio_quality, sanitize_filename
 from bot.security import MAX_FILE_SIZE_MB
 
 
