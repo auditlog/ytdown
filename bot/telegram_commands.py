@@ -21,6 +21,22 @@ from bot.config import (
     get_download_stats,
     get_runtime_value,
 )
+from bot.handlers import command_access as _command_access_module
+from bot.handlers.command_access import (
+    _get_authorized_user_ids as _extracted_get_authorized_user_ids,
+    _get_history_stats as _extracted_get_history_stats,
+    _is_admin as _extracted_is_admin,
+    _is_authorized as _extracted_is_authorized,
+    cleanup_command as _extracted_cleanup_command,
+    handle_pin as _extracted_handle_pin,
+    help_command as _extracted_help_command,
+    history_command as _extracted_history_command,
+    logout_command as _extracted_logout_command,
+    notify_admin_pin_failure as _extracted_notify_admin_pin_failure,
+    start as _extracted_start,
+    status_command as _extracted_status_command,
+    users_command as _extracted_users_command,
+)
 from bot.security import (
     MAX_ATTEMPTS,
     BLOCK_TIME,
@@ -580,6 +596,89 @@ async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"- Lista ID: {user_list if user_count <= 10 else str(user_count) + ' użytkowników'}\n"
         f"- Twoje ID: {user_id}"
     )
+
+
+def _sync_command_access_dependencies() -> None:
+    """Keep extracted command handlers aligned with this module globals."""
+
+    _command_access_module.DOWNLOAD_PATH = DOWNLOAD_PATH
+    _command_access_module.get_runtime_value = get_runtime_value
+    _command_access_module.get_authorized_user_ids_for = get_authorized_user_ids_for
+    _command_access_module.get_download_stats = get_download_stats
+    _command_access_module.MAX_ATTEMPTS = MAX_ATTEMPTS
+    _command_access_module.BLOCK_TIME = BLOCK_TIME
+    _command_access_module.failed_attempts = failed_attempts
+    _command_access_module.block_until = block_until
+    _command_access_module.get_disk_usage = get_disk_usage
+    _command_access_module.cleanup_old_files = cleanup_old_files
+    _command_access_module.process_youtube_link = process_youtube_link
+    _command_access_module.process_audio_file = process_audio_file
+    _command_access_module.process_video_file = process_video_file
+
+
+def _is_admin(user_id: int) -> bool:
+    _sync_command_access_dependencies()
+    return _extracted_is_admin(user_id)
+
+
+def _get_authorized_user_ids(context: ContextTypes.DEFAULT_TYPE) -> set[int]:
+    _sync_command_access_dependencies()
+    return _extracted_get_authorized_user_ids(context)
+
+
+def _is_authorized(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> bool:
+    _sync_command_access_dependencies()
+    return _extracted_is_authorized(context, user_id)
+
+
+def _get_history_stats(context: ContextTypes.DEFAULT_TYPE, user_id: int) -> dict:
+    _sync_command_access_dependencies()
+    return _extracted_get_history_stats(context, user_id)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_command_access_dependencies()
+    return await _extracted_start(update, context)
+
+
+async def notify_admin_pin_failure(bot, user, attempt_count: int, blocked: bool):
+    _sync_command_access_dependencies()
+    return await _extracted_notify_admin_pin_failure(bot, user, attempt_count, blocked)
+
+
+async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_command_access_dependencies()
+    return await _extracted_handle_pin(update, context)
+
+
+async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_command_access_dependencies()
+    return await _extracted_logout_command(update, context)
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_command_access_dependencies()
+    return await _extracted_help_command(update, context)
+
+
+async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_command_access_dependencies()
+    return await _extracted_status_command(update, context)
+
+
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_command_access_dependencies()
+    return await _extracted_history_command(update, context)
+
+
+async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_command_access_dependencies()
+    return await _extracted_cleanup_command(update, context)
+
+
+async def users_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    _sync_command_access_dependencies()
+    return await _extracted_users_command(update, context)
 
 
 async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
