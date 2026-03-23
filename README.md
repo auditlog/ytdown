@@ -357,7 +357,7 @@ ytdown/
 │   ├── mtproto.py                  # Upload dużych plików przez MTProto (Pyrogram)
 │   ├── cli.py                      # Interfejs wiersza poleceń
 │   ├── telegram_commands.py        # Cienki wrapper kompatybilności — deleguje do handler layer
-│   ├── telegram_callbacks.py       # Router callbacków — wrappery kompatybilności
+│   ├── telegram_callbacks.py       # Cienki wrapper kompatybilności — deleguje do handler layer
 │   ├── handlers/                   # Wydzielone flow handlery (bez cross-importów do routerów)
 │   │   ├── command_access.py       # Auth/admin/info: /start, PIN, /logout, /help, /status
 │   │   ├── inbound_media.py        # Intake URL-i, upload audio/video, playlist entry
