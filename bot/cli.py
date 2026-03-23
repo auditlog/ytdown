@@ -6,8 +6,8 @@ Handles command-line interface and interactive curses menu.
 
 import argparse
 import curses
+import os
 
-from bot.downloader import download_youtube_video, validate_url
 from bot.downloader_metadata import get_video_info
 from bot.downloader_validation import (
     SUPPORTED_AUDIO_FORMATS,
@@ -16,6 +16,8 @@ from bot.downloader_validation import (
     is_valid_ytdlp_format_id,
     parse_time_seconds,
 )
+from bot.security_policy import validate_url
+from bot.services.download_service import execute_download_plan, prepare_download_plan
 
 
 def show_help():
@@ -342,20 +344,37 @@ def cli_mode(args):
             print("opus   - Opus format")
             print("vorbis - Vorbis format")
     else:
-        # Fetch video duration when time range is set for validation
-        duration = None
+        time_range = None
         if start_time is not None:
-            info = get_video_info(args.url)
-            if info:
-                duration = info.get('duration')
+            time_range = {
+                "start": start_arg,
+                "end": end_arg,
+                "start_sec": start_time,
+                "end_sec": end_time,
+            }
 
-        download_youtube_video(
-            args.url,
-            args.format,
-            args.audio_only,
-            args.audio_format,
-            args.audio_quality,
-            start_time,
-            end_time,
-            video_duration=duration,
-        )
+        format_choice = args.audio_format if args.audio_only else (args.format or "best")
+        download_dir = os.getcwd()
+        os.makedirs(download_dir, exist_ok=True)
+
+        try:
+            plan = prepare_download_plan(
+                url=args.url,
+                media_type="audio" if args.audio_only else "video",
+                format_choice=format_choice,
+                chat_download_path=download_dir,
+                time_range=time_range,
+                transcribe=False,
+                use_format_id=bool(args.audio_only and args.format),
+                audio_quality=args.audio_quality,
+            )
+        except ValueError:
+            print(f"Error: Unsupported audio quality '{args.audio_quality}' for format '{args.audio_format}'.")
+            print("Try values from help, e.g. 0-330 for mp3, 0-9 for Opus/Ogg/Vorbis.")
+            return
+
+        if not plan:
+            print("Error: Could not prepare download plan.")
+            return
+
+        execute_download_plan(plan)

@@ -257,6 +257,19 @@ def ensure_size_within_limit(size_mb: float | None, *, max_size_mb: int = MAX_FI
     return size_mb is None or size_mb <= max_size_mb
 
 
+def execute_download_plan(plan: DownloadPlan) -> DownloadResult:
+    """Run a prepared yt-dlp download plan synchronously."""
+
+    yt_dlp.YoutubeDL(plan.ydl_opts).download([plan.url])
+
+    downloaded_file_path = find_downloaded_file(plan)
+    if not downloaded_file_path:
+        raise FileNotFoundError("downloaded file not found")
+
+    file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
+    return DownloadResult(file_path=downloaded_file_path, file_size_mb=file_size_mb)
+
+
 def find_downloaded_file(plan: DownloadPlan) -> str | None:
     """Find the resulting downloaded media file for a finished plan."""
 

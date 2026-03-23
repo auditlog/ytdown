@@ -369,7 +369,7 @@ ytdown/
 │   ├── downloader_media.py         # Thumbnails, Instagram info, photo download, is_photo_entry
 │   ├── spotify.py                  # Rozwiązywanie Spotify podcastów (iTunes/YouTube)
 │   ├── mtproto.py                  # Upload dużych plików przez MTProto (Pyrogram)
-│   ├── cli.py                      # Interfejs wiersza poleceń
+│   ├── cli.py                      # Frontend CLI — korzysta z download_service (prepare/execute)
 │   ├── telegram_commands.py        # Cienki wrapper kompatybilności — deleguje do handler layer
 │   ├── telegram_callbacks.py       # Cienki wrapper kompatybilności — deleguje do handler layer
 │   ├── handlers/                   # Wydzielone flow handlery (bez cross-importów do routerów)
