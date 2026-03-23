@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from bot.transcription_limits import is_text_too_long_for_summary
 from bot.transcription_pipeline import transcribe_mp3_file
-from bot.transcription_providers import generate_summary
+from bot.transcription_providers import generate_summary, get_claude_api_key
 
 
 @dataclass
@@ -110,7 +110,7 @@ async def generate_summary_artifact(
     loop = asyncio.get_event_loop()
     summary_text = await loop.run_in_executor(
         executor,
-        lambda: generate_summary(transcript_text, summary_type),
+        lambda: generate_summary(transcript_text, summary_type, api_key=get_claude_api_key()),
     )
     if not summary_text:
         return None

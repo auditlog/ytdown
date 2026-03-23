@@ -26,7 +26,7 @@ def test_transcribe_mp3_file_pipeline_uses_injected_dependencies(tmp_path):
         split_mp3_fn=lambda *_args, **_kwargs: [str(part1), str(part2)],
         get_part_number_fn=lambda filename: 1 if "part1" in filename else 2,
         transcribe_audio_fn=lambda path, _key, language=None, prompt=None: f"{Path(path).stem}:{language}:{prompt or ''}",
-        post_process_transcript_fn=lambda text: f"CLEAN:{text}",
+        post_process_transcript_fn=lambda text, api_key=None: f"CLEAN:{text}",
         estimate_token_count_fn=lambda text: len(text),
         is_text_too_long_for_correction_fn=lambda _text: False,
         rmtree_fn=lambda path: removed.append(path),

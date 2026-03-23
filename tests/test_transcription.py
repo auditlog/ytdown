@@ -156,7 +156,7 @@ def test_transcribe_mp3_file_success_with_postprocessing(monkeypatch, tmp_path):
 
     monkeypatch.setattr(tr, "transcribe_audio", fake_transcribe_audio)
     monkeypatch.setattr(tr, "get_claude_api_key", lambda: "claude-key")
-    monkeypatch.setattr(tr, "post_process_transcript", lambda text: f"CLEANED:{text}")
+    monkeypatch.setattr(tr, "post_process_transcript", lambda text, api_key=None: f"CLEANED:{text}")
 
     statuses = []
 

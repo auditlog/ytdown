@@ -151,7 +151,7 @@ def transcribe_mp3_file(
         else:
             if progress_callback:
                 progress_callback("Korekta transkrypcji przez AI...")
-            corrected = post_process_transcript_fn(combined_text)
+            corrected = post_process_transcript_fn(combined_text, api_key=get_claude_api_key_fn())
             if corrected:
                 combined_text = corrected
                 logging.info("Post-processed transcript: %s characters", len(combined_text))

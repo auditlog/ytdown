@@ -111,13 +111,13 @@ def transcribe_mp3_file(file_path, output_dir, progress_callback=None, language=
     )
 
 
-def post_process_transcript(text):
+def post_process_transcript(text, *, api_key=None):
     """Clean up raw Whisper transcription using Claude API."""
 
     # Security contract preserved in facade: Claude error logs use response.text[:500] truncation.
     return _post_process_transcript(
         text,
-        api_key=get_claude_api_key(),
+        api_key=api_key or get_claude_api_key(),
         requests_module=requests,
         sleep_fn=time.sleep,
     )

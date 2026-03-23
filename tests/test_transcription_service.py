@@ -55,7 +55,8 @@ def test_run_transcription_with_progress_returns_transcript_path(monkeypatch, tm
 
 
 def test_generate_summary_artifact_creates_markdown_file(monkeypatch, tmp_path):
-    monkeypatch.setattr(ts, "generate_summary", lambda text, summary_type: "summary body")
+    monkeypatch.setattr(ts, "generate_summary", lambda text, summary_type, api_key=None: "summary body")
+    monkeypatch.setattr(ts, "get_claude_api_key", lambda: "test-key")
 
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
