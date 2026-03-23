@@ -358,13 +358,13 @@ ytdown/
 │   ├── cli.py                      # Interfejs wiersza poleceń
 │   ├── telegram_commands.py        # Router komend — wrappery kompatybilności
 │   ├── telegram_callbacks.py       # Router callbacków — wrappery kompatybilności
-│   ├── handlers/                   # Wydzielone flow handlery
+│   ├── handlers/                   # Wydzielone flow handlery (bez cross-importów do routerów)
 │   │   ├── command_access.py       # Auth/admin/info: /start, PIN, /logout, /help, /status
 │   │   ├── inbound_media.py        # Intake URL-i, upload audio/video, playlist entry
 │   │   ├── download_callbacks.py   # Download flow, progress, playlist, Instagram, Spotify
 │   │   ├── transcription_callbacks.py # Transkrypcja, napisy, podsumowania
 │   │   ├── callback_parsing.py     # Parsery callback payload (download, summary)
-│   │   └── common_ui.py           # Shared UI: klawiatury, formatowanie, Markdown
+│   │   └── common_ui.py           # Centralny hub UI: klawiatury, Markdown, formatowanie
 │   └── services/                   # Logika biznesowa niezależna od Telegrama
 │       ├── auth_service.py         # PIN, login/logout, security state reset
 │       ├── download_service.py     # Planowanie i wykonywanie pobrań

@@ -14,7 +14,6 @@ from concurrent.futures import ThreadPoolExecutor
 import yt_dlp
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
-from telegram.helpers import escape_markdown
 
 # Thread pool for running sync functions
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -50,6 +49,8 @@ from bot.handlers.transcription_callbacks import (
 )
 from bot.handlers.callback_parsing import parse_download_callback, parse_summary_option
 from bot.handlers.common_ui import (
+    build_main_keyboard,
+    escape_md as _shared_escape_md,
     format_bytes,
     format_eta,
     safe_edit_message,
@@ -66,7 +67,6 @@ from bot.security import (
     user_playlist_data,
     get_media_label,
 )
-from bot.telegram_commands import _build_main_keyboard, _build_playlist_message, process_playlist_link
 from bot.transcription import (
     transcribe_mp3_file,
     CORRECTION_DURATION_LIMIT_MIN,
@@ -100,6 +100,7 @@ from bot.services.transcription_service import (
 )
 from bot.services.spotify_service import download_resolved_audio
 from bot.services.playlist_service import (
+    build_playlist_message,
     build_single_video_url,
     download_playlist_item,
     load_playlist,
@@ -120,7 +121,19 @@ from bot.session_store import download_progress as _download_progress
 
 def escape_md(text: str) -> str:
     """Escapes Markdown v1 special characters in text."""
-    return escape_markdown(text, version=1)
+    return _shared_escape_md(text)
+
+
+def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
+    """Compatibility wrapper for shared command/callback keyboard builder."""
+
+    return build_main_keyboard(platform, large_file=large_file)
+
+
+def _build_playlist_message(playlist_info: dict) -> tuple[str, InlineKeyboardMarkup]:
+    """Compatibility wrapper for playlist menu rendering."""
+
+    return build_playlist_message(playlist_info)
 
 
 def create_progress_hook(chat_id):
@@ -953,12 +966,11 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
                 return
 
-            from bot.telegram_commands import _build_main_keyboard, escape_md
             title = info.get('title', 'Nieznany tytuł')
             duration = info.get('duration', 0)
             duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
             platform = _get_session_context_value(context, chat_id, "platform", legacy_key="platform", default="youtube")
-            keyboard = _build_main_keyboard(platform)
+            keyboard = build_main_keyboard(platform)
             reply_markup = InlineKeyboardMarkup(keyboard)
 
             await query.edit_message_text(

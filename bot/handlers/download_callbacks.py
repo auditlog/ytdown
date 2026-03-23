@@ -12,10 +12,11 @@ from concurrent.futures import ThreadPoolExecutor
 import yt_dlp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.ext import ContextTypes
-from telegram.helpers import escape_markdown
 
 from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.handlers.common_ui import (
+    build_main_keyboard,
+    escape_md,
     format_bytes,
     format_eta,
     safe_edit_message,
@@ -39,7 +40,6 @@ from bot.session_context import (
     set_session_value as _set_session_value,
 )
 from bot.session_store import download_progress as _download_progress
-from bot.telegram_commands import _build_main_keyboard, _build_playlist_message
 from bot.transcription import CORRECTION_DURATION_LIMIT_MIN, SUMMARY_DURATION_LIMIT_MIN
 from bot.downloader import (
     download_photo,
@@ -55,6 +55,7 @@ from bot.services.download_service import (
     prepare_download_plan,
 )
 from bot.services.playlist_service import (
+    build_playlist_message,
     build_single_video_url,
     download_playlist_item,
     load_playlist,
@@ -72,12 +73,6 @@ from bot.runtime import record_download_for
 
 
 _executor = ThreadPoolExecutor(max_workers=2)
-
-
-def escape_md(text: str) -> str:
-    """Escapes Markdown v1 special characters in text."""
-    return escape_markdown(text, version=1)
-
 
 def create_progress_hook(chat_id):
     """Creates a progress hook for yt-dlp that updates shared progress state."""
@@ -654,7 +649,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
             duration = info.get("duration", 0)
             duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
             platform = _get_session_context_value(context, chat_id, "platform", legacy_key="platform", default="youtube")
-            keyboard = _build_main_keyboard(platform)
+            keyboard = build_main_keyboard(platform)
 
             await query.edit_message_text(
                 f"*{escape_md(title)}*\nCzas trwania: {duration_str}\n\nWybierz format do pobrania:",
@@ -672,7 +667,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text("Nie udało się pobrać informacji o playliście.")
                 return
             _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
-            msg, reply_markup = _build_playlist_message(playlist_info)
+            msg, reply_markup = build_playlist_message(playlist_info)
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
@@ -685,7 +680,7 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text("Nie udało się pobrać rozszerzonej listy.")
                 return
             _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
-            msg, reply_markup = _build_playlist_message(playlist_info)
+            msg, reply_markup = build_playlist_message(playlist_info)
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
@@ -992,7 +987,7 @@ async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     title = info.get("title", "Nieznany tytuł")
     duration = int(info.get("duration") or 0)
     duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
-    keyboard = _build_main_keyboard(platform)
+    keyboard = build_main_keyboard(platform)
 
     time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
     time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}" if time_range else ""
