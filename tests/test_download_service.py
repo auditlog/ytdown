@@ -34,6 +34,7 @@ def test_prepare_download_plan_builds_audio_transcription_plan(monkeypatch, tmp_
     assert plan.ydl_opts["format"] == "bestaudio/best"
     assert plan.ydl_opts["postprocessors"][0]["preferredcodec"] == "mp3"
     assert plan.ydl_opts["force_keyframes_at_cuts"] is True
+    assert plan.ydl_opts["remote_components"] == ["ejs:github"]
 
 
 def test_prepare_download_plan_rejects_invalid_audio_quality(monkeypatch, tmp_path):

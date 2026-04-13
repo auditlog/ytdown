@@ -10,6 +10,7 @@ from typing import Any
 
 import yt_dlp
 
+from bot.config import YTDLP_REMOTE_COMPONENTS
 from bot.downloader_validation import sanitize_filename
 from bot.spotify import download_direct_audio, resolve_spotify_episode
 
@@ -132,6 +133,7 @@ async def download_resolved_audio(
                 'preferredcodec': audio_format,
                 'preferredquality': '192',
             }],
+            'remote_components': YTDLP_REMOTE_COMPONENTS,
         }
 
         await loop.run_in_executor(

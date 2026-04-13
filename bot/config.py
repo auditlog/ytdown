@@ -43,6 +43,9 @@ DOWNLOAD_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 # Path to cookies file used by yt-dlp
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
 
+# Remote components for yt-dlp YouTube JS challenge solving (signature + n-parameter)
+YTDLP_REMOTE_COMPONENTS = ['ejs:github']
+
 # Path to authorized users file
 AUTHORIZED_USERS_FILE = "authorized_users.json"
 

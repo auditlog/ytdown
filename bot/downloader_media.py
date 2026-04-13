@@ -10,7 +10,7 @@ from io import BytesIO
 import requests
 import yt_dlp
 
-from bot.config import COOKIES_FILE
+from bot.config import COOKIES_FILE, YTDLP_REMOTE_COMPONENTS
 from bot.downloader_validation import sanitize_filename
 
 IMAGE_EXTENSIONS = {'jpg', 'jpeg', 'png', 'webp'}
@@ -66,6 +66,7 @@ def _get_instagram_post_info_ytdlp(url: str, *, cookies_file: str | None = COOKI
             'quiet': True,
             'no_warnings': True,
             'ignore_no_formats_error': True,
+            'remote_components': YTDLP_REMOTE_COMPONENTS,
         }
         if cookies_file and os.path.exists(cookies_file):
             ydl_opts['cookiefile'] = cookies_file

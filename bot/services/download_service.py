@@ -24,6 +24,7 @@ from typing import Any, Callable
 
 import yt_dlp
 
+from bot.config import YTDLP_REMOTE_COMPONENTS
 from bot.downloader_metadata import COOKIES_FILE, get_video_info
 from bot.downloader_validation import is_valid_audio_quality, sanitize_filename
 from bot.security_limits import MAX_FILE_SIZE_MB
@@ -101,6 +102,7 @@ def prepare_download_plan(
         'throttled_rate': '100K',
         'buffer_size': 1024 * 16,
         'http_chunk_size': 10485760,
+        'remote_components': YTDLP_REMOTE_COMPONENTS,
     }
     if os.path.exists(COOKIES_FILE):
         ydl_opts['cookiefile'] = COOKIES_FILE

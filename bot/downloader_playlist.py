@@ -8,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 
 import yt_dlp
 
-from bot.config import COOKIES_FILE
+from bot.config import COOKIES_FILE, YTDLP_REMOTE_COMPONENTS
 
 
 def is_playlist_url(url: str) -> bool:
@@ -67,6 +67,7 @@ def get_playlist_info(url: str, max_items: int = 10) -> dict | None:
             'quiet': True,
             'no_warnings': True,
             'playlistend': max_items,
+            'remote_components': YTDLP_REMOTE_COMPONENTS,
         }
         if os.path.exists(COOKIES_FILE):
             ydl_opts['cookiefile'] = COOKIES_FILE
