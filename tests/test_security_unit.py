@@ -152,6 +152,52 @@ def test_validate_url_is_backward_compatible_alias():
     assert security.validate_youtube_url is security.validate_url
 
 
+def test_extract_url_from_text_pulls_link_out_of_prose():
+    msg = (
+        "nie mam na kompie służbowym premium - czy mógłbyś mi pobrać "
+        "w wysokiej rozdzielczości ten film i wysłać na wetransfer? "
+        "nie jest to pilne https://www.youtube.com/watch?v=zCq3xb2Hmqs"
+    )
+    assert security.extract_url_from_text(msg) == "https://www.youtube.com/watch?v=zCq3xb2Hmqs"
+
+
+def test_extract_url_from_text_returns_bare_url_unchanged():
+    url = "https://youtu.be/abc123"
+    assert security.extract_url_from_text(url) == url
+
+
+def test_extract_url_from_text_picks_first_supported_platform():
+    msg = "see https://example.com/not-supported and https://vimeo.com/999"
+    assert security.extract_url_from_text(msg) == "https://vimeo.com/999"
+
+
+def test_extract_url_from_text_strips_trailing_punctuation():
+    msg = "Check this (https://www.tiktok.com/@user/video/123)."
+    assert security.extract_url_from_text(msg) == "https://www.tiktok.com/@user/video/123"
+
+
+def test_extract_url_from_text_rejects_messages_without_supported_url():
+    assert security.extract_url_from_text("just some text, no link") is None
+    assert security.extract_url_from_text("https://example.com/only") is None
+    assert security.extract_url_from_text("") is None
+    assert security.extract_url_from_text(None) is None
+
+
+def test_extract_url_from_text_handles_all_supported_platforms():
+    platforms = {
+        "youtube": "https://www.youtube.com/watch?v=abc",
+        "youtu.be": "https://youtu.be/abc",
+        "vimeo": "https://vimeo.com/123",
+        "tiktok": "https://www.tiktok.com/@u/video/1",
+        "instagram": "https://www.instagram.com/p/abc/",
+        "linkedin": "https://www.linkedin.com/posts/abc",
+        "castbox": "https://castbox.fm/episode/abc",
+        "spotify": "https://open.spotify.com/episode/abc",
+    }
+    for _, url in platforms.items():
+        assert security.extract_url_from_text(f"prefix text {url}") == url
+
+
 def test_estimate_file_size_various_inputs():
     info_with_size = {"formats": [{"filesize": 50 * 1024 * 1024}]}
     assert security.estimate_file_size(info_with_size) == 50.0

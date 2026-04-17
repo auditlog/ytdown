@@ -43,7 +43,8 @@ def build_main_keyboard(platform: str, large_file: bool = False) -> list:
         ]
     else:
         keyboard = [
-            [InlineKeyboardButton("Najlepsza jakość video", callback_data="dl_video_best")],
+            [InlineKeyboardButton("Video — najwyższa (do 4K/2160p)", callback_data="dl_video_best")],
+            [InlineKeyboardButton("Video — średnia (720p HD)", callback_data="dl_video_medium")],
             [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
             [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
         ]

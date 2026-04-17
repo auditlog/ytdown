@@ -145,6 +145,7 @@ def test_download_youtube_video_success_with_format_id(monkeypatch):
 def test_is_valid_ytdlp_format_id():
     assert is_valid_ytdlp_format_id("best") is True
     assert is_valid_ytdlp_format_id("bestvideo") is True
+    assert is_valid_ytdlp_format_id("medium") is True
     assert is_valid_ytdlp_format_id("1080p") is True
     assert is_valid_ytdlp_format_id("137+140") is True
     assert is_valid_ytdlp_format_id("1080P") is True

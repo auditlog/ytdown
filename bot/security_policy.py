@@ -2,7 +2,12 @@
 
 from __future__ import annotations
 
+import re
 from urllib.parse import parse_qs, urlparse
+
+# Matches http(s) URLs; trailing punctuation is trimmed after the match.
+_URL_PATTERN = re.compile(r'https?://[^\s<>"\'`]+')
+_URL_TRAILING_PUNCT = '.,;:!?)]}>"\''
 
 _DOMAIN_TO_PLATFORM = {
     'youtube.com': 'youtube',
@@ -88,6 +93,23 @@ def validate_url(url) -> bool:
     if domain.startswith('www.'):
         return domain[4:] in ALLOWED_DOMAINS
     return False
+
+
+def extract_url_from_text(text) -> str | None:
+    """Return the first supported URL found in free-form text, or None.
+
+    Handles messages where the user prefixes the link with descriptive text
+    (e.g. "please download this: https://youtu.be/abc"). Trailing punctuation
+    like '.', ',', ')' is stripped so copy-pasted URLs still validate.
+    """
+
+    if not isinstance(text, str) or not text:
+        return None
+    for match in _URL_PATTERN.finditer(text):
+        candidate = match.group(0).rstrip(_URL_TRAILING_PUNCT)
+        if validate_url(candidate):
+            return candidate
+    return None
 
 
 def detect_platform(url) -> str | None:

@@ -37,6 +37,46 @@ def test_prepare_download_plan_builds_audio_transcription_plan(monkeypatch, tmp_
     assert plan.ydl_opts["remote_components"] == ["ejs:github"]
 
 
+def test_prepare_download_plan_video_best_uses_bestvideo_bestaudio(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        ds,
+        "get_video_info",
+        lambda url: {"title": "Test Video", "duration": 125},
+    )
+    monkeypatch.setattr(ds.os.path, "exists", lambda path: False)
+
+    plan = ds.prepare_download_plan(
+        url="https://www.youtube.com/watch?v=abc",
+        media_type="video",
+        format_choice="best",
+        chat_download_path=str(tmp_path),
+    )
+
+    assert plan is not None
+    assert plan.ydl_opts["format"] == "bestvideo+bestaudio/best"
+
+
+def test_prepare_download_plan_video_medium_caps_at_720p(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        ds,
+        "get_video_info",
+        lambda url: {"title": "Test Video", "duration": 125},
+    )
+    monkeypatch.setattr(ds.os.path, "exists", lambda path: False)
+
+    plan = ds.prepare_download_plan(
+        url="https://www.youtube.com/watch?v=abc",
+        media_type="video",
+        format_choice="medium",
+        chat_download_path=str(tmp_path),
+    )
+
+    assert plan is not None
+    assert plan.ydl_opts["format"] == (
+        "best[height<=720]/bestvideo[height<=720]+bestaudio/best[height<=720]"
+    )
+
+
 def test_prepare_download_plan_rejects_invalid_audio_quality(monkeypatch, tmp_path):
     monkeypatch.setattr(
         ds,

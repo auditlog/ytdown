@@ -137,7 +137,13 @@ def prepare_download_plan(
             })
     elif media_type == "video":
         if format_choice == "best":
-            ydl_opts['format'] = 'best'
+            ydl_opts['format'] = 'bestvideo+bestaudio/best'
+        elif format_choice == "medium":
+            # Cap at 720p HD for a smaller, faster download while staying watchable.
+            ydl_opts['format'] = (
+                'best[height<=720]/bestvideo[height<=720]'
+                '+bestaudio/best[height<=720]'
+            )
         elif format_choice in ["1080p", "720p", "480p", "360p"]:
             height = format_choice.replace('p', '')
             ydl_opts['format'] = (
