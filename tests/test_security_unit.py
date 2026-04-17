@@ -183,6 +183,19 @@ def test_extract_url_from_text_rejects_messages_without_supported_url():
     assert security.extract_url_from_text(None) is None
 
 
+def test_extract_url_from_text_resolves_castbox_share_redirect():
+    # d.castbox.fm is the share/redirect host; validate_url rejects it, so the
+    # extractor must unwrap the inner ?link= target before validating.
+    share_url = (
+        "https://d.castbox.fm/ch/1234?link="
+        "https://castbox.fm/episode/Some-Episode-id12345"
+    )
+    expected = "https://castbox.fm/episode/Some-Episode-id12345"
+
+    assert security.extract_url_from_text(share_url) == expected
+    assert security.extract_url_from_text(f"posłuchaj: {share_url} dzięki") == expected
+
+
 def test_extract_url_from_text_handles_all_supported_platforms():
     platforms = {
         "youtube": "https://www.youtube.com/watch?v=abc",

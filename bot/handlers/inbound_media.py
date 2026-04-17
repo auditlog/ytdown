@@ -182,7 +182,11 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not _is_authorized(context, user_id):
-        store_pending_action(_get_auth_state(context, chat_id), kind="url", payload=message_text)
+        # Extract URL up-front so that the replay after successful PIN auth
+        # (command_access replays pending_action via process_youtube_link,
+        # which expects a clean URL) gets the same input as the authorized path.
+        pending_payload = extract_url_from_text(message_text) or message_text
+        store_pending_action(_get_auth_state(context, chat_id), kind="url", payload=pending_payload)
         await update.message.reply_text(
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."

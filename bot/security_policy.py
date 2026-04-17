@@ -95,20 +95,43 @@ def validate_url(url) -> bool:
     return False
 
 
+def _offline_redirect_target(url: str) -> str | None:
+    """Resolve supported redirect URLs without network I/O.
+
+    Mirrors the offline branch of normalize_url so extract_url_from_text can
+    recognize Castbox share links (d.castbox.fm?link=...) as supported. Network
+    resolution (HEAD on castbox.fm/ch/...) stays in normalize_url, which runs
+    in an executor off the event loop.
+    """
+
+    try:
+        parsed = urlparse(url)
+        if parsed.netloc.lower() == 'd.castbox.fm':
+            link_param = parse_qs(parsed.query).get('link', [None])[0]
+            if link_param and 'castbox.fm' in link_param:
+                return link_param
+    except Exception:
+        pass
+    return None
+
+
 def extract_url_from_text(text) -> str | None:
     """Return the first supported URL found in free-form text, or None.
 
     Handles messages where the user prefixes the link with descriptive text
     (e.g. "please download this: https://youtu.be/abc"). Trailing punctuation
     like '.', ',', ')' is stripped so copy-pasted URLs still validate.
+    Redirect links resolvable without network I/O (e.g. d.castbox.fm share
+    URLs) are resolved up-front so the returned candidate passes validate_url.
     """
 
     if not isinstance(text, str) or not text:
         return None
     for match in _URL_PATTERN.finditer(text):
         candidate = match.group(0).rstrip(_URL_TRAILING_PUNCT)
-        if validate_url(candidate):
-            return candidate
+        resolved = _offline_redirect_target(candidate) or candidate
+        if validate_url(resolved):
+            return resolved
     return None
 
 

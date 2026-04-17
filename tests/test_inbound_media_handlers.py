@@ -28,6 +28,24 @@ class TestHandleYoutubeLink:
         assert context.user_data["awaiting_pin"] is True
         update.message.reply_text.assert_awaited_once()
 
+    def test_handle_youtube_link_extracts_url_before_storing_pending(self, monkeypatch):
+        # Regression: if the unauthorized user sends a URL wrapped in descriptive
+        # text, the pending_action must store the clean URL so that the post-auth
+        # replay in command_access (which bypasses extract_url_from_text) works.
+        update = _make_update(
+            text="prosze pobierz https://youtube.com/watch?v=wrapped dzieki",
+            user_id=444,
+        )
+        context = _make_context()
+
+        _set_authorized_users(monkeypatch, set())
+        monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
+
+        _async(tc.handle_youtube_link(update, context))
+
+        assert context.user_data["pending_url"] == "https://youtube.com/watch?v=wrapped"
+        assert context.user_data["awaiting_pin"] is True
+
     def test_handle_youtube_link_sets_time_range_for_active_session(self, monkeypatch):
         update = _make_update(text="0:10-0:20", user_id=333, chat_id=333)
         context = _make_context()
