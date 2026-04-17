@@ -15,15 +15,54 @@ import os
 from bot.config import get_runtime_value
 
 
-def is_mtproto_available() -> bool:
-    """Checks if pyrogram is installed and API credentials are configured."""
-    if not get_runtime_value("TELEGRAM_API_ID") or not get_runtime_value("TELEGRAM_API_HASH"):
-        return False
+def mtproto_unavailability_reason() -> str | None:
+    """Return a user-facing explanation of what is missing for MTProto, or None.
+
+    Distinguishes between the three failure modes so callers can give precise
+    guidance instead of always blaming missing API credentials (which used to
+    mislead users who simply had not installed pyrogram).
+    """
+
     try:
         import pyrogram  # noqa: F401
-        return True
+        has_pyrogram = True
     except ImportError:
-        return False
+        has_pyrogram = False
+
+    has_creds = bool(get_runtime_value("TELEGRAM_API_ID")) and bool(
+        get_runtime_value("TELEGRAM_API_HASH")
+    )
+
+    if has_pyrogram and has_creds:
+        return None
+    if not has_pyrogram and not has_creds:
+        return (
+            "Zainstaluj pakiet pyrogram oraz skonfiguruj "
+            "TELEGRAM_API_ID i TELEGRAM_API_HASH."
+        )
+    if not has_pyrogram:
+        return "Zainstaluj pakiet pyrogram, aby wysyłać większe pliki."
+    return "Skonfiguruj TELEGRAM_API_ID i TELEGRAM_API_HASH, aby wysyłać większe pliki."
+
+
+def is_mtproto_available() -> bool:
+    """Checks if pyrogram is installed and API credentials are configured."""
+    return mtproto_unavailability_reason() is None
+
+
+def _parse_api_id(value) -> int | None:
+    """Return TELEGRAM_API_ID as int, or None when the value is invalid.
+
+    Guards pyrogram Client construction: a non-numeric API_ID (e.g. a typo in
+    api_key.md) would otherwise raise ValueError outside the surrounding
+    try/except in send_*_mtproto / download_file_mtproto and crash the handler
+    instead of returning False with a logged reason.
+    """
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        logging.error("TELEGRAM_API_ID is not a valid integer: %r", value)
+        return None
 
 
 async def download_file_mtproto(bot_token: str, chat_id: int, message_id: int, dest_path: str) -> bool:
@@ -53,6 +92,10 @@ async def download_file_mtproto(bot_token: str, chat_id: int, message_id: int, d
         logging.error("TELEGRAM_API_ID/TELEGRAM_API_HASH not configured")
         return False
 
+    api_id_int = _parse_api_id(api_id)
+    if api_id_int is None:
+        return False
+
     # Use in-memory session to avoid session file creation
     session_name = f"bot_download_{chat_id}_{message_id}"
     session_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads")
@@ -60,7 +103,7 @@ async def download_file_mtproto(bot_token: str, chat_id: int, message_id: int, d
 
     client = Client(
         name=session_name,
-        api_id=int(api_id),
+        api_id=api_id_int,
         api_hash=api_hash,
         bot_token=bot_token,
         workdir=session_dir,
@@ -89,13 +132,15 @@ async def download_file_mtproto(bot_token: str, chat_id: int, message_id: int, d
         return False
 
 
-def _build_client(chat_id: int, tag: str) -> "Client":
-    """Create a pyrogram Client configured for bot-mode MTProto operations."""
+def _build_client(chat_id: int, tag: str, api_id: int, api_hash: str) -> "Client":
+    """Create a pyrogram Client configured for bot-mode MTProto operations.
+
+    Callers are expected to have already validated api_id via _parse_api_id so
+    this function never raises for malformed configuration.
+    """
 
     from pyrogram import Client
 
-    api_id = get_runtime_value("TELEGRAM_API_ID", "")
-    api_hash = get_runtime_value("TELEGRAM_API_HASH", "")
     session_dir = os.path.join(
         os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "downloads"
     )
@@ -103,7 +148,7 @@ def _build_client(chat_id: int, tag: str) -> "Client":
 
     return Client(
         name=f"bot_{tag}_{chat_id}",
-        api_id=int(api_id),
+        api_id=api_id,
         api_hash=api_hash,
         bot_token=get_runtime_value("TELEGRAM_BOT_TOKEN", ""),
         workdir=session_dir,
@@ -143,7 +188,11 @@ async def send_audio_mtproto(
         logging.error("TELEGRAM_API_ID/TELEGRAM_API_HASH not configured")
         return False
 
-    client = _build_client(chat_id, "send_audio")
+    api_id_int = _parse_api_id(api_id)
+    if api_id_int is None:
+        return False
+
+    client = _build_client(chat_id, "send_audio", api_id_int, api_hash)
 
     try:
         async with client:
@@ -195,7 +244,11 @@ async def send_video_mtproto(
         logging.error("TELEGRAM_API_ID/TELEGRAM_API_HASH not configured")
         return False
 
-    client = _build_client(chat_id, "send_video")
+    api_id_int = _parse_api_id(api_id)
+    if api_id_int is None:
+        return False
+
+    client = _build_client(chat_id, "send_video", api_id_int, api_hash)
 
     try:
         async with client:

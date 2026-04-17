@@ -8,6 +8,7 @@ from unittest.mock import patch, AsyncMock, MagicMock
 
 from bot.mtproto import (
     is_mtproto_available,
+    mtproto_unavailability_reason,
     download_file_mtproto,
     send_audio_mtproto,
     send_video_mtproto,
@@ -48,6 +49,46 @@ class TestIsMtprotoAvailable:
             assert is_mtproto_available() is True
 
 
+class TestMtprotoUnavailabilityReason:
+    """Verifies that the user-facing hint reflects the actual missing piece."""
+
+    def _set_creds(self, monkeypatch, *, api_id, api_hash):
+        cfg = __import__('bot.config', fromlist=['CONFIG']).CONFIG
+        monkeypatch.setitem(cfg, 'TELEGRAM_API_ID', api_id)
+        monkeypatch.setitem(cfg, 'TELEGRAM_API_HASH', api_hash)
+
+    def test_returns_none_when_fully_configured(self, monkeypatch):
+        self._set_creds(monkeypatch, api_id='12345', api_hash='abc')
+        mock_pyrogram = MagicMock()
+        with patch.dict('sys.modules', {'pyrogram': mock_pyrogram}):
+            assert mtproto_unavailability_reason() is None
+
+    def test_mentions_only_pyrogram_when_creds_present(self, monkeypatch):
+        self._set_creds(monkeypatch, api_id='12345', api_hash='abc')
+        with patch.dict('sys.modules', {'pyrogram': None}):
+            reason = mtproto_unavailability_reason()
+            assert reason is not None
+            assert 'pyrogram' in reason.lower()
+            assert 'TELEGRAM_API_ID' not in reason
+
+    def test_mentions_only_creds_when_pyrogram_present(self, monkeypatch):
+        self._set_creds(monkeypatch, api_id='', api_hash='abc')
+        mock_pyrogram = MagicMock()
+        with patch.dict('sys.modules', {'pyrogram': mock_pyrogram}):
+            reason = mtproto_unavailability_reason()
+            assert reason is not None
+            assert 'TELEGRAM_API_ID' in reason
+            assert 'pyrogram' not in reason.lower()
+
+    def test_mentions_both_when_nothing_is_set(self, monkeypatch):
+        self._set_creds(monkeypatch, api_id='', api_hash='')
+        with patch.dict('sys.modules', {'pyrogram': None}):
+            reason = mtproto_unavailability_reason()
+            assert reason is not None
+            assert 'pyrogram' in reason.lower()
+            assert 'TELEGRAM_API_ID' in reason
+
+
 class TestDownloadFileMtproto:
     """Tests for download_file_mtproto() error handling."""
 
@@ -63,6 +104,18 @@ class TestDownloadFileMtproto:
     def test_returns_false_when_api_id_missing(self, monkeypatch):
         monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
                             'TELEGRAM_API_ID', '')
+        monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
+                            'TELEGRAM_API_HASH', 'abc123hash')
+        mock_pyrogram = MagicMock()
+        with patch.dict('sys.modules', {'pyrogram': mock_pyrogram}):
+            result = asyncio.run(download_file_mtproto("token", 123, 456, "/tmp/test.mp3"))
+            assert result is False
+
+    def test_returns_false_when_api_id_not_numeric(self, monkeypatch):
+        # Regression: a non-numeric TELEGRAM_API_ID must be rejected cleanly
+        # instead of raising ValueError during Client construction.
+        monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
+                            'TELEGRAM_API_ID', 'not-a-number')
         monkeypatch.setitem(__import__('bot.config', fromlist=['CONFIG']).CONFIG,
                             'TELEGRAM_API_HASH', 'abc123hash')
         mock_pyrogram = MagicMock()
@@ -112,6 +165,17 @@ class TestSendAudioMtproto:
 
     def test_returns_false_when_api_id_missing(self, monkeypatch, tmp_path):
         _set_mtproto_config(monkeypatch, api_id="")
+        audio_file = tmp_path / "test.mp3"
+        audio_file.write_bytes(b"\x00" * 100)
+        mock_pyrogram = MagicMock()
+        with patch.dict('sys.modules', {'pyrogram': mock_pyrogram}):
+            result = asyncio.run(send_audio_mtproto(123, str(audio_file), title="Test"))
+            assert result is False
+
+    def test_returns_false_when_api_id_not_numeric(self, monkeypatch, tmp_path):
+        # Regression: non-numeric TELEGRAM_API_ID used to raise ValueError inside
+        # _build_client, outside the try/except around async with client.
+        _set_mtproto_config(monkeypatch, api_id="oops")
         audio_file = tmp_path / "test.mp3"
         audio_file.write_bytes(b"\x00" * 100)
         mock_pyrogram = MagicMock()
@@ -172,6 +236,17 @@ class TestSendVideoMtproto:
 
     def test_returns_false_when_api_hash_missing(self, monkeypatch, tmp_path):
         _set_mtproto_config(monkeypatch, api_hash="")
+        video_file = tmp_path / "test.mp4"
+        video_file.write_bytes(b"\x00" * 100)
+        mock_pyrogram = MagicMock()
+        with patch.dict('sys.modules', {'pyrogram': mock_pyrogram}):
+            result = asyncio.run(send_video_mtproto(123, str(video_file)))
+            assert result is False
+
+    def test_returns_false_when_api_id_not_numeric(self, monkeypatch, tmp_path):
+        # Regression: non-numeric TELEGRAM_API_ID used to raise ValueError inside
+        # _build_client, outside the try/except around async with client.
+        _set_mtproto_config(monkeypatch, api_id="bogus")
         video_file = tmp_path / "test.mp4"
         video_file.write_bytes(b"\x00" * 100)
         mock_pyrogram = MagicMock()

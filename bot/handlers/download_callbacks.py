@@ -517,12 +517,13 @@ async def download_file(
             thumb_path = await asyncio.get_event_loop().run_in_executor(_executor, download_thumbnail, info, chat_download_path, True)
             try:
                 if use_mtproto:
-                    from bot.mtproto import is_mtproto_available, send_audio_mtproto, send_video_mtproto
+                    from bot.mtproto import mtproto_unavailability_reason, send_audio_mtproto, send_video_mtproto
 
-                    if not is_mtproto_available():
+                    reason = mtproto_unavailability_reason()
+                    if reason is not None:
                         raise RuntimeError(
                             f"Plik za duży dla Bot API ({file_size_mb:.0f} MB, limit: {TELEGRAM_UPLOAD_LIMIT_MB} MB).\n"
-                            f"Skonfiguruj TELEGRAM_API_ID i TELEGRAM_API_HASH aby wysyłać większe pliki."
+                            f"{reason}"
                         )
                     if media_type == "audio":
                         ok = await send_audio_mtproto(chat_id, downloaded_file_path, title=title, caption=title, thumb_path=thumb_path)
