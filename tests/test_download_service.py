@@ -54,6 +54,8 @@ def test_prepare_download_plan_video_best_uses_bestvideo_bestaudio(monkeypatch, 
 
     assert plan is not None
     assert plan.ydl_opts["format"] == "bestvideo+bestaudio/best"
+    assert plan.ydl_opts["format_sort"] == ds.VIDEO_FORMAT_SORT
+    assert plan.ydl_opts["merge_output_format"] == "mp4"
 
 
 def test_prepare_download_plan_video_medium_caps_at_720p(monkeypatch, tmp_path):
@@ -73,8 +75,10 @@ def test_prepare_download_plan_video_medium_caps_at_720p(monkeypatch, tmp_path):
 
     assert plan is not None
     assert plan.ydl_opts["format"] == (
-        "best[height<=720]/bestvideo[height<=720]+bestaudio/best[height<=720]"
+        "bestvideo[height<=720]+bestaudio/best[height<=720]"
     )
+    assert plan.ydl_opts["format_sort"] == ds.VIDEO_FORMAT_SORT
+    assert plan.ydl_opts["merge_output_format"] == "mp4"
 
 
 def test_prepare_download_plan_rejects_invalid_audio_quality(monkeypatch, tmp_path):

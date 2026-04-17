@@ -32,6 +32,12 @@ from bot.security_limits import MAX_FILE_SIZE_MB
 
 ArtifactSuffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
 
+# Prefer H.264/AVC video + m4a audio over AV1/VP9+opus.
+# AV1 has better compression but lower bitrate (smaller files) and worse
+# playback compatibility on older devices/players — users expect mp4 output
+# with the largest practical file size for a given resolution.
+VIDEO_FORMAT_SORT = ['vcodec:h264', 'acodec:m4a', 'res', 'br', 'size']
+
 
 @dataclass
 class DownloadPlan:
@@ -138,18 +144,24 @@ def prepare_download_plan(
     elif media_type == "video":
         if format_choice == "best":
             ydl_opts['format'] = 'bestvideo+bestaudio/best'
+            ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
+            ydl_opts['merge_output_format'] = 'mp4'
         elif format_choice == "medium":
             # Cap at 720p HD for a smaller, faster download while staying watchable.
             ydl_opts['format'] = (
-                'best[height<=720]/bestvideo[height<=720]'
-                '+bestaudio/best[height<=720]'
+                'bestvideo[height<=720]+bestaudio'
+                '/best[height<=720]'
             )
+            ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
+            ydl_opts['merge_output_format'] = 'mp4'
         elif format_choice in ["1080p", "720p", "480p", "360p"]:
             height = format_choice.replace('p', '')
             ydl_opts['format'] = (
-                f'best[height<={height}]/bestvideo[height<={height}]'
-                f'+bestaudio/best[height<={height}]'
+                f'bestvideo[height<={height}]+bestaudio'
+                f'/best[height<={height}]'
             )
+            ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
+            ydl_opts['merge_output_format'] = 'mp4'
         else:
             ydl_opts['format'] = format_choice
 
