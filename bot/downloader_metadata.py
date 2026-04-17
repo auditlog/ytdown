@@ -7,7 +7,7 @@ import os
 
 import yt_dlp
 
-from bot.config import COOKIES_FILE
+from bot.config import COOKIES_FILE, YTDLP_REMOTE_COMPONENTS
 
 
 def get_video_info(url: str, *, cookies_file: str | None = COOKIES_FILE) -> dict | None:
@@ -18,6 +18,7 @@ def get_video_info(url: str, *, cookies_file: str | None = COOKIES_FILE) -> dict
             'quiet': True,
             'no_warnings': True,
             'noplaylist': True,
+            'remote_components': YTDLP_REMOTE_COMPONENTS,
         }
         if cookies_file and os.path.exists(cookies_file):
             ydl_opts['cookiefile'] = cookies_file

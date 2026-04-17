@@ -393,6 +393,7 @@ class TestDownloadSubtitles:
         call_args = mock_ytdl_class.call_args[0][0]
         assert call_args['writeautomaticsub'] is True
         assert call_args['writesubtitles'] is False
+        assert call_args['remote_components'] == ['ejs:github']
 
     @patch('bot.downloader_subtitles.yt_dlp.YoutubeDL')
     def test_download_subtitles_not_found(self, mock_ytdl_class, temp_dir):
@@ -440,6 +441,7 @@ class TestDownloadSubtitles:
 
         call_args = mock_ytdl_class.call_args[0][0]
         assert call_args['skip_download'] is True
+        assert call_args['remote_components'] == ['ejs:github']
 
     @patch('bot.downloader_subtitles.yt_dlp.YoutubeDL')
     def test_download_subtitles_srt_format(self, mock_ytdl_class, temp_dir):

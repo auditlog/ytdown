@@ -12,7 +12,7 @@ import yt_dlp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.ext import ContextTypes
 
-from bot.config import DOWNLOAD_PATH
+from bot.config import DOWNLOAD_PATH, YTDLP_REMOTE_COMPONENTS
 from bot.downloader_media import COOKIES_FILE, download_photo
 from bot.downloader_metadata import get_video_info
 from bot.downloader_validation import sanitize_filename
@@ -181,6 +181,7 @@ async def _download_and_send_ig_videos(
             "quiet": True,
             "no_warnings": True,
             "noplaylist": True,
+            "remote_components": YTDLP_REMOTE_COMPONENTS,
         }
         if os.path.exists(COOKIES_FILE):
             ydl_opts["cookiefile"] = COOKIES_FILE

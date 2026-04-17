@@ -51,6 +51,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 
 - Python 3.11+
 - ffmpeg (zainstalowany w systemie)
+- deno (wymagany przez yt-dlp do rozwiązywania YouTube JS challenges)
 - Poetry (opcjonalnie, zalecane) lub pip
 
 ### Zależności opcjonalne
@@ -111,6 +112,16 @@ Jeśli chcesz obsługi MTProto lub zdjęć/karuzel z Instagrama, doinstaluj rów
 ```bash
 pip install instaloader
 ```
+
+### Instalacja deno
+
+Deno jest wymagany przez yt-dlp jako JavaScript runtime do rozwiązywania YouTube JS challenges (szyfrowanie podpisów URL i n-parameter). Bez niego część filmów YouTube zwróci błąd "This video is not available".
+
+```bash
+curl -fsSL https://deno.land/install.sh | sh
+```
+
+Po instalacji upewnij się, że `~/.deno/bin` jest w PATH.
 
 ### Instalacja ffmpeg
 
@@ -394,7 +405,7 @@ ytdown/
 │       ├── spotify_service.py      # Resolving odcinków Spotify (iTunes/YouTube)
 │       └── transcription_service.py # Artefakty transkrypcji i podsumowań
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~575 testów)
+├── tests/                          # Testy (~591 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
@@ -455,6 +466,7 @@ ytdown/
 - Sama transkrypcja (Whisper) i napisy YouTube działają bez limitu długości
 - Instagram, LinkedIn, TikTok mogą wymagać cookies.txt do pobierania
 - Instagram zdjęcia/karuzele wymagają instaloader z ważną sesją w cookies.txt
+- YouTube wymaga deno jako JS runtime — bez niego część filmów zwróci "This video is not available"
 
 ## Rozwiązywanie problemów
 
@@ -462,6 +474,11 @@ ytdown/
 - Sprawdź czy token jest poprawny
 - Sprawdź połączenie internetowe
 - Sprawdź logi w konsoli
+
+**"This video is not available" dla filmów YouTube:**
+- Upewnij się, że deno jest zainstalowany i dostępny w PATH (`deno --version`)
+- Zaktualizuj yt-dlp do najnowszej wersji (`pip install --upgrade yt-dlp`)
+- YouTube wymaga JS runtime do rozwiązywania challenges — bez deno część filmów nie zadziała
 
 **Błąd transkrypcji:**
 - Sprawdź klucz API Groq

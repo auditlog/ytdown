@@ -49,6 +49,7 @@ def test_get_basic_ydl_opts_contains_expected_fields():
     assert opts["quiet"] is True
     assert opts["no_warnings"] is True
     assert "progress_hooks" not in opts
+    assert opts["remote_components"] == ["ejs:github"]
 
 
 def test_get_basic_ydl_opts_can_enable_progress_hooks():
@@ -117,6 +118,7 @@ def test_download_youtube_video_success_audio_only(monkeypatch):
     assert created == ["https://youtube.com/watch?v=test"]
     assert captured["opts"]["format"] == "bestaudio/best"
     assert captured["opts"]["postprocessors"][0]["preferredcodec"] == "mp3"
+    assert captured["opts"]["remote_components"] == ["ejs:github"]
 
 
 def test_download_youtube_video_success_with_format_id(monkeypatch):
@@ -143,6 +145,7 @@ def test_download_youtube_video_success_with_format_id(monkeypatch):
 def test_is_valid_ytdlp_format_id():
     assert is_valid_ytdlp_format_id("best") is True
     assert is_valid_ytdlp_format_id("bestvideo") is True
+    assert is_valid_ytdlp_format_id("medium") is True
     assert is_valid_ytdlp_format_id("1080p") is True
     assert is_valid_ytdlp_format_id("137+140") is True
     assert is_valid_ytdlp_format_id("1080P") is True
@@ -263,6 +266,7 @@ def test_download_youtube_video_sets_download_sections(monkeypatch):
     assert download_youtube_video("https://youtube.com/watch?v=test", time_range_start="0:10", time_range_end="0:20") is True
     assert captured["opts"]["download_sections"] == [{"start_time": 10, "end_time": 20}]
     assert captured["opts"]["force_keyframes_at_cuts"] is True
+    assert captured["opts"]["remote_components"] == ["ejs:github"]
 
 
 def test_download_youtube_video_returns_false_on_exception(monkeypatch):

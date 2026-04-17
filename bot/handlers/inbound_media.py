@@ -16,7 +16,14 @@ from bot.downloader_metadata import get_video_info
 from bot.downloader_playlist import is_playlist_url, is_pure_playlist_url
 from bot.security_limits import FFMPEG_TIMEOUT, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
 from bot.security_pin import get_block_remaining_seconds, is_user_blocked
-from bot.security_policy import detect_platform, estimate_file_size, get_media_label, normalize_url, validate_url
+from bot.security_policy import (
+    detect_platform,
+    estimate_file_size,
+    extract_url_from_text,
+    get_media_label,
+    normalize_url,
+    validate_url,
+)
 from bot.security_throttling import check_rate_limit
 from bot.services.auth_service import store_pending_action
 from bot.services.playlist_service import build_playlist_message, load_playlist
@@ -236,6 +243,12 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             "Spróbuj ponownie za chwilę."
         )
         return
+
+    # Extract the first supported URL if the message contains descriptive text
+    # around the link (e.g. "please download: https://youtu.be/...").
+    extracted_url = extract_url_from_text(message_text)
+    if extracted_url:
+        message_text = extracted_url
 
     if "castbox.fm" in message_text:
         import asyncio
@@ -459,7 +472,9 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
     estimated_size = estimate_file_size(info)
     size_warning = ""
 
-    if estimated_size and estimated_size > MAX_FILE_SIZE_MB:
+    is_podcast = platform in ("castbox", "spotify")
+    large_file = bool(estimated_size and estimated_size > MAX_FILE_SIZE_MB)
+    if large_file:
         size_warning = (
             f"\n*Uwaga:* Szacowany rozmiar najlepszej jakości: {estimated_size:.1f} MB "
             f"(limit: {MAX_FILE_SIZE_MB} MB)\n"
@@ -471,8 +486,17 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
     time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
     time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}" if time_range else ""
 
+    # Explain what "najwyższa" and "średnia" mean — only relevant when those
+    # labels are shown (non-podcast, non-large-file flow).
+    quality_hint = ""
+    if not is_podcast and not large_file:
+        quality_hint = (
+            "\n_Najwyższa_ = najlepsza dostępna rozdzielczość (do 4K/2160p)."
+            "  _Średnia_ = 720p HD.\n"
+        )
+
     await progress_message.edit_text(
-        f"*{escape_md(title)}*\nCzas trwania: {duration_str}{size_warning}{time_range_info}\n\n"
+        f"*{escape_md(title)}*\nCzas trwania: {duration_str}{size_warning}{time_range_info}{quality_hint}\n"
         f"Wybierz format do pobrania:",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",

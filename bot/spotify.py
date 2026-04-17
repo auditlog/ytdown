@@ -16,7 +16,7 @@ from urllib.parse import urlparse, parse_qs
 import requests
 import yt_dlp
 
-from bot.config import get_runtime_value
+from bot.config import YTDLP_REMOTE_COMPONENTS, get_runtime_value
 
 
 # Spotify API token cache
@@ -234,6 +234,7 @@ def search_youtube_episode(title: str, show_name: str = "",
             'no_warnings': True,
             'extract_flat': True,
             'default_search': 'ytsearch5',
+            'remote_components': YTDLP_REMOTE_COMPONENTS,
         }
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:

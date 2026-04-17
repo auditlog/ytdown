@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 FORMAT_ID_PATTERN = re.compile(
-    r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$|^(?:dash-[\da-zA-Z]+)$|^(?:[\da-zA-Z]+-\d+)$"
+    r"^(?:best|worst|bestvideo|bestaudio|worstaudio|worstvideo|medium)$|^(?:\d+[pP]?)$|^(?:\d+(?:[+x]\d+){0,3})$|^(?:dash-[\da-zA-Z]+)$|^(?:[\da-zA-Z]+-\d+)$"
 )
 SUPPORTED_AUDIO_FORMATS = ("mp3", "m4a", "wav", "flac", "ogg", "opus")
 AUDIO_FORMATS = set(SUPPORTED_AUDIO_FORMATS)

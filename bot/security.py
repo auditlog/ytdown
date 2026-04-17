@@ -30,6 +30,7 @@ from bot.security_policy import (
     ALLOWED_DOMAINS,
     detect_platform,
     estimate_file_size,
+    extract_url_from_text,
     get_media_label,
     normalize_url,
     validate_url,
