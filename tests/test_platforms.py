@@ -180,3 +180,44 @@ def test_cookies_hint_set_for_platforms_requiring_cookies_except_podcasts():
             assert p.cookies_hint is not None, (
                 f"Platform {p.name!r} marked requires_cookies but has no hint"
             )
+
+
+def test_build_main_keyboard_reads_flags_from_registry():
+    from bot.handlers.common_ui import build_main_keyboard
+
+    # TikTok → hide FLAC and time-range
+    tiktok_keyboard = build_main_keyboard("tiktok")
+    flat_callbacks = [
+        btn.callback_data
+        for row in tiktok_keyboard
+        for btn in row
+    ]
+    assert "dl_audio_flac" not in flat_callbacks
+    assert "time_range" not in flat_callbacks
+
+    # YouTube → FLAC and time-range present
+    yt_keyboard = build_main_keyboard("youtube")
+    flat_callbacks = [
+        btn.callback_data
+        for row in yt_keyboard
+        for btn in row
+    ]
+    assert "dl_audio_flac" in flat_callbacks
+    assert "time_range" in flat_callbacks
+
+    # X → same shape as TikTok
+    x_keyboard = build_main_keyboard("x")
+    flat_callbacks = [
+        btn.callback_data
+        for row in x_keyboard
+        for btn in row
+    ]
+    assert "dl_audio_flac" not in flat_callbacks
+    assert "time_range" not in flat_callbacks
+
+
+def test_build_main_keyboard_raises_on_unknown_platform():
+    from bot.handlers.common_ui import build_main_keyboard
+
+    with pytest.raises(ValueError, match="Unknown platform"):
+        build_main_keyboard("facebook")
