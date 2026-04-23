@@ -67,3 +67,116 @@ def test_platform_config_equality_on_same_fields():
         requires_cookies=False,
     )
     assert a == b
+
+
+# Registry tests start here
+
+
+import bot.platforms as platforms_pkg
+
+
+def test_platforms_registry_is_non_empty_tuple():
+    assert isinstance(platforms_pkg.PLATFORMS, tuple)
+    assert len(platforms_pkg.PLATFORMS) == 8
+
+
+def test_all_platforms_have_unique_names():
+    names = [p.name for p in platforms_pkg.PLATFORMS]
+    assert len(names) == len(set(names))
+
+
+def test_no_overlapping_domains_across_platforms():
+    seen: dict[str, str] = {}
+    for p in platforms_pkg.PLATFORMS:
+        for domain in p.domains:
+            assert domain not in seen, (
+                f"Domain {domain!r} used by both "
+                f"{seen.get(domain)!r} and {p.name!r}"
+            )
+            seen[domain] = p.name
+
+
+@pytest.mark.parametrize(
+    "host, expected_name",
+    [
+        ("youtube.com", "youtube"),
+        ("youtu.be", "youtube"),
+        ("m.youtube.com", "youtube"),
+        ("music.youtube.com", "youtube"),
+        ("www.youtube.com", "youtube"),
+        ("vimeo.com", "vimeo"),
+        ("www.vimeo.com", "vimeo"),
+        ("player.vimeo.com", "vimeo"),
+        ("tiktok.com", "tiktok"),
+        ("www.tiktok.com", "tiktok"),
+        ("m.tiktok.com", "tiktok"),
+        ("vm.tiktok.com", "tiktok"),
+        ("linkedin.com", "linkedin"),
+        ("www.linkedin.com", "linkedin"),
+        ("x.com", "x"),
+        ("www.x.com", "x"),
+        ("twitter.com", "x"),
+        ("www.twitter.com", "x"),
+        ("mobile.twitter.com", "x"),
+        ("instagram.com", "instagram"),
+        ("www.instagram.com", "instagram"),
+        ("castbox.fm", "castbox"),
+        ("www.castbox.fm", "castbox"),
+        ("open.spotify.com", "spotify"),
+    ],
+)
+def test_detect_by_domain_matches_known_hosts(host, expected_name):
+    config = platforms_pkg.detect_by_domain(host)
+    assert config is not None
+    assert config.name == expected_name
+
+
+def test_detect_by_domain_returns_none_for_unknown_host():
+    assert platforms_pkg.detect_by_domain("example.com") is None
+    assert platforms_pkg.detect_by_domain("") is None
+
+
+def test_detect_by_domain_is_case_insensitive():
+    assert platforms_pkg.detect_by_domain("X.COM").name == "x"
+    assert platforms_pkg.detect_by_domain("WwW.YouTube.Com").name == "youtube"
+
+
+def test_get_platform_returns_config_for_known_names():
+    for p in platforms_pkg.PLATFORMS:
+        assert platforms_pkg.get_platform(p.name) is p
+
+
+def test_get_platform_returns_none_for_unknown():
+    assert platforms_pkg.get_platform("facebook") is None
+    assert platforms_pkg.get_platform("") is None
+
+
+def test_all_domains_includes_www_variants_for_bare_domains():
+    domains = platforms_pkg.all_domains()
+    assert "x.com" in domains
+    assert "www.x.com" in domains
+    assert "mobile.twitter.com" in domains
+    # Subdomain entries should NOT be www-expanded
+    assert "www.mobile.twitter.com" not in domains
+    assert "www.m.youtube.com" not in domains
+
+
+def test_x_platform_has_tiktok_style_menu_flags():
+    x_config = platforms_pkg.get_platform("x")
+    assert x_config is not None
+    assert x_config.hide_flac is True
+    assert x_config.hide_time_range is True
+    assert x_config.is_podcast is False
+
+
+def test_cookies_hint_set_for_platforms_requiring_cookies_except_podcasts():
+    for p in platforms_pkg.PLATFORMS:
+        if p.is_podcast:
+            assert p.cookies_hint is None, (
+                f"Podcast platform {p.name!r} should not have cookies_hint"
+            )
+            continue
+        if p.requires_cookies:
+            assert p.cookies_hint is not None, (
+                f"Platform {p.name!r} marked requires_cookies but has no hint"
+            )
