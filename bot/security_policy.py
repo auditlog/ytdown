@@ -5,11 +5,11 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qs, urlparse
 
+from bot.platforms import all_domains, detect_by_domain, get_platform
+
 # Matches http(s) URLs; trailing punctuation is trimmed after the match.
 _URL_PATTERN = re.compile(r'https?://[^\s<>"\'`]+')
 _URL_TRAILING_PUNCT = '.,;:!?)]}>"\''
-
-from bot.platforms import all_domains, detect_by_domain, get_platform
 
 # Kept as a module attribute for backward compatibility with external code
 # (tests, downstream imports). Prefer bot.platforms.all_domains() in new code.
