@@ -5,30 +5,15 @@ from __future__ import annotations
 import re
 from urllib.parse import parse_qs, urlparse
 
+from bot.platforms import all_domains, detect_by_domain, get_platform
+
 # Matches http(s) URLs; trailing punctuation is trimmed after the match.
 _URL_PATTERN = re.compile(r'https?://[^\s<>"\'`]+')
 _URL_TRAILING_PUNCT = '.,;:!?)]}>"\''
 
-_DOMAIN_TO_PLATFORM = {
-    'youtube.com': 'youtube',
-    'youtu.be': 'youtube',
-    'm.youtube.com': 'youtube',
-    'music.youtube.com': 'youtube',
-    'vimeo.com': 'vimeo',
-    'player.vimeo.com': 'vimeo',
-    'tiktok.com': 'tiktok',
-    'm.tiktok.com': 'tiktok',
-    'vm.tiktok.com': 'tiktok',
-    'instagram.com': 'instagram',
-    'linkedin.com': 'linkedin',
-    'castbox.fm': 'castbox',
-    'open.spotify.com': 'spotify',
-}
-
-ALLOWED_DOMAINS = sorted(
-    set(_DOMAIN_TO_PLATFORM.keys())
-    | {f'www.{domain}' for domain in _DOMAIN_TO_PLATFORM if domain.count('.') == 1}
-)
+# Kept as a module attribute for backward compatibility with external code
+# (tests, downstream imports). Prefer bot.platforms.all_domains() in new code.
+ALLOWED_DOMAINS = sorted(all_domains())
 
 
 def _normalize_domain(url: str) -> str | None:
@@ -77,9 +62,10 @@ def normalize_url(url: str, _depth: int = 0) -> str:
 def get_media_label(platform: str | None) -> str:
     """Return Polish locative noun for media type."""
 
-    if platform in ('castbox', 'spotify'):
-        return 'odcinku'
-    return 'filmie'
+    config = get_platform(platform)
+    if config is None:
+        return "filmie"
+    return config.media_label
 
 
 def validate_url(url) -> bool:
@@ -95,20 +81,43 @@ def validate_url(url) -> bool:
     return False
 
 
+def _offline_redirect_target(url: str) -> str | None:
+    """Resolve supported redirect URLs without network I/O.
+
+    Mirrors the offline branch of normalize_url so extract_url_from_text can
+    recognize Castbox share links (d.castbox.fm?link=...) as supported. Network
+    resolution (HEAD on castbox.fm/ch/...) stays in normalize_url, which runs
+    in an executor off the event loop.
+    """
+
+    try:
+        parsed = urlparse(url)
+        if parsed.netloc.lower() == 'd.castbox.fm':
+            link_param = parse_qs(parsed.query).get('link', [None])[0]
+            if link_param and 'castbox.fm' in link_param:
+                return link_param
+    except Exception:
+        pass
+    return None
+
+
 def extract_url_from_text(text) -> str | None:
     """Return the first supported URL found in free-form text, or None.
 
     Handles messages where the user prefixes the link with descriptive text
     (e.g. "please download this: https://youtu.be/abc"). Trailing punctuation
     like '.', ',', ')' is stripped so copy-pasted URLs still validate.
+    Redirect links resolvable without network I/O (e.g. d.castbox.fm share
+    URLs) are resolved up-front so the returned candidate passes validate_url.
     """
 
     if not isinstance(text, str) or not text:
         return None
     for match in _URL_PATTERN.finditer(text):
         candidate = match.group(0).rstrip(_URL_TRAILING_PUNCT)
-        if validate_url(candidate):
-            return candidate
+        resolved = _offline_redirect_target(candidate) or candidate
+        if validate_url(resolved):
+            return resolved
     return None
 
 
@@ -119,8 +128,10 @@ def detect_platform(url) -> str | None:
     if domain is None:
         return None
 
-    bare = domain[4:] if domain.startswith('www.') else domain
-    return _DOMAIN_TO_PLATFORM.get(bare) or _DOMAIN_TO_PLATFORM.get(domain)
+    config = detect_by_domain(domain)
+    if config is None and domain.startswith("www."):
+        config = detect_by_domain(domain[4:])
+    return config.name if config else None
 
 
 def estimate_file_size(info):

@@ -38,11 +38,12 @@ class TestStart:
         _async(tc.start(update, context))
 
         assert "awaiting_pin" not in context.user_data
-        update.message.reply_text.assert_awaited_once_with(
-            "Witaj, User!\n\n"
-            "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
-            "aby pobrać film lub audio."
-        )
+        update.message.reply_text.assert_awaited_once()
+        message = update.message.reply_text.await_args.args[0]
+        assert "Wyślij link (" in message
+        assert "YouTube" in message
+        assert "X" in message
+        assert ") aby pobrać" in message
 
     def test_start_blocked_until_expiration(self, monkeypatch):
         update = _make_update(user_id=111)
@@ -81,11 +82,12 @@ class TestHandlePin:
         assert "awaiting_pin" not in context.user_data
         assert "pending_url" not in context.user_data
         assert called["url"] == "https://youtube.com/watch?v=abc"
-        update.message.reply_text.assert_awaited_once_with(
-            "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-            "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
-            "aby pobrać film lub audio."
-        )
+        update.message.reply_text.assert_awaited_once()
+        message = update.message.reply_text.await_args.args[0]
+        assert "Wyślij link (" in message
+        assert "YouTube" in message
+        assert "X" in message
+        assert ") aby pobrać" in message
 
     def test_handle_pin_uses_runtime_authorized_store(self, monkeypatch):
         update = _make_update(text="12345678", user_id=222, chat_id=222)

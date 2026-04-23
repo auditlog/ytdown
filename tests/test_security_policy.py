@@ -13,6 +13,9 @@ def test_validate_url_accepts_supported_https_domains():
     assert validate_url("https://www.youtube.com/watch?v=abc") is True
     assert validate_url("https://open.spotify.com/episode/abc") is True
     assert validate_url("https://castbox.fm/episode/test") is True
+    assert validate_url("https://x.com/i/status/123456789") is True
+    assert validate_url("https://twitter.com/user/status/123456789") is True
+    assert validate_url("https://mobile.twitter.com/user/status/123") is True
 
 
 def test_validate_url_rejects_invalid_or_unsupported_urls():
@@ -25,6 +28,10 @@ def test_detect_platform_maps_supported_domains():
     assert detect_platform("https://youtu.be/abc") == "youtube"
     assert detect_platform("https://www.instagram.com/reel/abc") == "instagram"
     assert detect_platform("https://open.spotify.com/episode/abc") == "spotify"
+    assert detect_platform("https://x.com/i/status/123") == "x"
+    assert detect_platform("https://www.x.com/i/status/123") == "x"
+    assert detect_platform("https://twitter.com/u/status/123") == "x"
+    assert detect_platform("https://mobile.twitter.com/u/status/123") == "x"
 
 
 def test_get_media_label_distinguishes_podcast_like_platforms():

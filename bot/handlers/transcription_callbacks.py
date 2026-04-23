@@ -43,8 +43,37 @@ _executor = ThreadPoolExecutor(max_workers=2)
 
 
 async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
-    """Dependency placeholder overridden by router module during extraction."""
-    raise NotImplementedError
+    """Display the summary-type selection menu before AI transcription + summary."""
+
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+
+    info = get_video_info(url)
+    if not info:
+        media_name = get_media_label(
+            _get_session_context_value(context, chat_id, "platform", legacy_key="platform")
+        )
+        await query.edit_message_text(
+            f"Wystąpił błąd podczas pobierania informacji o {media_name}."
+        )
+        return
+
+    title = info.get("title", "Nieznany tytuł")
+
+    keyboard = [
+        [InlineKeyboardButton("1. Krótkie podsumowanie", callback_data="summary_option_1")],
+        [InlineKeyboardButton("2. Szczegółowe podsumowanie", callback_data="summary_option_2")],
+        [InlineKeyboardButton("3. Podsumowanie w punktach", callback_data="summary_option_3")],
+        [InlineKeyboardButton("4. Podział zadań na osoby", callback_data="summary_option_4")],
+        [InlineKeyboardButton("Powrót", callback_data="back")],
+    ]
+
+    await safe_edit_message(
+        query,
+        f"*{escape_md(title)}*\n\nWybierz rodzaj podsumowania:",
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
+    )
 
 
 async def download_file(update: Update, context: ContextTypes.DEFAULT_TYPE, type, format, url, **kwargs):

@@ -51,7 +51,6 @@ from bot.services.download_service import (
 from bot.services.playlist_service import (
     build_playlist_message,
     build_single_video_url,
-    download_playlist_item,
     load_playlist,
     parse_playlist_download_choice,
 )
@@ -81,7 +80,16 @@ from bot.handlers.time_range_callbacks import (
     back_to_main_menu,
     show_time_range_options,
 )
+from bot.platforms import get_platform
 
+GENERIC_COOKIES_HINT = (
+    "Ta platforma wymaga zalogowania.\n\n"
+    "Aby pobrać treści z ograniczonym dostępem:\n"
+    "1. Zaloguj się na platformę w przeglądarce\n"
+    "2. Wyeksportuj cookies (rozszerzenie 'Get cookies.txt LOCALLY')\n"
+    "3. Umieść plik cookies.txt w katalogu bota\n"
+    "4. Spróbuj ponownie"
+)
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -518,12 +526,13 @@ async def download_file(
             thumb_path = await asyncio.get_event_loop().run_in_executor(_executor, download_thumbnail, info, chat_download_path, True)
             try:
                 if use_mtproto:
-                    from bot.mtproto import is_mtproto_available, send_audio_mtproto, send_video_mtproto
+                    from bot.mtproto import mtproto_unavailability_reason, send_audio_mtproto, send_video_mtproto
 
-                    if not is_mtproto_available():
+                    reason = mtproto_unavailability_reason()
+                    if reason is not None:
                         raise RuntimeError(
                             f"Plik za duży dla Bot API ({file_size_mb:.0f} MB, limit: {TELEGRAM_UPLOAD_LIMIT_MB} MB).\n"
-                            f"Skonfiguruj TELEGRAM_API_ID i TELEGRAM_API_HASH aby wysyłać większe pliki."
+                            f"{reason}"
                         )
                     if media_type == "audio":
                         ok = await send_audio_mtproto(chat_id, downloaded_file_path, title=title, caption=title, thumb_path=thumb_path)
@@ -587,14 +596,16 @@ async def download_file(
 
         error_str = str(exc).lower()
         if any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
-            await update_status(
-                "Ta platforma wymaga zalogowania.\n\n"
-                "Aby pobrać treści z ograniczonym dostępem:\n"
-                "1. Zaloguj się na platformę w przeglądarce\n"
-                "2. Wyeksportuj cookies (rozszerzenie 'Get cookies.txt LOCALLY')\n"
-                "3. Umieść plik cookies.txt w katalogu bota\n"
-                "4. Spróbuj ponownie"
+            platform_name = _get_session_context_value(
+                context, chat_id, "platform", legacy_key="platform"
             )
+            config = get_platform(platform_name)
+            hint = (
+                config.cookies_hint
+                if config and config.cookies_hint
+                else GENERIC_COOKIES_HINT
+            )
+            await update_status(hint)
         else:
             await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
 
@@ -609,87 +620,6 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
 
 async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, callback_data: str):
     return await _extracted_download_playlist(update, context, callback_data)
-
-
-async def _download_single_playlist_item(context, chat_id, url, title, media_type, format_choice, status_msg):
-    try:
-        result = await download_playlist_item(
-            chat_id=chat_id,
-            url=url,
-            title=title,
-            media_type=media_type,
-            format_choice=format_choice,
-            executor=_executor,
-        )
-    except RuntimeError:
-        raise
-
-    downloaded_file_path = result.file_path
-    file_size_mb = result.file_size_mb
-    chat_download_path = os.path.dirname(downloaded_file_path)
-
-    use_mtproto = file_size_mb > TELEGRAM_UPLOAD_LIMIT_MB
-
-    loop = asyncio.get_event_loop()
-    item_info = await loop.run_in_executor(_executor, get_video_info, url)
-    thumb_path = None
-    if item_info:
-        thumb_path = await loop.run_in_executor(_executor, download_thumbnail, item_info, chat_download_path, True)
-
-    try:
-        if use_mtproto:
-            from bot.mtproto import is_mtproto_available, send_audio_mtproto, send_video_mtproto
-
-            if not is_mtproto_available():
-                raise RuntimeError(
-                    f"Plik za duży dla Bot API ({file_size_mb:.0f} MB, limit: {TELEGRAM_UPLOAD_LIMIT_MB} MB).\n"
-                    f"Skonfiguruj TELEGRAM_API_ID i TELEGRAM_API_HASH aby wysyłać większe pliki."
-                )
-            if media_type == "audio":
-                ok = await send_audio_mtproto(chat_id, downloaded_file_path, title=title, caption=title[:200], thumb_path=thumb_path)
-            else:
-                ok = await send_video_mtproto(chat_id, downloaded_file_path, caption=title[:200], thumb_path=thumb_path)
-            if not ok:
-                raise RuntimeError("Wysyłanie pliku przez MTProto nie powiodło się.")
-        else:
-            with open(downloaded_file_path, "rb") as file_obj:
-                thumb_file = open(thumb_path, "rb") if thumb_path else None
-                try:
-                    if media_type == "audio":
-                        await context.bot.send_audio(
-                            chat_id=chat_id,
-                            audio=file_obj,
-                            title=title,
-                            caption=title[:200],
-                            thumbnail=thumb_file,
-                            read_timeout=120,
-                            write_timeout=120,
-                        )
-                    else:
-                        await context.bot.send_video(
-                            chat_id=chat_id,
-                            video=file_obj,
-                            caption=title[:200],
-                            thumbnail=thumb_file,
-                            read_timeout=120,
-                            write_timeout=120,
-                        )
-                finally:
-                    if thumb_file:
-                        thumb_file.close()
-    finally:
-        if thumb_path and os.path.exists(thumb_path):
-            try:
-                os.remove(thumb_path)
-            except OSError:
-                pass
-        try:
-            os.remove(downloaded_file_path)
-        except OSError:
-            pass
-
-    record_download_for(context, chat_id, title, url, f"{media_type}_{format_choice}", file_size_mb)
-    await status_msg.edit_text(f"[✅] {title}")
 
 
 async def _show_spotify_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):

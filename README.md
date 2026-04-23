@@ -1,6 +1,6 @@
 # Media Downloader Telegram Bot
 
-Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i LinkedIn z funkcjami transkrypcji i podsumowań AI.
+Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram, LinkedIn i X z funkcjami transkrypcji i podsumowań AI.
 
 ## Funkcje
 
@@ -26,6 +26,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram i Lin
 | TikTok | tiktok.com, vm.tiktok.com, m.tiktok.com | Uproszczone menu (krótkie video) |
 | Instagram | instagram.com | Reels i posty video przez yt-dlp. Zdjęcia i karuzele wymagają dodatkowo `instaloader` oraz `cookies.txt` |
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
+| X (Twitter) | x.com, twitter.com, mobile.twitter.com | Video z tweetów. Treści oznaczone jako Sensitive wymagają cookies.txt |
 | Spotify | open.spotify.com | Odcinki podcastów. Wymaga SPOTIFY_CLIENT_ID/SECRET. Audio z iTunes lub YouTube |
 
 ### Bezpieczeństwo
