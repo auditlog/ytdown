@@ -80,7 +80,16 @@ from bot.handlers.time_range_callbacks import (
     back_to_main_menu,
     show_time_range_options,
 )
+from bot.platforms import get_platform
 
+GENERIC_COOKIES_HINT = (
+    "Ta platforma wymaga zalogowania.\n\n"
+    "Aby pobrać treści z ograniczonym dostępem:\n"
+    "1. Zaloguj się na platformę w przeglądarce\n"
+    "2. Wyeksportuj cookies (rozszerzenie 'Get cookies.txt LOCALLY')\n"
+    "3. Umieść plik cookies.txt w katalogu bota\n"
+    "4. Spróbuj ponownie"
+)
 
 _executor = ThreadPoolExecutor(max_workers=2)
 
@@ -587,14 +596,16 @@ async def download_file(
 
         error_str = str(exc).lower()
         if any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
-            await update_status(
-                "Ta platforma wymaga zalogowania.\n\n"
-                "Aby pobrać treści z ograniczonym dostępem:\n"
-                "1. Zaloguj się na platformę w przeglądarce\n"
-                "2. Wyeksportuj cookies (rozszerzenie 'Get cookies.txt LOCALLY')\n"
-                "3. Umieść plik cookies.txt w katalogu bota\n"
-                "4. Spróbuj ponownie"
+            platform_name = _get_session_context_value(
+                context, chat_id, "platform", legacy_key="platform"
             )
+            config = get_platform(platform_name)
+            hint = (
+                config.cookies_hint
+                if config and config.cookies_hint
+                else GENERIC_COOKIES_HINT
+            )
+            await update_status(hint)
         else:
             await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
 

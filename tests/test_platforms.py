@@ -221,3 +221,29 @@ def test_build_main_keyboard_raises_on_unknown_platform():
 
     with pytest.raises(ValueError, match="Unknown platform"):
         build_main_keyboard("facebook")
+
+
+def test_download_callbacks_has_generic_cookies_hint_constant():
+    """The generic fallback hint must stay available for unknown platforms."""
+
+    from bot.handlers.download_callbacks import GENERIC_COOKIES_HINT
+
+    assert isinstance(GENERIC_COOKIES_HINT, str)
+    assert "cookies.txt" in GENERIC_COOKIES_HINT
+
+
+def test_x_platform_cookies_hint_mentions_x():
+    """Regression: X's per-platform hint should reference X-specific guidance."""
+
+    config = platforms_pkg.get_platform("x")
+    assert config is not None
+    assert config.cookies_hint is not None
+    lowered = config.cookies_hint.lower()
+    assert "x.com" in lowered or "sensitive" in lowered
+
+
+def test_get_platform_fallback_behavior_for_auth_error_path():
+    """get_platform(None) returns None so the caller falls back to GENERIC."""
+
+    assert platforms_pkg.get_platform(None) is None
+    assert platforms_pkg.get_platform("unknown-platform") is None
