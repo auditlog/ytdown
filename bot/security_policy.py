@@ -9,26 +9,11 @@ from urllib.parse import parse_qs, urlparse
 _URL_PATTERN = re.compile(r'https?://[^\s<>"\'`]+')
 _URL_TRAILING_PUNCT = '.,;:!?)]}>"\''
 
-_DOMAIN_TO_PLATFORM = {
-    'youtube.com': 'youtube',
-    'youtu.be': 'youtube',
-    'm.youtube.com': 'youtube',
-    'music.youtube.com': 'youtube',
-    'vimeo.com': 'vimeo',
-    'player.vimeo.com': 'vimeo',
-    'tiktok.com': 'tiktok',
-    'm.tiktok.com': 'tiktok',
-    'vm.tiktok.com': 'tiktok',
-    'instagram.com': 'instagram',
-    'linkedin.com': 'linkedin',
-    'castbox.fm': 'castbox',
-    'open.spotify.com': 'spotify',
-}
+from bot.platforms import all_domains, detect_by_domain, get_platform
 
-ALLOWED_DOMAINS = sorted(
-    set(_DOMAIN_TO_PLATFORM.keys())
-    | {f'www.{domain}' for domain in _DOMAIN_TO_PLATFORM if domain.count('.') == 1}
-)
+# Kept as a module attribute for backward compatibility with external code
+# (tests, downstream imports). Prefer bot.platforms.all_domains() in new code.
+ALLOWED_DOMAINS = sorted(all_domains())
 
 
 def _normalize_domain(url: str) -> str | None:
@@ -77,9 +62,10 @@ def normalize_url(url: str, _depth: int = 0) -> str:
 def get_media_label(platform: str | None) -> str:
     """Return Polish locative noun for media type."""
 
-    if platform in ('castbox', 'spotify'):
-        return 'odcinku'
-    return 'filmie'
+    config = get_platform(platform)
+    if config is None:
+        return "filmie"
+    return config.media_label
 
 
 def validate_url(url) -> bool:
@@ -142,8 +128,10 @@ def detect_platform(url) -> str | None:
     if domain is None:
         return None
 
-    bare = domain[4:] if domain.startswith('www.') else domain
-    return _DOMAIN_TO_PLATFORM.get(bare) or _DOMAIN_TO_PLATFORM.get(domain)
+    config = detect_by_domain(domain)
+    if config is None and domain.startswith("www."):
+        config = detect_by_domain(domain[4:])
+    return config.name if config else None
 
 
 def estimate_file_size(info):
