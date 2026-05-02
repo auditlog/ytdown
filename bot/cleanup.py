@@ -9,8 +9,11 @@ import time
 import shutil
 import logging
 import subprocess
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from bot.config import DOWNLOAD_PATH
+from bot.security_limits import PLAYLIST_ARCHIVE_RETENTION_MIN
 
 
 def cleanup_old_files(directory, max_age_hours=24):
@@ -155,6 +158,80 @@ def monitor_disk_space():
             cleanup_old_files(DOWNLOAD_PATH, max_age_hours=24)
 
 
+_ARCHIVE_PREFIXES = ("pl_", "big_")
+
+
+def _purge_archive_workspaces(chat_dir: Path, retention_min: int) -> int:
+    """Remove archive workspaces older than retention_min, unless locked.
+
+    Workspaces are subdirectories named ``pl_*`` or ``big_*``. A
+    ``.lock`` file inside a young workspace blocks deletion (used during
+    pack/send operations). After 24h workspaces are removed regardless
+    of the lock — the long-running cleanup acts as a safety net.
+    """
+
+    if not chat_dir.exists():
+        return 0
+
+    now = time.time()
+    threshold = retention_min * 60
+    safety_net = 24 * 3600
+    removed = 0
+
+    for entry in chat_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        if not any(entry.name.startswith(p) for p in _ARCHIVE_PREFIXES):
+            continue
+        try:
+            age = now - entry.stat().st_mtime
+        except OSError as exc:
+            logging.warning("Could not stat %s: %s", entry, exc)
+            continue
+
+        lock = entry / ".lock"
+        if age <= threshold:
+            continue
+        if lock.exists() and age <= safety_net:
+            continue
+
+        try:
+            shutil.rmtree(entry)
+            removed += 1
+            logging.info("Removed stale archive workspace: %s (age %.1f h)",
+                         entry, age / 3600)
+        except OSError as exc:
+            logging.error("Failed to remove %s: %s", entry, exc)
+
+    return removed
+
+
+def _purge_pending_archive_jobs(retention_min: int) -> int:
+    """Drop pending_archive_jobs entries older than retention_min and delete files."""
+
+    from bot.session_store import pending_archive_jobs
+
+    cutoff = datetime.now() - timedelta(minutes=retention_min)
+    removed = 0
+    for chat_id in list(pending_archive_jobs):
+        bucket = pending_archive_jobs.get(chat_id) or {}
+        for token in list(bucket):
+            state = bucket[token]
+            if state.created_at >= cutoff:
+                continue
+            bucket.pop(token, None)
+            try:
+                os.remove(str(state.file_path))
+            except OSError:
+                pass
+            removed += 1
+        if not bucket:
+            pending_archive_jobs.pop(chat_id, None)
+        else:
+            pending_archive_jobs[chat_id] = bucket
+    return removed
+
+
 def periodic_cleanup():
     """
     Function run periodically in separate thread.
@@ -174,6 +251,11 @@ def periodic_cleanup():
 
             if deleted_count > 0:
                 logging.info("Periodic cleanup: deleted %d old files", deleted_count)
+
+            for chat_dir in Path(DOWNLOAD_PATH).iterdir():
+                if chat_dir.is_dir():
+                    _purge_archive_workspaces(chat_dir, PLAYLIST_ARCHIVE_RETENTION_MIN)
+            _purge_pending_archive_jobs(PLAYLIST_ARCHIVE_RETENTION_MIN)
 
         except Exception as e:
             logging.error("Error during periodic cleanup: %s", e)

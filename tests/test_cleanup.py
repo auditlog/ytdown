@@ -117,3 +117,94 @@ def test_monitor_disk_space_runs_cleanup_below_warning_threshold(monkeypatch):
 
     monitor_disk_space()
     assert calls == [(cleanup_module.DOWNLOAD_PATH, 6)]
+
+
+import os
+import time
+from datetime import datetime, timedelta
+from pathlib import Path
+
+
+def test_purge_archive_workspaces_removes_old_pl_dirs(tmp_path, monkeypatch):
+    from bot import cleanup
+
+    chat_dir = tmp_path / "111"
+    chat_dir.mkdir()
+    old_ws = chat_dir / "pl_oldslug_20260102-080000"
+    old_ws.mkdir()
+    (old_ws / "x.7z.001").write_bytes(b"x")
+    # Set mtime to 2 hours ago.
+    old_time = time.time() - 2 * 3600
+    os.utime(old_ws, (old_time, old_time))
+
+    cleanup._purge_archive_workspaces(chat_dir, retention_min=60)
+
+    assert not old_ws.exists()
+
+
+def test_purge_archive_workspaces_keeps_recent_dirs(tmp_path):
+    from bot import cleanup
+
+    chat_dir = tmp_path / "222"
+    chat_dir.mkdir()
+    fresh_ws = chat_dir / "pl_fresh_20260502-080000"
+    fresh_ws.mkdir()
+    # Default mtime is "now", which is well under 60 min.
+    cleanup._purge_archive_workspaces(chat_dir, retention_min=60)
+    assert fresh_ws.exists()
+
+
+def test_purge_archive_workspaces_respects_lock_when_recent(tmp_path):
+    from bot import cleanup
+
+    chat_dir = tmp_path / "333"
+    chat_dir.mkdir()
+    ws = chat_dir / "pl_locked_20260502-080000"
+    ws.mkdir()
+    (ws / ".lock").touch()
+    # Make the workspace look 30 min old (under the 60 min retention).
+    age = time.time() - 30 * 60
+    os.utime(ws, (age, age))
+
+    cleanup._purge_archive_workspaces(chat_dir, retention_min=60)
+
+    assert ws.exists()
+
+
+def test_purge_archive_workspaces_ignores_non_archive_dirs(tmp_path):
+    from bot import cleanup
+
+    chat_dir = tmp_path / "444"
+    chat_dir.mkdir()
+    other = chat_dir / "downloads_subfolder"
+    other.mkdir()
+    age = time.time() - 7200
+    os.utime(other, (age, age))
+
+    cleanup._purge_archive_workspaces(chat_dir, retention_min=60)
+    assert other.exists()
+
+
+def test_purge_pending_archive_jobs_removes_old_jobs(tmp_path):
+    from bot import cleanup
+    from bot.session_store import (
+        ArchiveJobState,
+        pending_archive_jobs,
+        session_store,
+    )
+
+    session_store.reset()
+    src = tmp_path / "x.mp4"
+    src.write_bytes(b"x")
+    old_state = ArchiveJobState(
+        file_path=src, title="x", media_type="video", format_choice="best",
+        file_size_mb=1.0, use_mtproto=False,
+        created_at=datetime.now() - timedelta(hours=2),
+    )
+    pending_archive_jobs[1] = {"old": old_state}
+
+    cleanup._purge_pending_archive_jobs(retention_min=60)
+
+    assert pending_archive_jobs.get(1, {}).get("old") is None
+    assert not src.exists()
+    session_store.reset()
