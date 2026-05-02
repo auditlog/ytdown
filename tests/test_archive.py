@@ -22,6 +22,12 @@ def test_volume_size_for_botapi_returns_botapi_constant():
     assert archive.volume_size_for(use_mtproto=False) == BOTAPI_VOLUME_SIZE_MB
 
 
+def test_volume_size_for_mtproto_larger_than_botapi():
+    from bot.archive import volume_size_for
+
+    assert volume_size_for(use_mtproto=True) > volume_size_for(use_mtproto=False)
+
+
 def test_transliterate_to_ascii_replaces_polish_letters():
     from bot.archive import transliterate_to_ascii
 
