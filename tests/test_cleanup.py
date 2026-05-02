@@ -237,3 +237,29 @@ def test_purge_pending_archive_jobs_removes_old_jobs(tmp_path):
     assert pending_archive_jobs.get(1, {}).get("old") is None
     assert not src.exists()
     session_store.reset()
+
+
+def test_purge_archived_deliveries_removes_old_entries(tmp_path):
+    from bot import cleanup
+    from bot.session_store import (
+        ArchivedDeliveryState,
+        archived_deliveries,
+        session_store,
+    )
+
+    session_store.reset()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    old_state = ArchivedDeliveryState(
+        workspace=workspace,
+        volumes=[workspace / "x.7z.001"],
+        caption_prefix="X",
+        use_mtproto=True,
+        created_at=datetime.now() - timedelta(hours=2),
+    )
+    archived_deliveries[1] = {"old": old_state}
+
+    cleanup._purge_archived_deliveries(retention_min=60)
+
+    assert archived_deliveries.get(1, {}).get("old") is None
+    session_store.reset()

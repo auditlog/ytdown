@@ -42,7 +42,7 @@ from bot.session_store import (
     user_time_ranges,
     user_urls,
 )
-from bot.archive import volume_size_for
+from bot.archive import is_7z_available, volume_size_for
 from bot.mtproto import mtproto_unavailability_reason as _mtproto_unavailability_reason
 from bot.services.archive_service import (
     execute_single_file_archive_flow,
@@ -530,7 +530,7 @@ async def download_file(
             transport_limit_mb = volume_size_for(
                 use_mtproto=_mtproto_unavailability_reason() is None
             )
-            if file_size_mb > transport_limit_mb:
+            if file_size_mb > transport_limit_mb and is_7z_available():
                 await _offer_archive_or_cancel(
                     update,
                     context,

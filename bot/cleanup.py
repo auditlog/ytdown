@@ -232,6 +232,34 @@ def _purge_pending_archive_jobs(retention_min: int) -> int:
     return removed
 
 
+def _purge_archived_deliveries(retention_min: int) -> int:
+    """Drop archived_deliveries entries older than retention_min.
+
+    The on-disk workspace is removed by _purge_archive_workspaces; this
+    function drops the in-memory metadata (volume paths + caption) so the
+    user is not offered a 'Wyślij ponownie' button that would fail with
+    FileNotFoundError because the workspace already vanished.
+    """
+
+    from bot.session_store import archived_deliveries
+
+    cutoff = datetime.now() - timedelta(minutes=retention_min)
+    removed = 0
+    for chat_id in list(archived_deliveries):
+        bucket = archived_deliveries.get(chat_id) or {}
+        for token in list(bucket):
+            state = bucket[token]
+            if state.created_at >= cutoff:
+                continue
+            bucket.pop(token, None)
+            removed += 1
+        if not bucket:
+            archived_deliveries.pop(chat_id, None)
+        else:
+            archived_deliveries[chat_id] = bucket
+    return removed
+
+
 def periodic_cleanup():
     """
     Function run periodically in separate thread.
@@ -256,6 +284,7 @@ def periodic_cleanup():
                 if chat_dir.is_dir():
                     _purge_archive_workspaces(chat_dir, PLAYLIST_ARCHIVE_RETENTION_MIN)
             _purge_pending_archive_jobs(PLAYLIST_ARCHIVE_RETENTION_MIN)
+            _purge_archived_deliveries(PLAYLIST_ARCHIVE_RETENTION_MIN)
 
         except Exception as e:
             logging.error("Error during periodic cleanup: %s", e)

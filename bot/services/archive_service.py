@@ -28,7 +28,7 @@ from bot.archive import (
 from bot.config import DOWNLOAD_PATH
 from bot.downloader_validation import sanitize_filename
 from bot.mtproto import mtproto_unavailability_reason, send_document_mtproto
-from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, TELEGRAM_UPLOAD_LIMIT_MB
+from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, PLAYLIST_ARCHIVE_RETENTION_MIN, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.services.download_service import (
     ensure_size_within_limit,
     estimate_download_size,
@@ -351,7 +351,7 @@ async def execute_playlist_archive_flow(
             f"Pobrano: {len(downloaded)}/{total}",
             f"Spakowano: {len(downloaded)} plików → {len(volumes)} paczek 7z",
             f"Wysłano: {len(volumes)}/{len(volumes)}",
-            "Folder zostanie usunięty po 60 min.",
+            f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
         ]
         if failed:
             summary_lines.append("")
@@ -469,7 +469,7 @@ async def execute_single_file_archive_flow(
         ])
         try:
             await update.callback_query.edit_message_text(
-                f"Plik wysłany w {len(volumes)} paczkach. Folder zostanie usunięty po 60 min.",
+                f"Plik wysłany w {len(volumes)} paczkach. Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
                 reply_markup=keyboard,
             )
         except Exception as exc:
