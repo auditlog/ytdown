@@ -100,6 +100,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text("Przekroczono limit requestów. Spróbuj ponownie za chwilę.")
         return
 
+    if data.startswith("arc_"):
+        from bot.handlers.download_callbacks import handle_archive_callback
+        await handle_archive_callback(update, context, data)
+        return
+
     if data.startswith("pl_"):
         await handle_playlist_callback(update, context, data)
         return

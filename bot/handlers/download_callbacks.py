@@ -5,9 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 import yt_dlp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
@@ -32,10 +34,20 @@ from bot.session_context import (
     set_session_value as _set_session_value,
 )
 from bot.session_store import (
+    ArchiveJobState,
+    archived_deliveries,
     download_progress as _download_progress,
+    pending_archive_jobs,
     user_playlist_data,
     user_time_ranges,
     user_urls,
+)
+from bot.archive import volume_size_for
+from bot.mtproto import mtproto_unavailability_reason as _mtproto_unavailability_reason
+from bot.services.archive_service import (
+    execute_single_file_archive_flow,
+    register_pending_archive_job,
+    send_volumes,
 )
 from bot.transcription_limits import CORRECTION_DURATION_LIMIT_MIN, SUMMARY_DURATION_LIMIT_MIN
 from bot.downloader_media import COOKIES_FILE, download_photo, download_thumbnail
@@ -512,6 +524,27 @@ async def download_file(
                 await update_status("Transkrypcja została wysłana!")
         else:
             use_mtproto = file_size_mb > TELEGRAM_UPLOAD_LIMIT_MB
+
+            # Detect files that exceed the active Telegram transport limit.
+            # When too large, offer the 7z archive split instead of failing.
+            transport_limit_mb = volume_size_for(
+                use_mtproto=_mtproto_unavailability_reason() is None
+            )
+            if file_size_mb > transport_limit_mb:
+                await _offer_archive_or_cancel(
+                    update,
+                    context,
+                    chat_id=chat_id,
+                    file_path=downloaded_file_path,
+                    title=title,
+                    media_type=media_type,
+                    format_choice=format,
+                    file_size_mb=file_size_mb,
+                )
+                # The archive flow now owns the file; skip cleanup.
+                success_recorded = True
+                return
+
             method_label = " (MTProto)" if use_mtproto else ""
             await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie pliku do Telegram...{method_label}")
             thumb_path = await asyncio.get_event_loop().run_in_executor(_executor, download_thumbnail, info, chat_download_path, True)
@@ -613,3 +646,143 @@ async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, 
 
 async def _show_spotify_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return await _extracted_show_spotify_summary_options(update, context)
+
+
+async def _offer_archive_or_cancel(
+    update,
+    context,
+    *,
+    chat_id: int,
+    file_path: str,
+    title: str,
+    media_type: str,
+    format_choice: str,
+    file_size_mb: float,
+) -> None:
+    """Register a pending archive job and present [Wyślij jako 7z]/[Anuluj]."""
+
+    use_mtproto = _mtproto_unavailability_reason() is None
+    volume_size_mb = volume_size_for(use_mtproto)
+    state = ArchiveJobState(
+        file_path=Path(file_path),
+        title=title,
+        media_type=media_type,
+        format_choice=format_choice,
+        file_size_mb=file_size_mb,
+        use_mtproto=use_mtproto,
+        created_at=datetime.now(),
+    )
+    token = register_pending_archive_job(chat_id, state)
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton("Wyślij jako 7z", callback_data=f"arc_split_{token}")],
+        [InlineKeyboardButton("Anuluj", callback_data=f"arc_cancel_{token}")],
+    ])
+    text = (
+        f"Plik za duży dla Telegrama: {file_size_mb:.0f} MB > limit {volume_size_mb} MB.\n"
+        f"Mogę spakować go w wolumeny 7z (po {volume_size_mb} MB) i wysłać paczki."
+    )
+    try:
+        await update.callback_query.edit_message_text(text, reply_markup=keyboard)
+    except Exception as exc:
+        logging.debug("offer-archive edit failed: %s", exc)
+
+
+async def handle_archive_callback(update, context, data: str) -> None:
+    """Dispatch arc_split_/arc_cancel_/arc_resend_/arc_purge_ callbacks."""
+
+    chat_id = update.effective_chat.id
+
+    if data.startswith("arc_split_"):
+        token = data[len("arc_split_"):]
+        await execute_single_file_archive_flow(
+            update, context, chat_id=chat_id, token=token,
+        )
+        return
+
+    if data.startswith("arc_cancel_"):
+        token = data[len("arc_cancel_"):]
+        await _handle_arc_cancel(update, chat_id, token)
+        return
+
+    if data.startswith("arc_resend_"):
+        await _handle_arc_resend(update, context, chat_id, data)
+        return
+
+    if data.startswith("arc_purge_"):
+        token = data[len("arc_purge_"):]
+        await _handle_arc_purge(update, chat_id, token)
+        return
+
+
+async def _handle_arc_cancel(update, chat_id: int, token: str) -> None:
+    bucket = pending_archive_jobs.get(chat_id) or {}
+    state = bucket.pop(token, None)
+    if not bucket:
+        pending_archive_jobs.pop(chat_id, None)
+    else:
+        pending_archive_jobs[chat_id] = bucket
+    if state is not None:
+        try:
+            os.remove(str(state.file_path))
+        except OSError:
+            pass
+    try:
+        await update.callback_query.edit_message_text("Anulowano. Plik usunięty.")
+    except Exception as exc:
+        logging.debug("arc_cancel edit failed: %s", exc)
+
+
+async def _handle_arc_resend(update, context, chat_id: int, data: str) -> None:
+    rest = data[len("arc_resend_"):]
+    if "_" not in rest:
+        return
+    token, idx_str = rest.rsplit("_", 1)
+    try:
+        start_index = int(idx_str)
+    except ValueError:
+        return
+
+    bucket = archived_deliveries.get(chat_id) or {}
+    state = bucket.get(token)
+    if state is None:
+        try:
+            await update.callback_query.edit_message_text("Sesja wygasła.")
+        except Exception:
+            pass
+        return
+
+    async def status(text: str) -> None:
+        try:
+            await update.callback_query.edit_message_text(text)
+        except Exception:
+            pass
+
+    try:
+        await send_volumes(
+            context.bot,
+            chat_id=chat_id,
+            volumes=state.volumes,
+            caption_prefix=state.caption_prefix,
+            use_mtproto=state.use_mtproto,
+            start_index=start_index,
+            status_cb=status,
+        )
+        await status(f"Wysłano paczki od [{start_index + 1}/{len(state.volumes)}].")
+    except Exception as exc:
+        await status(f"Wysyłka nadal nie powiodła się: {exc}")
+
+
+async def _handle_arc_purge(update, chat_id: int, token: str) -> None:
+    bucket = archived_deliveries.get(chat_id) or {}
+    state = bucket.pop(token, None)
+    if not bucket:
+        archived_deliveries.pop(chat_id, None)
+    else:
+        archived_deliveries[chat_id] = bucket
+    if state is not None and state.workspace.exists():
+        shutil.rmtree(state.workspace, ignore_errors=True)
+    try:
+        await update.callback_query.edit_message_text("Folder usunięty.")
+    except Exception as exc:
+        logging.debug("arc_purge edit failed: %s", exc)

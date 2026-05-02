@@ -1,6 +1,7 @@
 """Download- and routing-oriented tests for Telegram callbacks."""
 
 import asyncio
+from unittest import mock
 
 import pytest
 
@@ -193,3 +194,202 @@ def test_handle_callback_time_range_options_and_clear():
     assert shown["time_range_url"] == "https://www.youtube.com/watch?v=abc"
     assert back_called["url"] == "https://www.youtube.com/watch?v=abc"
     assert 888 not in tc.user_time_ranges
+
+
+def test_oversized_single_file_offers_archive_choice(tmp_path, monkeypatch):
+    """File too big after download → user gets [Wyślij jako 7z][Anuluj]."""
+    from bot.handlers import download_callbacks
+    from bot.session_store import pending_archive_jobs, session_store
+
+    session_store.reset()
+    pretend = tmp_path / "big.mp4"
+    pretend.write_bytes(b"x")
+
+    captured = {}
+
+    async def fake_offer_archive(update, context, *, chat_id, file_path, title, media_type, format_choice, file_size_mb):
+        captured["called"] = True
+
+    monkeypatch.setattr(
+        download_callbacks, "_offer_archive_or_cancel", fake_offer_archive
+    )
+
+    import asyncio
+    asyncio.run(
+        download_callbacks._offer_archive_or_cancel(
+            mock.MagicMock(),
+            mock.MagicMock(),
+            chat_id=1,
+            file_path=str(pretend),
+            title="t",
+            media_type="video",
+            format_choice="best",
+            file_size_mb=999.0,
+        )
+    )
+    assert captured["called"] is True
+    session_store.reset()
+
+
+def test_arc_cancel_removes_file_immediately(tmp_path, monkeypatch):
+    from bot.handlers import download_callbacks
+    from bot.session_store import (
+        ArchiveJobState,
+        pending_archive_jobs,
+        session_store,
+    )
+    from datetime import datetime
+    from pathlib import Path
+
+    session_store.reset()
+    src = tmp_path / "to_cancel.mp4"
+    src.write_bytes(b"x")
+    state = ArchiveJobState(
+        file_path=src,
+        title="x", media_type="video", format_choice="best",
+        file_size_mb=200.0, use_mtproto=False,
+        created_at=datetime(2026, 5, 2),
+    )
+    pending_archive_jobs[7] = {"tok": state}
+
+    update = mock.MagicMock()
+    update.effective_chat.id = 7
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+
+    import asyncio
+    asyncio.run(
+        download_callbacks.handle_archive_callback(
+            update, context, "arc_cancel_tok"
+        )
+    )
+
+    assert not src.exists()
+    assert pending_archive_jobs.get(7, {}).get("tok") is None
+    session_store.reset()
+
+
+def test_arc_split_dispatches_to_archive_service(tmp_path, monkeypatch):
+    from bot.handlers import download_callbacks
+    from bot.session_store import (
+        ArchiveJobState,
+        pending_archive_jobs,
+        session_store,
+    )
+    from datetime import datetime
+
+    session_store.reset()
+    src = tmp_path / "x.mp4"
+    src.write_bytes(b"x")
+    pending_archive_jobs[7] = {"tok2": ArchiveJobState(
+        file_path=src, title="x", media_type="video", format_choice="best",
+        file_size_mb=200.0, use_mtproto=False,
+        created_at=datetime(2026, 5, 2),
+    )}
+
+    fake_flow = mock.AsyncMock()
+    monkeypatch.setattr(
+        download_callbacks, "execute_single_file_archive_flow", fake_flow
+    )
+
+    update = mock.MagicMock()
+    update.effective_chat.id = 7
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+
+    import asyncio
+    asyncio.run(
+        download_callbacks.handle_archive_callback(
+            update, context, "arc_split_tok2"
+        )
+    )
+
+    assert fake_flow.await_count == 1
+    kwargs = fake_flow.await_args.kwargs
+    assert kwargs["chat_id"] == 7
+    assert kwargs["token"] == "tok2"
+    session_store.reset()
+
+
+def test_arc_resend_calls_send_volumes_with_index(tmp_path, monkeypatch):
+    from bot.handlers import download_callbacks
+    from bot.session_store import (
+        ArchivedDeliveryState,
+        archived_deliveries,
+        session_store,
+    )
+    from datetime import datetime
+    from pathlib import Path
+
+    session_store.reset()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    v1 = workspace / "x.7z.001"
+    v1.write_bytes(b"a")
+    v2 = workspace / "x.7z.002"
+    v2.write_bytes(b"a")
+    archived_deliveries[5] = {"tk": ArchivedDeliveryState(
+        workspace=workspace, volumes=[v1, v2],
+        caption_prefix="X", use_mtproto=True,
+        created_at=datetime(2026, 5, 2),
+    )}
+
+    sent = mock.AsyncMock()
+    monkeypatch.setattr(download_callbacks, "send_volumes", sent)
+
+    update = mock.MagicMock()
+    update.effective_chat.id = 5
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+    context.bot = mock.MagicMock()
+
+    import asyncio
+    asyncio.run(
+        download_callbacks.handle_archive_callback(
+            update, context, "arc_resend_tk_1"
+        )
+    )
+
+    assert sent.await_count == 1
+    assert sent.await_args.kwargs["start_index"] == 1
+    session_store.reset()
+
+
+def test_arc_purge_removes_workspace(tmp_path, monkeypatch):
+    from bot.handlers import download_callbacks
+    from bot.session_store import (
+        ArchivedDeliveryState,
+        archived_deliveries,
+        session_store,
+    )
+    from datetime import datetime
+
+    session_store.reset()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    (workspace / "x.7z.001").write_bytes(b"a")
+    archived_deliveries[5] = {"tk2": ArchivedDeliveryState(
+        workspace=workspace, volumes=[workspace / "x.7z.001"],
+        caption_prefix="X", use_mtproto=True,
+        created_at=datetime(2026, 5, 2),
+    )}
+
+    update = mock.MagicMock()
+    update.effective_chat.id = 5
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+
+    import asyncio
+    asyncio.run(
+        download_callbacks.handle_archive_callback(
+            update, context, "arc_purge_tk2"
+        )
+    )
+
+    assert not workspace.exists()
+    assert archived_deliveries.get(5, {}).get("tk2") is None
+    session_store.reset()
