@@ -218,3 +218,143 @@ def test_download_playlist_into_respects_max_archive_item_size(tmp_path, monkeyp
 
     assert [p.name for p in paths] == ["ok.bin"]
     assert any("huge" in title and "za duzy" in title for title in failed)
+
+
+def test_send_volumes_uses_botapi_for_small_volumes(tmp_path, monkeypatch):
+    from bot.services import archive_service
+
+    v1 = tmp_path / "out.7z.001"
+    v1.write_bytes(b"x" * (10 * 1024 * 1024))  # 10 MB
+    v2 = tmp_path / "out.7z.002"
+    v2.write_bytes(b"x" * (5 * 1024 * 1024))   # 5 MB
+
+    bot = mock.MagicMock()
+    bot.send_document = mock.AsyncMock()
+
+    mtproto_calls = []
+
+    async def fake_mtproto(*args, **kwargs):
+        mtproto_calls.append((args, kwargs))
+        return True
+
+    monkeypatch.setattr(archive_service, "send_document_mtproto", fake_mtproto)
+
+    import asyncio
+
+    asyncio.run(
+        archive_service.send_volumes(
+            bot,
+            chat_id=42,
+            volumes=[v1, v2],
+            caption_prefix="My playlist (audio mp3)",
+            use_mtproto=False,
+            status_cb=mock.AsyncMock(),
+        )
+    )
+
+    assert bot.send_document.await_count == 2
+    assert mtproto_calls == []
+    first_call = bot.send_document.await_args_list[0].kwargs
+    assert first_call["chat_id"] == 42
+    assert first_call["caption"] == "My playlist (audio mp3) [1/2]"
+
+
+def test_send_volumes_uses_mtproto_for_large_volumes(tmp_path, monkeypatch):
+    from bot.security_limits import TELEGRAM_UPLOAD_LIMIT_MB
+    from bot.services import archive_service
+
+    big = tmp_path / "out.7z.001"
+    big.write_bytes(b"x" * int((TELEGRAM_UPLOAD_LIMIT_MB + 5) * 1024 * 1024))
+
+    bot = mock.MagicMock()
+    bot.send_document = mock.AsyncMock()
+
+    mtproto_calls = []
+
+    async def fake_mtproto(chat_id, file_path, caption=None, file_name=None):
+        mtproto_calls.append((chat_id, file_path, caption, file_name))
+        return True
+
+    monkeypatch.setattr(archive_service, "send_document_mtproto", fake_mtproto)
+    monkeypatch.setattr(
+        archive_service, "mtproto_unavailability_reason", lambda: None
+    )
+
+    import asyncio
+
+    asyncio.run(
+        archive_service.send_volumes(
+            bot,
+            chat_id=42,
+            volumes=[big],
+            caption_prefix="X",
+            use_mtproto=True,
+            status_cb=mock.AsyncMock(),
+        )
+    )
+
+    assert bot.send_document.await_count == 0
+    assert len(mtproto_calls) == 1
+    assert mtproto_calls[0][0] == 42
+    assert mtproto_calls[0][3] == "out.7z.001"
+
+
+def test_send_volumes_raises_when_volume_too_large_and_no_mtproto(tmp_path, monkeypatch):
+    from bot.security_limits import TELEGRAM_UPLOAD_LIMIT_MB
+    from bot.services import archive_service
+
+    big = tmp_path / "out.7z.001"
+    big.write_bytes(b"x" * int((TELEGRAM_UPLOAD_LIMIT_MB + 5) * 1024 * 1024))
+
+    bot = mock.MagicMock()
+    bot.send_document = mock.AsyncMock()
+
+    monkeypatch.setattr(
+        archive_service, "mtproto_unavailability_reason",
+        lambda: "Skonfiguruj API_ID",
+    )
+
+    import asyncio
+
+    with pytest.raises(RuntimeError, match="MTProto"):
+        asyncio.run(
+            archive_service.send_volumes(
+                bot,
+                chat_id=42,
+                volumes=[big],
+                caption_prefix="X",
+                use_mtproto=False,
+                status_cb=mock.AsyncMock(),
+            )
+        )
+
+
+def test_send_volumes_resumes_from_start_index(tmp_path, monkeypatch):
+    from bot.services import archive_service
+
+    v1 = tmp_path / "out.7z.001"
+    v1.write_bytes(b"x")
+    v2 = tmp_path / "out.7z.002"
+    v2.write_bytes(b"x")
+    v3 = tmp_path / "out.7z.003"
+    v3.write_bytes(b"x")
+
+    bot = mock.MagicMock()
+    bot.send_document = mock.AsyncMock()
+
+    import asyncio
+
+    asyncio.run(
+        archive_service.send_volumes(
+            bot,
+            chat_id=42,
+            volumes=[v1, v2, v3],
+            caption_prefix="X",
+            use_mtproto=False,
+            start_index=2,
+            status_cb=mock.AsyncMock(),
+        )
+    )
+
+    assert bot.send_document.await_count == 1
+    assert bot.send_document.await_args.kwargs["caption"] == "X [3/3]"

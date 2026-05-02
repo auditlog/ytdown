@@ -20,7 +20,8 @@ from typing import Awaitable, Callable
 from bot.archive import compute_archive_basename, transliterate_to_ascii
 from bot.config import DOWNLOAD_PATH
 from bot.downloader_validation import sanitize_filename
-from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB
+from bot.mtproto import mtproto_unavailability_reason, send_document_mtproto
+from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.services.download_service import (
     ensure_size_within_limit,
     estimate_download_size,
@@ -187,3 +188,65 @@ async def download_playlist_into(
         downloaded.append(path)
 
     return downloaded, failed
+
+
+async def send_volumes(
+    bot,
+    chat_id: int,
+    volumes: list[Path],
+    caption_prefix: str,
+    use_mtproto: bool,
+    *,
+    start_index: int = 0,
+    status_cb: Callable[[str], Awaitable[None]] | None = None,
+) -> None:
+    """Send 7z volumes [start_index:] to ``chat_id`` as documents.
+
+    Volumes ≤ TELEGRAM_UPLOAD_LIMIT_MB go via Bot API (``bot.send_document``);
+    larger ones go via MTProto. Caption per volume is
+    ``"<caption_prefix> [j/M]"``. The displayed file name is the volume's
+    original name (``<basename>.7z.001`` etc).
+
+    ``use_mtproto`` is informational for higher layers — the per-volume
+    transport decision is based solely on volume size vs TELEGRAM_UPLOAD_LIMIT_MB.
+
+    Raises:
+        RuntimeError: when a volume needs MTProto but it is unavailable, or
+            when MTProto sending returns False.
+    """
+
+    total = len(volumes)
+    for idx in range(start_index, total):
+        volume = volumes[idx]
+        size_mb = volume.stat().st_size / (1024 * 1024)
+        caption = f"{caption_prefix} [{idx + 1}/{total}]"
+        if status_cb is not None:
+            await status_cb(f"Wysyłanie [{idx + 1}/{total}] ({size_mb:.0f} MB)...")
+
+        if size_mb <= TELEGRAM_UPLOAD_LIMIT_MB:
+            with open(volume, "rb") as handle:
+                await bot.send_document(
+                    chat_id=chat_id,
+                    document=handle,
+                    filename=volume.name,
+                    caption=caption,
+                    read_timeout=120,
+                    write_timeout=120,
+                )
+        else:
+            reason = mtproto_unavailability_reason()
+            if reason is not None:
+                raise RuntimeError(
+                    f"Wolumen {volume.name} przekracza Bot API ({size_mb:.0f} MB), "
+                    f"a MTProto jest niedostępny: {reason}"
+                )
+            ok = await send_document_mtproto(
+                chat_id=chat_id,
+                file_path=str(volume),
+                caption=caption,
+                file_name=volume.name,
+            )
+            if not ok:
+                raise RuntimeError(f"Wysyłka {volume.name} przez MTProto nie powiodła się.")
+
+        logging.info("Sent volume %d/%d: %s (%.1f MB)", idx + 1, total, volume.name, size_mb)
