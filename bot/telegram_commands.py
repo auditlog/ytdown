@@ -240,8 +240,15 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     return await _extracted_handle_youtube_link(update, context)
 
 
-def _build_playlist_message(playlist_info: dict) -> tuple[str, InlineKeyboardMarkup]:
-    return build_playlist_message(playlist_info)
+def _build_playlist_message(playlist_info: dict, context=None) -> tuple[str, InlineKeyboardMarkup]:
+    """Compatibility wrapper for playlist menu rendering.
+
+    Resolves ``archive_available`` from the live runtime when ``context`` is
+    provided, so callers don't need to import ``bot.runtime`` themselves.
+    """
+    runtime = get_app_runtime(context) if context is not None else None
+    archive_available = runtime.archive_available if runtime is not None else False
+    return build_playlist_message(playlist_info, archive_available=archive_available)
 
 
 async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):

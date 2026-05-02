@@ -26,6 +26,7 @@ from bot.security_policy import (
 )
 from bot.security_throttling import check_rate_limit
 from bot.services.auth_service import store_pending_action
+from bot.runtime import get_app_runtime
 from bot.services.playlist_service import build_playlist_message, load_playlist
 from bot.session_store import block_until, user_playlist_data, user_time_ranges, user_urls
 from bot.services.spotify_service import (
@@ -278,9 +279,15 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     await process_youtube_link(update, context, message_text)
 
 
-def _build_playlist_message(playlist_info: dict) -> tuple[str, InlineKeyboardMarkup]:
-    """Compatibility wrapper around the playlist service message builder."""
-    return build_playlist_message(playlist_info)
+def _build_playlist_message(playlist_info: dict, context=None) -> tuple[str, InlineKeyboardMarkup]:
+    """Compatibility wrapper around the playlist service message builder.
+
+    When ``context`` is supplied, the live ``AppRuntime`` is queried so that
+    ``archive_available`` reflects whether 7-zip is present on this host.
+    """
+    runtime = get_app_runtime(context) if context is not None else None
+    archive_available = runtime.archive_available if runtime is not None else False
+    return build_playlist_message(playlist_info, archive_available=archive_available)
 
 
 async def extracted_process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
@@ -299,7 +306,7 @@ async def extracted_process_playlist_link(update: Update, context: ContextTypes.
 
     _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
     _set_session_value(context, chat_id, "current_url", url, user_urls)
-    msg, reply_markup = _build_playlist_message(playlist_info)
+    msg, reply_markup = _build_playlist_message(playlist_info, context=context)
     await progress_message.edit_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
 
 

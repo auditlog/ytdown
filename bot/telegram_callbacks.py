@@ -57,6 +57,7 @@ from bot.handlers.transcription_callbacks import (
     show_summary_options as _extracted_show_summary_options,
     transcribe_audio_file as _extracted_transcribe_audio_file,
 )
+from bot.runtime import get_app_runtime
 from bot.security_policy import get_media_label, normalize_url
 from bot.security_throttling import check_rate_limit
 from bot.services.playlist_service import build_playlist_message, load_playlist
@@ -81,10 +82,15 @@ def _build_main_keyboard(platform: str, large_file: bool = False) -> list:
     return build_main_keyboard(platform, large_file=large_file)
 
 
-def _build_playlist_message(playlist_info: dict) -> tuple[str, InlineKeyboardMarkup]:
-    """Compatibility wrapper for playlist menu rendering."""
+def _build_playlist_message(playlist_info: dict, context=None) -> tuple[str, InlineKeyboardMarkup]:
+    """Compatibility wrapper for playlist menu rendering.
 
-    return build_playlist_message(playlist_info)
+    Resolves ``archive_available`` from the live runtime when ``context`` is
+    provided, so callers don't need to import ``bot.runtime`` themselves.
+    """
+    runtime = get_app_runtime(context) if context is not None else None
+    archive_available = runtime.archive_available if runtime is not None else False
+    return build_playlist_message(playlist_info, archive_available=archive_available)
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
