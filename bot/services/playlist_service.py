@@ -28,6 +28,7 @@ class PlaylistDownloadChoice:
 
     media_type: str
     format_choice: str
+    as_archive: bool = False
 
 
 def load_playlist(url: str, *, max_items: int) -> dict[str, Any] | None:
@@ -36,8 +37,16 @@ def load_playlist(url: str, *, max_items: int) -> dict[str, Any] | None:
     return get_playlist_info(url, max_items=max_items)
 
 
-def build_playlist_message(playlist_info: dict[str, Any]) -> tuple[str, InlineKeyboardMarkup]:
-    """Build playlist listing text and controls."""
+def build_playlist_message(
+    playlist_info: dict[str, Any],
+    *,
+    archive_available: bool = False,
+) -> tuple[str, InlineKeyboardMarkup]:
+    """Build playlist listing text and controls.
+
+    When ``archive_available`` is True, four extra "... jako 7z" buttons
+    are inserted alongside the existing per-item-send buttons.
+    """
 
     entries = playlist_info['entries']
     total = playlist_info.get('playlist_count', len(entries))
@@ -54,12 +63,19 @@ def build_playlist_message(playlist_info: dict[str, Any]) -> tuple[str, InlineKe
         dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
         msg += f"{i}. {title} ({dur_str})\n"
 
-    keyboard = [
-        [InlineKeyboardButton("Pobierz wszystkie — Audio MP3", callback_data="pl_dl_audio_mp3")],
-        [InlineKeyboardButton("Pobierz wszystkie — Audio M4A", callback_data="pl_dl_audio_m4a")],
-        [InlineKeyboardButton("Pobierz wszystkie — Video (najlepsza)", callback_data="pl_dl_video_best")],
-        [InlineKeyboardButton("Pobierz wszystkie — Video 720p", callback_data="pl_dl_video_720p")],
+    options = [
+        ("Pobierz wszystkie — Audio MP3", "pl_dl_audio_mp3", "pl_zip_dl_audio_mp3"),
+        ("Pobierz wszystkie — Audio M4A", "pl_dl_audio_m4a", "pl_zip_dl_audio_m4a"),
+        ("Pobierz wszystkie — Video (najlepsza)", "pl_dl_video_best", "pl_zip_dl_video_best"),
+        ("Pobierz wszystkie — Video 720p", "pl_dl_video_720p", "pl_zip_dl_video_720p"),
     ]
+    keyboard: list[list[InlineKeyboardButton]] = []
+    for label, plain, archive_cb in options:
+        keyboard.append([InlineKeyboardButton(label, callback_data=plain)])
+        if archive_available:
+            keyboard.append([
+                InlineKeyboardButton(f"{label} jako 7z", callback_data=archive_cb)
+            ])
 
     if total > len(entries) and len(entries) < MAX_PLAYLIST_ITEMS_EXPANDED:
         more_count = min(total, MAX_PLAYLIST_ITEMS_EXPANDED)
@@ -78,13 +94,31 @@ def build_single_video_url(url: str) -> str:
 
 
 def parse_playlist_download_choice(callback_data: str) -> PlaylistDownloadChoice:
-    """Parse playlist batch-download callback data."""
+    """Parse playlist batch-download callback data.
 
-    format_part = callback_data.replace("pl_dl_", "", 1)
-    parts = format_part.split("_", 1)
+    Recognizes two prefixes:
+    - ``pl_dl_<media>_<format>``      → standard per-item send (legacy).
+    - ``pl_zip_dl_<media>_<format>``  → archive (7z) flow.
+    """
+
+    if callback_data.startswith("pl_zip_dl_"):
+        rest = callback_data.replace("pl_zip_dl_", "", 1)
+        as_archive = True
+    elif callback_data.startswith("pl_dl_"):
+        rest = callback_data.replace("pl_dl_", "", 1)
+        as_archive = False
+    else:
+        rest = callback_data
+        as_archive = False
+
+    parts = rest.split("_", 1)
     media_type = parts[0]
     format_choice = parts[1] if len(parts) > 1 else "best"
-    return PlaylistDownloadChoice(media_type=media_type, format_choice=format_choice)
+    return PlaylistDownloadChoice(
+        media_type=media_type,
+        format_choice=format_choice,
+        as_archive=as_archive,
+    )
 
 
 def build_playlist_item_download_plan(
