@@ -131,7 +131,7 @@ async def _stream_7z_progress(
         return
 
     last_update = 0.0
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     while True:
         line = await process.stdout.readline()
         if not line:

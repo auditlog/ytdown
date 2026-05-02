@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
+from pathlib import Path
 from unittest import mock
 
 import pytest
@@ -65,10 +67,6 @@ def test_is_7z_available_when_absent():
 
     with mock.patch("bot.archive.shutil.which", return_value=None):
         assert archive.is_7z_available() is False
-
-
-import asyncio
-from pathlib import Path
 
 
 def test_pack_to_volumes_raises_on_empty_sources():
@@ -164,6 +162,36 @@ def test_pack_to_volumes_raises_when_7z_exits_nonzero(tmp_path):
             asyncio.run(
                 archive.pack_to_volumes([src], tmp_path / "x", volume_size_mb=1)
             )
+
+
+def test_pack_to_volumes_swallows_progress_callback_exception(tmp_path):
+    """Best-effort progress: a raising callback must not abort packing."""
+    from bot import archive
+
+    src = tmp_path / "a.bin"
+    src.write_bytes(b"x")
+    dest = tmp_path / "out"
+
+    async def fake_exec(*args, **kwargs):
+        process = mock.MagicMock()
+        process.returncode = 0
+        process.communicate = mock.AsyncMock(return_value=(b"", b""))
+        process.stdout = mock.MagicMock()
+        process.stdout.readline = mock.AsyncMock(side_effect=[b""])
+        (tmp_path / "out.7z.001").write_bytes(b"v")
+        return process
+
+    async def raising_callback(_text):
+        raise RuntimeError("boom from callback")
+
+    with mock.patch("bot.archive.asyncio.create_subprocess_exec", side_effect=fake_exec):
+        result = asyncio.run(
+            archive.pack_to_volumes(
+                [src], dest, volume_size_mb=1, progress_cb=raising_callback,
+            )
+        )
+
+    assert result == [tmp_path / "out.7z.001"]
 
 
 def test_pack_to_volumes_real_7z_small_volumes(tmp_path):
