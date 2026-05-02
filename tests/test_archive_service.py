@@ -238,6 +238,10 @@ def test_send_volumes_uses_botapi_for_small_volumes(tmp_path, monkeypatch):
         return True
 
     monkeypatch.setattr(archive_service, "send_document_mtproto", fake_mtproto)
+    monkeypatch.setattr(
+        archive_service, "mtproto_unavailability_reason",
+        lambda: "n/a in this test",
+    )
 
     import asyncio
 
@@ -358,3 +362,34 @@ def test_send_volumes_resumes_from_start_index(tmp_path, monkeypatch):
 
     assert bot.send_document.await_count == 1
     assert bot.send_document.await_args.kwargs["caption"] == "X [3/3]"
+
+
+def test_send_volumes_raises_when_mtproto_returns_false(tmp_path, monkeypatch):
+    from bot.security_limits import TELEGRAM_UPLOAD_LIMIT_MB
+    from bot.services import archive_service
+
+    big = tmp_path / "out.7z.001"
+    big.write_bytes(b"x" * int((TELEGRAM_UPLOAD_LIMIT_MB + 5) * 1024 * 1024))
+
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: None)
+    monkeypatch.setattr(
+        archive_service, "send_document_mtproto",
+        mock.AsyncMock(return_value=False),
+    )
+
+    bot = mock.MagicMock()
+    bot.send_document = mock.AsyncMock()
+
+    import asyncio
+
+    with pytest.raises(RuntimeError, match="nie powiodła się"):
+        asyncio.run(
+            archive_service.send_volumes(
+                bot,
+                chat_id=42,
+                volumes=[big],
+                caption_prefix="X",
+                use_mtproto=True,
+                status_cb=mock.AsyncMock(),
+            )
+        )
