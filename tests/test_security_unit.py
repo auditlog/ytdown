@@ -408,3 +408,6 @@ def test_playlist_archive_retention_defined():
     from bot import security_limits
 
     assert security_limits.PLAYLIST_ARCHIVE_RETENTION_MIN == 60
+    # Retention must expire before the 24h cleanup safety net so workspaces
+    # eligible for retry never collide with the daily eviction.
+    assert security_limits.PLAYLIST_ARCHIVE_RETENTION_MIN < 24 * 60
