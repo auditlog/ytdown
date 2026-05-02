@@ -722,11 +722,16 @@ async def _handle_arc_cancel(update, chat_id: int, token: str) -> None:
         pending_archive_jobs.pop(chat_id, None)
     else:
         pending_archive_jobs[chat_id] = bucket
-    if state is not None:
+    if state is None:
         try:
-            os.remove(str(state.file_path))
-        except OSError:
-            pass
+            await update.callback_query.edit_message_text("Sesja wygasła.")
+        except Exception as exc:
+            logging.debug("arc_cancel edit failed: %s", exc)
+        return
+    try:
+        os.remove(str(state.file_path))
+    except OSError:
+        pass
     try:
         await update.callback_query.edit_message_text("Anulowano. Plik usunięty.")
     except Exception as exc:
@@ -780,7 +785,13 @@ async def _handle_arc_purge(update, chat_id: int, token: str) -> None:
         archived_deliveries.pop(chat_id, None)
     else:
         archived_deliveries[chat_id] = bucket
-    if state is not None and state.workspace.exists():
+    if state is None:
+        try:
+            await update.callback_query.edit_message_text("Sesja wygasła.")
+        except Exception as exc:
+            logging.debug("arc_purge edit failed: %s", exc)
+        return
+    if state.workspace.exists():
         shutil.rmtree(state.workspace, ignore_errors=True)
     try:
         await update.callback_query.edit_message_text("Folder usunięty.")

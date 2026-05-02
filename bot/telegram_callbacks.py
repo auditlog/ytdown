@@ -34,6 +34,7 @@ from bot.handlers.download_callbacks import (
     create_progress_hook as _extracted_create_progress_hook,
     download_file as _extracted_download_file,
     download_spotify_resolved as _extracted_download_spotify_resolved,
+    handle_archive_callback as _extracted_handle_archive_callback,
     show_time_range_options as _extracted_show_time_range_options,
 )
 from bot.handlers.media_extras_callbacks import (
@@ -101,8 +102,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     if data.startswith("arc_"):
-        from bot.handlers.download_callbacks import handle_archive_callback
-        await handle_archive_callback(update, context, data)
+        await _extracted_handle_archive_callback(update, context, data)
         return
 
     if data.startswith("pl_"):

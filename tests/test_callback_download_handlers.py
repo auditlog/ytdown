@@ -196,8 +196,8 @@ def test_handle_callback_time_range_options_and_clear():
     assert 888 not in tc.user_time_ranges
 
 
-def test_oversized_single_file_offers_archive_choice(tmp_path, monkeypatch):
-    """File too big after download → user gets [Wyślij jako 7z][Anuluj]."""
+def test_offer_archive_or_cancel_registers_pending_job(tmp_path, monkeypatch):
+    """_offer_archive_or_cancel registers state and shows two-button keyboard."""
     from bot.handlers import download_callbacks
     from bot.session_store import pending_archive_jobs, session_store
 
@@ -205,29 +205,44 @@ def test_oversized_single_file_offers_archive_choice(tmp_path, monkeypatch):
     pretend = tmp_path / "big.mp4"
     pretend.write_bytes(b"x")
 
-    captured = {}
-
-    async def fake_offer_archive(update, context, *, chat_id, file_path, title, media_type, format_choice, file_size_mb):
-        captured["called"] = True
-
     monkeypatch.setattr(
-        download_callbacks, "_offer_archive_or_cancel", fake_offer_archive
+        download_callbacks, "_mtproto_unavailability_reason", lambda: None
     )
+
+    update = mock.MagicMock()
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
 
     import asyncio
     asyncio.run(
         download_callbacks._offer_archive_or_cancel(
-            mock.MagicMock(),
-            mock.MagicMock(),
-            chat_id=1,
+            update,
+            context,
+            chat_id=99,
             file_path=str(pretend),
-            title="t",
+            title="big-file",
             media_type="video",
             format_choice="best",
-            file_size_mb=999.0,
+            file_size_mb=1500.0,
         )
     )
-    assert captured["called"] is True
+
+    # State registered.
+    bucket = pending_archive_jobs.get(99) or {}
+    assert len(bucket) == 1
+    state = next(iter(bucket.values()))
+    assert state.title == "big-file"
+    assert state.file_size_mb == 1500.0
+
+    # Two buttons shown.
+    update.callback_query.edit_message_text.assert_awaited_once()
+    sent_text, sent_kwargs = update.callback_query.edit_message_text.await_args.args, update.callback_query.edit_message_text.await_args.kwargs
+    keyboard = sent_kwargs["reply_markup"]
+    callback_data = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
+    assert any(cb.startswith("arc_split_") for cb in callback_data)
+    assert any(cb.startswith("arc_cancel_") for cb in callback_data)
+
     session_store.reset()
 
 
