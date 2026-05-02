@@ -23,7 +23,7 @@ from bot.services.playlist_service import (
     load_playlist,
     parse_playlist_download_choice,
 )
-from bot.runtime import record_download_for
+from bot.runtime import get_app_runtime, record_download_for
 from bot.session_context import (
     clear_session_value as _clear_session_value,
     get_session_context_value as _get_session_context_value,
@@ -82,7 +82,11 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text("Nie udało się pobrać informacji o playliście.")
                 return
             _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
-            msg, reply_markup = build_playlist_message(playlist_info)
+            runtime = get_app_runtime(context)
+            archive_available = runtime.archive_available if runtime is not None else False
+            msg, reply_markup = build_playlist_message(
+                playlist_info, archive_available=archive_available,
+            )
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
@@ -95,7 +99,11 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text("Nie udało się pobrać rozszerzonej listy.")
                 return
             _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
-            msg, reply_markup = build_playlist_message(playlist_info)
+            runtime = get_app_runtime(context)
+            archive_available = runtime.archive_available if runtime is not None else False
+            msg, reply_markup = build_playlist_message(
+                playlist_info, archive_available=archive_available,
+            )
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
