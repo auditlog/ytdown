@@ -217,4 +217,4 @@ def test_download_playlist_into_respects_max_archive_item_size(tmp_path, monkeyp
     )
 
     assert [p.name for p in paths] == ["ok.bin"]
-    assert any("huge" in title for title in failed)
+    assert any("huge" in title and "za duzy" in title for title in failed)

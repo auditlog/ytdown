@@ -10,20 +10,18 @@ Boundaries:
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import secrets
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Awaitable, Callable
 
 from bot.archive import compute_archive_basename, transliterate_to_ascii
 from bot.config import DOWNLOAD_PATH
 from bot.downloader_validation import sanitize_filename
 from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB
 from bot.services.download_service import (
-    DownloadResult,
     ensure_size_within_limit,
     estimate_download_size,
     execute_download,
@@ -127,9 +125,13 @@ async def _download_one_into_workspace(
     ):
         return None, estimated
 
+    # chat_id=0 with an isolated local progress_state={} dict so per-chat
+    # progress reporting (which writes to that dict by chat_id) does not
+    # leak across concurrent archive flows. Do not pass session_store's
+    # global download_progress here.
     result = await execute_download(
         plan,
-        chat_id=0,  # not used for progress reporting in archive flow
+        chat_id=0,
         executor=executor,
         progress_hook_factory=lambda _cid: (lambda _data: None),
         progress_state={},
