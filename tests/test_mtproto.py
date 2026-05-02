@@ -15,6 +15,17 @@ from bot.mtproto import (
 )
 
 
+def _make_blocked_import(blocked: str):
+    real_import = __import__
+
+    def fake(name, *args, **kwargs):
+        if name == blocked or name.startswith(f"{blocked}."):
+            raise ImportError(f"blocked: {name}")
+        return real_import(name, *args, **kwargs)
+
+    return fake
+
+
 class TestIsMtprotoAvailable:
     """Tests for is_mtproto_available() configuration check."""
 
@@ -291,3 +302,95 @@ class TestSendVideoMtproto:
         with patch.dict('sys.modules', {'pyrogram': mock_pyrogram}):
             result = asyncio.run(send_video_mtproto(123, str(video_file)))
             assert result is False
+
+
+def test_send_document_mtproto_returns_false_without_pyrogram(monkeypatch):
+    from bot import mtproto
+
+    monkeypatch.setattr(
+        "builtins.__import__",
+        _make_blocked_import("pyrogram"),
+    )
+    result = asyncio.run(
+        mtproto.send_document_mtproto(123, "/tmp/x.bin", caption="x")
+    )
+    assert result is False
+
+
+def test_send_document_mtproto_returns_false_without_credentials(monkeypatch):
+    from bot import mtproto
+
+    monkeypatch.setattr(
+        mtproto, "get_runtime_value",
+        lambda key, default="": "",
+    )
+    result = asyncio.run(
+        mtproto.send_document_mtproto(123, "/tmp/x.bin", caption="x")
+    )
+    assert result is False
+
+
+def test_send_document_mtproto_returns_false_on_invalid_api_id(monkeypatch):
+    from bot import mtproto
+
+    values = {"TELEGRAM_API_ID": "not-a-number", "TELEGRAM_API_HASH": "abc"}
+    monkeypatch.setattr(
+        mtproto, "get_runtime_value",
+        lambda key, default="": values.get(key, default),
+    )
+    result = asyncio.run(
+        mtproto.send_document_mtproto(123, "/tmp/x.bin", caption="x")
+    )
+    assert result is False
+
+
+def test_send_document_mtproto_invokes_send_document(tmp_path, monkeypatch):
+    from bot import mtproto
+    from unittest.mock import MagicMock
+
+    src = tmp_path / "vol.7z.001"
+    src.write_bytes(b"x" * 1024)
+
+    values = {
+        "TELEGRAM_API_ID": "12345",
+        "TELEGRAM_API_HASH": "abc",
+        "TELEGRAM_BOT_TOKEN": "token",
+    }
+    monkeypatch.setattr(
+        mtproto, "get_runtime_value",
+        lambda key, default="": values.get(key, default),
+    )
+
+    captured: dict = {}
+
+    class FakeClient:
+        def __init__(self, **kwargs):
+            captured["client_kwargs"] = kwargs
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def send_document(self, **kwargs):
+            captured["send_kwargs"] = kwargs
+
+    monkeypatch.setattr(mtproto, "_build_client", lambda *a, **kw: FakeClient())
+
+    mock_pyrogram = MagicMock()
+    with patch.dict('sys.modules', {'pyrogram': mock_pyrogram}):
+        result = asyncio.run(
+            mtproto.send_document_mtproto(
+                chat_id=42,
+                file_path=str(src),
+                caption="part 1",
+                file_name="playlist.7z.001",
+            )
+        )
+
+    assert result is True
+    assert captured["send_kwargs"]["chat_id"] == 42
+    assert captured["send_kwargs"]["document"] == str(src)
+    assert captured["send_kwargs"]["caption"] == "part 1"
+    assert captured["send_kwargs"]["file_name"] == "playlist.7z.001"

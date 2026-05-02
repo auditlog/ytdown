@@ -267,3 +267,65 @@ async def send_video_mtproto(
     except Exception as e:
         logging.error("MTProto send_video failed: %s", e)
         return False
+
+
+async def send_document_mtproto(
+    chat_id: int,
+    file_path: str,
+    caption: str | None = None,
+    file_name: str | None = None,
+) -> bool:
+    """Send a document file via MTProto (up to 2 GB).
+
+    Used to ship 7z volumes (.7z.001, ...) so Telegram does not try to
+    render them as media. ``file_name`` (when provided) overrides the
+    visible attachment name in the chat — useful when the on-disk path
+    contains a workspace prefix we don't want users to see.
+
+    Args:
+        chat_id: Destination chat ID.
+        file_path: Local path to the document.
+        caption: Optional message caption.
+        file_name: Optional override for the displayed filename.
+
+    Returns:
+        True on success, False on error.
+    """
+
+    try:
+        from pyrogram import Client  # noqa: F401
+    except ImportError:
+        logging.error("pyrogram not installed — cannot send large document")
+        return False
+
+    api_id = get_runtime_value("TELEGRAM_API_ID", "")
+    api_hash = get_runtime_value("TELEGRAM_API_HASH", "")
+    if not api_id or not api_hash:
+        logging.error("TELEGRAM_API_ID/TELEGRAM_API_HASH not configured")
+        return False
+
+    api_id_int = _parse_api_id(api_id)
+    if api_id_int is None:
+        return False
+
+    client = _build_client(chat_id, "send_document", api_id_int, api_hash)
+
+    try:
+        async with client:
+            send_kwargs: dict = {
+                "chat_id": chat_id,
+                "document": file_path,
+                "caption": caption,
+            }
+            if file_name is not None:
+                send_kwargs["file_name"] = file_name
+            await client.send_document(**send_kwargs)
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            logging.info(
+                "MTProto send_document OK: %s (%.1f MB) to chat %d",
+                os.path.basename(file_path), file_size_mb, chat_id,
+            )
+            return True
+    except Exception as e:
+        logging.error("MTProto send_document failed: %s", e)
+        return False
