@@ -15,6 +15,7 @@ from bot.downloader_metadata import get_video_info
 from bot.handlers.common_ui import build_main_keyboard, escape_md
 from bot.security_limits import MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.security_policy import get_media_label
+from bot.services.archive_service import execute_playlist_archive_flow
 from bot.services.playlist_service import (
     build_playlist_message,
     build_single_video_url,
@@ -96,6 +97,10 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
             _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
             msg, reply_markup = build_playlist_message(playlist_info)
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
+        return
+
+    if data.startswith("pl_zip_dl_"):
+        await _dispatch_archive_playlist(update, context, data)
         return
 
     if data.startswith("pl_dl_"):
@@ -234,3 +239,32 @@ async def _download_single_playlist_item(context, chat_id, url, title, media_typ
 
     record_download_for(context, chat_id, title, url, f"{media_type}_{format_choice}", file_size_mb)
     await status_msg.edit_text(f"[✅] {title}")
+
+
+async def _dispatch_archive_playlist(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    callback_data: str,
+) -> None:
+    """Dispatch a `pl_zip_dl_*` callback to the archive (7z) flow."""
+
+    chat_id = update.effective_chat.id
+    playlist = _get_session_value(context, chat_id, "playlist_data", user_playlist_data)
+    if not playlist:
+        await update.callback_query.edit_message_text(
+            "Sesja playlisty wygasła. Wyślij link ponownie."
+        )
+        return
+
+    choice = parse_playlist_download_choice(callback_data)
+
+    await execute_playlist_archive_flow(
+        update,
+        context,
+        chat_id=chat_id,
+        playlist=playlist,
+        media_type=choice.media_type,
+        format_choice=choice.format_choice,
+        executor=_executor,
+    )
+    _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
