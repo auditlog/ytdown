@@ -28,3 +28,21 @@ FFMPEG_TIMEOUT = 180
 # Maximum number of playlist items to download (default / expanded)
 MAX_PLAYLIST_ITEMS = 10
 MAX_PLAYLIST_ITEMS_EXPANDED = 50
+
+# 7z archive volume size depending on transport.
+# MTProto bot upload caps single message at ~2 GB; we leave 100 MB margin
+# for 7z header overhead and per-message metadata.
+MTPROTO_VOLUME_SIZE_MB = 1900
+
+# Bot API upload caps at 50 MB; 49 MB volume keeps slack for the wrapper.
+BOTAPI_VOLUME_SIZE_MB = 49
+
+# Per-item size cap for playlist archive mode. Playlist 7z mode allows
+# items larger than MAX_FILE_SIZE_MB because the file never has to fit a
+# single Telegram message — it will be split into volumes.
+MAX_ARCHIVE_ITEM_SIZE_MB = 10240
+
+# How long workspaces (pl_*/big_*) and pending archive jobs survive
+# after success, so the user can resend a single failed volume without
+# having to re-download the whole playlist.
+PLAYLIST_ARCHIVE_RETENTION_MIN = 60
