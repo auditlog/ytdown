@@ -250,3 +250,243 @@ async def send_volumes(
                 raise RuntimeError(f"Wysyłka {volume.name} przez MTProto nie powiodła się.")
 
         logging.info("Sent volume %d/%d: %s (%.1f MB)", idx + 1, total, volume.name, size_mb)
+
+
+import shutil
+from typing import Any
+
+from bot.archive import is_7z_available, pack_to_volumes, volume_size_for
+
+
+async def _safe_status_edit(update, text: str) -> None:
+    """Edit the inline-keyboard message body, ignoring 'message not modified' errors."""
+
+    try:
+        await update.callback_query.edit_message_text(text)
+    except Exception as exc:
+        logging.debug("status edit failed (non-fatal): %s", exc)
+
+
+async def execute_playlist_archive_flow(
+    update,
+    context,
+    *,
+    chat_id: int,
+    playlist: dict[str, Any],
+    media_type: str,
+    format_choice: str,
+    executor: ThreadPoolExecutor,
+) -> None:
+    """End-to-end: workspace → download all → pack to 7z → send volumes."""
+
+    if not is_7z_available():
+        await _safe_status_edit(
+            update,
+            "Funkcja 7z niedostępna — administrator nie zainstalował p7zip-full.",
+        )
+        return
+
+    use_mtproto = mtproto_unavailability_reason() is None
+    volume_size_mb = volume_size_for(use_mtproto)
+
+    title = playlist.get("title", "Playlista")
+    entries = playlist.get("entries") or []
+    total = len(entries)
+
+    workspace = prepare_playlist_workspace(chat_id, title, prefix="pl")
+    lock_path = workspace / ".lock"
+    lock_path.touch()
+
+    async def status(text: str) -> None:
+        await _safe_status_edit(update, text)
+
+    await status(f"Playlista → 7z ({media_type} {format_choice})\n[0/{total}] Pobieranie...")
+
+    try:
+        downloaded, failed = await download_playlist_into(
+            workspace,
+            entries,
+            media_type=media_type,
+            format_choice=format_choice,
+            executor=executor,
+            status_cb=status,
+        )
+
+        if not downloaded:
+            shutil.rmtree(workspace, ignore_errors=True)
+            await status("Nie udało się pobrać żadnego elementu.")
+            return
+
+        await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
+        slug = _build_slug(title)
+        dest_basename = workspace / compute_archive_basename(
+            f"{slug}_{media_type}_{format_choice}", datetime.now()
+        )
+        volumes = await pack_to_volumes(downloaded, dest_basename, volume_size_mb)
+
+        caption_prefix = f"{title} ({media_type} {format_choice})"
+        await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
+        await send_volumes(
+            context.bot,
+            chat_id=chat_id,
+            volumes=volumes,
+            caption_prefix=caption_prefix,
+            use_mtproto=use_mtproto,
+            status_cb=status,
+        )
+
+        delivery = ArchivedDeliveryState(
+            workspace=workspace,
+            volumes=volumes,
+            caption_prefix=caption_prefix,
+            use_mtproto=use_mtproto,
+            created_at=datetime.now(),
+        )
+        token = register_archived_delivery(chat_id, delivery)
+
+        summary_lines = [
+            "Playlista zakończona.",
+            f"Pobrano: {len(downloaded)}/{total}",
+            f"Spakowano: {len(downloaded)} plików → {len(volumes)} paczek 7z",
+            f"Wysłano: {len(volumes)}/{len(volumes)}",
+            "Folder zostanie usunięty po 60 min.",
+        ]
+        if failed:
+            summary_lines.append("")
+            summary_lines.append("Nieudane elementy:")
+            for title_ in failed[:5]:
+                summary_lines.append(f"  - {title_[:60]}")
+
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "Wyślij wszystkie paczki ponownie",
+                callback_data=f"arc_resend_{token}_0",
+            )],
+            [InlineKeyboardButton(
+                "Usuń teraz",
+                callback_data=f"arc_purge_{token}",
+            )],
+        ])
+        try:
+            await update.callback_query.edit_message_text(
+                "\n".join(summary_lines),
+                reply_markup=keyboard,
+            )
+        except Exception as exc:
+            logging.debug("summary edit failed: %s", exc)
+    except Exception as exc:
+        logging.error("Playlist archive flow failed: %s", exc)
+        await status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
+        # Workspace stays so user can retry; cleanup will remove it after retention.
+    finally:
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+
+
+async def execute_single_file_archive_flow(
+    update,
+    context,
+    *,
+    chat_id: int,
+    token: str,
+) -> None:
+    """End-to-end fallback for an oversized single file pre-registered as token."""
+
+    if not is_7z_available():
+        await _safe_status_edit(
+            update,
+            "Funkcja 7z niedostępna — administrator nie zainstalował p7zip-full.",
+        )
+        return
+
+    bucket = pending_archive_jobs.get(chat_id) or {}
+    state = bucket.get(token)
+    if state is None:
+        await _safe_status_edit(update, "Sesja wygasła. Wyślij plik ponownie.")
+        return
+
+    use_mtproto = mtproto_unavailability_reason() is None
+    volume_size_mb = volume_size_for(use_mtproto)
+
+    workspace = prepare_playlist_workspace(chat_id, state.title, prefix="big")
+    lock_path = workspace / ".lock"
+    lock_path.touch()
+
+    src = Path(state.file_path)
+    moved_path = workspace / src.name
+    try:
+        shutil.move(str(src), moved_path)
+    except OSError as exc:
+        await _safe_status_edit(update, f"Nie można przenieść pliku do workspace: {exc}")
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass
+        return
+
+    async def status(text: str) -> None:
+        await _safe_status_edit(update, text)
+
+    await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
+    try:
+        slug = _build_slug(state.title)
+        dest_basename = workspace / compute_archive_basename(slug, datetime.now())
+        volumes = await pack_to_volumes([moved_path], dest_basename, volume_size_mb)
+
+        caption_prefix = state.title
+        await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
+        await send_volumes(
+            context.bot,
+            chat_id=chat_id,
+            volumes=volumes,
+            caption_prefix=caption_prefix,
+            use_mtproto=use_mtproto,
+            status_cb=status,
+        )
+
+        delivery = ArchivedDeliveryState(
+            workspace=workspace,
+            volumes=volumes,
+            caption_prefix=caption_prefix,
+            use_mtproto=use_mtproto,
+            created_at=datetime.now(),
+        )
+        delivery_token = register_archived_delivery(chat_id, delivery)
+
+        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "Wyślij wszystkie paczki ponownie",
+                callback_data=f"arc_resend_{delivery_token}_0",
+            )],
+            [InlineKeyboardButton(
+                "Usuń teraz",
+                callback_data=f"arc_purge_{delivery_token}",
+            )],
+        ])
+        try:
+            await update.callback_query.edit_message_text(
+                f"Plik wysłany w {len(volumes)} paczkach. Folder zostanie usunięty po 60 min.",
+                reply_markup=keyboard,
+            )
+        except Exception as exc:
+            logging.debug("summary edit failed: %s", exc)
+    except Exception as exc:
+        logging.error("Single-file archive flow failed: %s", exc)
+        await status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
+    finally:
+        # Always consume the pending job so the token cannot be re-used.
+        bucket.pop(token, None)
+        if not bucket:
+            pending_archive_jobs.pop(chat_id, None)
+        else:
+            pending_archive_jobs[chat_id] = bucket
+        try:
+            lock_path.unlink()
+        except OSError:
+            pass

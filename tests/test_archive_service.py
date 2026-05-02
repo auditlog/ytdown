@@ -393,3 +393,157 @@ def test_send_volumes_raises_when_mtproto_returns_false(tmp_path, monkeypatch):
                 status_cb=mock.AsyncMock(),
             )
         )
+
+
+def test_execute_playlist_archive_flow_happy_path(tmp_path, monkeypatch):
+    """Ensures the end-to-end flow chains workspace → download → pack → send."""
+    from bot.services import archive_service
+    from bot.session_store import session_store
+
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+
+    async def fake_download_into(workspace, entries, **kwargs):
+        path1 = workspace / "a.mp3"
+        path1.write_bytes(b"a")
+        path2 = workspace / "b.mp3"
+        path2.write_bytes(b"b")
+        return [path1, path2], []
+
+    async def fake_pack(sources, dest_basename, volume_size_mb, **kwargs):
+        produced = dest_basename.parent / f"{dest_basename.with_suffix('.7z').name}.001"
+        produced.write_bytes(b"vol")
+        return [produced]
+
+    sent_volumes = []
+
+    async def fake_send_volumes(bot, chat_id, volumes, caption_prefix, use_mtproto, **kwargs):
+        sent_volumes.extend(volumes)
+
+    monkeypatch.setattr(archive_service, "download_playlist_into", fake_download_into)
+    monkeypatch.setattr(archive_service, "pack_to_volumes", fake_pack)
+    monkeypatch.setattr(archive_service, "send_volumes", fake_send_volumes)
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: None)
+
+    update = mock.MagicMock()
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+    context.bot = mock.MagicMock()
+
+    import asyncio
+
+    playlist = {"title": "Hits", "entries": [{"url": "u1", "title": "a"}]}
+
+    asyncio.run(
+        archive_service.execute_playlist_archive_flow(
+            update, context, chat_id=99, playlist=playlist,
+            media_type="audio", format_choice="mp3",
+            executor=mock.MagicMock(),
+        )
+    )
+
+    # One volume produced and shipped.
+    assert len(sent_volumes) == 1
+    # Workspace persists for retention.
+    assert any(p.name.startswith("pl_") for p in (tmp_path / "99").iterdir())
+    session_store.reset()
+
+
+def test_execute_playlist_archive_flow_aborts_when_no_items_succeed(tmp_path, monkeypatch):
+    from bot.services import archive_service
+    from bot.session_store import session_store
+
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+
+    async def fake_download_into(workspace, entries, **kwargs):
+        return [], ["a", "b"]
+
+    pack_called = mock.AsyncMock()
+    monkeypatch.setattr(archive_service, "download_playlist_into", fake_download_into)
+    monkeypatch.setattr(archive_service, "pack_to_volumes", pack_called)
+    monkeypatch.setattr(archive_service, "is_7z_available", lambda: True)
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: None)
+
+    update = mock.MagicMock()
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+
+    import asyncio
+
+    playlist = {"title": "Empty", "entries": [{"url": "u", "title": "a"}]}
+    asyncio.run(
+        archive_service.execute_playlist_archive_flow(
+            update, context, chat_id=99, playlist=playlist,
+            media_type="audio", format_choice="mp3",
+            executor=mock.MagicMock(),
+        )
+    )
+    assert pack_called.await_count == 0
+    # Workspace removed because everything failed.
+    chat_dir = tmp_path / "99"
+    if chat_dir.exists():
+        assert not any(chat_dir.iterdir())
+    session_store.reset()
+
+
+def test_execute_single_file_archive_flow_consumes_pending_job(tmp_path, monkeypatch):
+    from bot.services import archive_service
+    from bot.session_store import (
+        ArchiveJobState,
+        pending_archive_jobs,
+        session_store,
+    )
+
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(archive_service, "is_7z_available", lambda: True)
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: None)
+
+    src = tmp_path / "input.mp4"
+    src.write_bytes(b"x")
+    state = ArchiveJobState(
+        file_path=src,
+        title="MyVid",
+        media_type="video",
+        format_choice="best",
+        file_size_mb=10.0,
+        use_mtproto=False,
+        created_at=datetime(2026, 5, 2),
+    )
+    token = archive_service.register_pending_archive_job(33, state)
+
+    async def fake_pack(sources, dest_basename, volume_size_mb, **kwargs):
+        produced = dest_basename.parent / f"{dest_basename.with_suffix('.7z').name}.001"
+        produced.write_bytes(b"v")
+        return [produced]
+
+    sent = []
+
+    async def fake_send_volumes(bot, chat_id, volumes, caption_prefix, use_mtproto, **kwargs):
+        sent.extend(volumes)
+
+    monkeypatch.setattr(archive_service, "pack_to_volumes", fake_pack)
+    monkeypatch.setattr(archive_service, "send_volumes", fake_send_volumes)
+
+    update = mock.MagicMock()
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+    context.bot = mock.MagicMock()
+
+    import asyncio
+
+    asyncio.run(
+        archive_service.execute_single_file_archive_flow(
+            update, context, chat_id=33, token=token,
+        )
+    )
+
+    # Pending job consumed.
+    assert pending_archive_jobs.get(33, {}).get(token) is None
+    # File migrated into workspace and a volume produced + sent.
+    assert len(sent) == 1
+    session_store.reset()
