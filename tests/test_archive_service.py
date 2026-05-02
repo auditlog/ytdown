@@ -92,3 +92,129 @@ def test_register_archived_delivery_stores_state():
     assert token in archived_deliveries[11]
     assert archived_deliveries[11][token] is delivery
     session_store.reset()
+
+
+def test_download_playlist_into_keeps_files_after_download(tmp_path, monkeypatch):
+    from bot.services import archive_service
+
+    workspace = tmp_path / "pl_x"
+    workspace.mkdir()
+
+    async def fake_run(entry, workspace_path, *, media_type, format_choice, executor):
+        produced = workspace_path / f"{entry['title']}.bin"
+        produced.write_bytes(b"data")
+        return produced, 1.5  # path, size_mb
+
+    monkeypatch.setattr(archive_service, "_download_one_into_workspace", fake_run)
+
+    entries = [{"url": "u1", "title": "first"}, {"url": "u2", "title": "second"}]
+    import asyncio
+
+    paths, failed = asyncio.run(
+        archive_service.download_playlist_into(
+            workspace,
+            entries,
+            media_type="audio",
+            format_choice="mp3",
+            executor=mock.MagicMock(),
+            status_cb=mock.AsyncMock(),
+        )
+    )
+
+    assert {p.name for p in paths} == {"first.bin", "second.bin"}
+    assert failed == []
+    assert (workspace / "first.bin").exists()
+    assert (workspace / "second.bin").exists()
+
+
+def test_download_playlist_into_returns_empty_when_all_fail(tmp_path, monkeypatch):
+    from bot.services import archive_service
+
+    workspace = tmp_path / "pl_x"
+    workspace.mkdir()
+
+    async def fake_run(*args, **kwargs):
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(archive_service, "_download_one_into_workspace", fake_run)
+
+    entries = [{"url": "u1", "title": "a"}, {"url": "u2", "title": "b"}]
+    import asyncio
+
+    paths, failed = asyncio.run(
+        archive_service.download_playlist_into(
+            workspace, entries, media_type="audio", format_choice="mp3",
+            executor=mock.MagicMock(), status_cb=mock.AsyncMock(),
+        )
+    )
+
+    assert paths == []
+    assert failed == ["a", "b"]
+
+
+def test_download_playlist_into_returns_failed_titles_on_partial(tmp_path, monkeypatch):
+    from bot.services import archive_service
+
+    workspace = tmp_path / "pl_x"
+    workspace.mkdir()
+    call_count = {"n": 0}
+
+    async def fake_run(entry, workspace_path, **kwargs):
+        call_count["n"] += 1
+        if entry["title"] == "bad":
+            raise RuntimeError("fail")
+        produced = workspace_path / f"{entry['title']}.bin"
+        produced.write_bytes(b"x")
+        return produced, 0.5
+
+    monkeypatch.setattr(archive_service, "_download_one_into_workspace", fake_run)
+
+    entries = [
+        {"url": "u1", "title": "good1"},
+        {"url": "u2", "title": "bad"},
+        {"url": "u3", "title": "good2"},
+    ]
+    import asyncio
+
+    paths, failed = asyncio.run(
+        archive_service.download_playlist_into(
+            workspace, entries, media_type="audio", format_choice="mp3",
+            executor=mock.MagicMock(), status_cb=mock.AsyncMock(),
+        )
+    )
+
+    assert {p.name for p in paths} == {"good1.bin", "good2.bin"}
+    assert failed == ["bad"]
+
+
+def test_download_playlist_into_respects_max_archive_item_size(tmp_path, monkeypatch):
+    from bot.services import archive_service
+
+    workspace = tmp_path / "pl_x"
+    workspace.mkdir()
+
+    async def fake_run(entry, workspace_path, **kwargs):
+        # Pretend the second entry is huge.
+        if entry["title"] == "huge":
+            return None, 99999.0  # too big
+        produced = workspace_path / f"{entry['title']}.bin"
+        produced.write_bytes(b"x")
+        return produced, 1.0
+
+    monkeypatch.setattr(archive_service, "_download_one_into_workspace", fake_run)
+
+    entries = [
+        {"url": "u1", "title": "ok"},
+        {"url": "u2", "title": "huge"},
+    ]
+    import asyncio
+
+    paths, failed = asyncio.run(
+        archive_service.download_playlist_into(
+            workspace, entries, media_type="audio", format_choice="mp3",
+            executor=mock.MagicMock(), status_cb=mock.AsyncMock(),
+        )
+    )
+
+    assert [p.name for p in paths] == ["ok.bin"]
+    assert any("huge" in title for title in failed)
