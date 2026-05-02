@@ -4,8 +4,9 @@ Unit tests for cleanup helpers.
 
 import os
 import time
-from types import SimpleNamespace
+from datetime import datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 from bot.cleanup import cleanup_old_files, get_disk_usage, monitor_disk_space
@@ -119,12 +120,6 @@ def test_monitor_disk_space_runs_cleanup_below_warning_threshold(monkeypatch):
     assert calls == [(cleanup_module.DOWNLOAD_PATH, 6)]
 
 
-import os
-import time
-from datetime import datetime, timedelta
-from pathlib import Path
-
-
 def test_purge_archive_workspaces_removes_old_pl_dirs(tmp_path, monkeypatch):
     from bot import cleanup
 
@@ -154,7 +149,7 @@ def test_purge_archive_workspaces_keeps_recent_dirs(tmp_path):
     assert fresh_ws.exists()
 
 
-def test_purge_archive_workspaces_respects_lock_when_recent(tmp_path):
+def test_purge_archive_workspaces_keeps_dirs_under_threshold(tmp_path):
     from bot import cleanup
 
     chat_dir = tmp_path / "333"
@@ -169,6 +164,40 @@ def test_purge_archive_workspaces_respects_lock_when_recent(tmp_path):
     cleanup._purge_archive_workspaces(chat_dir, retention_min=60)
 
     assert ws.exists()
+
+
+def test_purge_archive_workspaces_keeps_locked_dir_within_safety_net(tmp_path):
+    """Lock blocks deletion when age > retention but <= 24h."""
+    chat_dir = tmp_path / "555"
+    chat_dir.mkdir()
+    ws = chat_dir / "pl_locked_old_20260502-080000"
+    ws.mkdir()
+    (ws / ".lock").touch()
+    # 90 min old: past 60 min retention, well below 24h safety net.
+    age = time.time() - 90 * 60
+    os.utime(ws, (age, age))
+
+    from bot import cleanup
+    cleanup._purge_archive_workspaces(chat_dir, retention_min=60)
+
+    assert ws.exists()
+
+
+def test_purge_archive_workspaces_safety_net_deletes_lock_after_24h(tmp_path):
+    """Lock must not save a workspace older than the 24h safety net."""
+    chat_dir = tmp_path / "666"
+    chat_dir.mkdir()
+    ws = chat_dir / "pl_orphan_lock_20260502-080000"
+    ws.mkdir()
+    (ws / ".lock").touch()
+    # 25 h old: past safety net.
+    age = time.time() - 25 * 3600
+    os.utime(ws, (age, age))
+
+    from bot import cleanup
+    cleanup._purge_archive_workspaces(chat_dir, retention_min=60)
+
+    assert not ws.exists()
 
 
 def test_purge_archive_workspaces_ignores_non_archive_dirs(tmp_path):
