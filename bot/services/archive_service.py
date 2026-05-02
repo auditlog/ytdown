@@ -12,12 +12,19 @@ from __future__ import annotations
 
 import logging
 import secrets
+import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Awaitable, Callable
+from typing import Any, Awaitable, Callable
 
-from bot.archive import compute_archive_basename, transliterate_to_ascii
+from bot.archive import (
+    compute_archive_basename,
+    is_7z_available,
+    pack_to_volumes,
+    transliterate_to_ascii,
+    volume_size_for,
+)
 from bot.config import DOWNLOAD_PATH
 from bot.downloader_validation import sanitize_filename
 from bot.mtproto import mtproto_unavailability_reason, send_document_mtproto
@@ -34,6 +41,7 @@ from bot.session_store import (
     archived_deliveries,
     pending_archive_jobs,
 )
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 _SLUG_MAX_LEN = 60
@@ -252,12 +260,6 @@ async def send_volumes(
         logging.info("Sent volume %d/%d: %s (%.1f MB)", idx + 1, total, volume.name, size_mb)
 
 
-import shutil
-from typing import Any
-
-from bot.archive import is_7z_available, pack_to_volumes, volume_size_for
-
-
 async def _safe_status_edit(update, text: str) -> None:
     """Edit the inline-keyboard message body, ignoring 'message not modified' errors."""
 
@@ -357,8 +359,6 @@ async def execute_playlist_archive_flow(
             for title_ in failed[:5]:
                 summary_lines.append(f"  - {title_[:60]}")
 
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
-
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
                 "Wyślij wszystkie paczki ponownie",
@@ -456,8 +456,6 @@ async def execute_single_file_archive_flow(
             created_at=datetime.now(),
         )
         delivery_token = register_archived_delivery(chat_id, delivery)
-
-        from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
