@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING, Any, Awaitable, Callable
 if TYPE_CHECKING:
     from bot.jobs import JobCancellation
 
+from bot.jobs import JobDescriptor, job_registry
 from bot.archive import (
     compute_archive_basename,
     is_7z_available,
@@ -40,8 +41,10 @@ from bot.services.download_service import (
 )
 from bot.session_store import (
     ArchiveJobState,
+    ArchivePartialState,
     ArchivedDeliveryState,
     archived_deliveries,
+    partial_archive_workspaces,
     pending_archive_jobs,
 )
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
@@ -295,7 +298,12 @@ async def execute_playlist_archive_flow(
     format_choice: str,
     executor: ThreadPoolExecutor,
 ) -> None:
-    """End-to-end: workspace → download all → pack to 7z → send volumes."""
+    """End-to-end: workspace → download all → pack to 7z → send volumes.
+
+    Registers a job with job_registry so /stop can cancel mid-flight.
+    On cancel during download phase, saves an ArchivePartialState so the
+    user can click [Spakuj co mam] from the cancel-status message.
+    """
 
     if not is_7z_available():
         await _safe_status_edit(
@@ -311,6 +319,15 @@ async def execute_playlist_archive_flow(
     entries = playlist.get("entries") or []
     total = len(entries)
 
+    descriptor = JobDescriptor(
+        job_id="",  # filled by registry
+        chat_id=chat_id,
+        kind="playlist_zip",
+        label=f"Playlist 7z ({media_type} {format_choice}) — start",
+        started_at=datetime.now(),
+    )
+    cancellation = job_registry.register(chat_id, descriptor)
+
     workspace = prepare_playlist_workspace(chat_id, title, prefix="pl")
     lock_path = workspace / ".lock"
     lock_path.touch()
@@ -318,9 +335,18 @@ async def execute_playlist_archive_flow(
     async def status(text: str) -> None:
         await _safe_status_edit(update, text)
 
-    await status(f"Playlista → 7z ({media_type} {format_choice})\n[0/{total}] Pobieranie...")
+    await status(
+        f"Playlista → 7z ({media_type} {format_choice})\n"
+        f"[0/{total}] Pobieranie..."
+    )
 
+    downloaded: list[Path] = []
+    failed: list[str] = []
     try:
+        job_registry.update_label(
+            cancellation.job_id,
+            f"Playlist 7z ({media_type} {format_choice}) — pobieranie [0/{total}]",
+        )
         downloaded, failed = await download_playlist_into(
             workspace,
             entries,
@@ -328,21 +354,48 @@ async def execute_playlist_archive_flow(
             format_choice=format_choice,
             executor=executor,
             status_cb=status,
+            cancellation=cancellation,
         )
+
+        if cancellation.event.is_set():
+            await _save_partial_state_after_cancel(
+                update, chat_id, workspace, downloaded, title,
+                media_type, format_choice, use_mtproto, total,
+            )
+            return
 
         if not downloaded:
             shutil.rmtree(workspace, ignore_errors=True)
             await status("Nie udało się pobrać żadnego elementu.")
             return
 
+        job_registry.update_label(
+            cancellation.job_id,
+            f"Playlist 7z ({media_type} {format_choice}) — pakowanie",
+        )
         await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
         slug = _build_slug(title)
         dest_basename = workspace / compute_archive_basename(
             f"{slug}_{media_type}_{format_choice}", datetime.now()
         )
-        volumes = await pack_to_volumes(downloaded, dest_basename, volume_size_mb)
+        volumes = await pack_to_volumes(
+            downloaded, dest_basename, volume_size_mb,
+            cancellation=cancellation,
+        )
+
+        if cancellation.event.is_set():
+            # User cancelled during pack — pack_to_volumes already cleaned partials.
+            await _save_partial_state_after_cancel(
+                update, chat_id, workspace, downloaded, title,
+                media_type, format_choice, use_mtproto, total,
+            )
+            return
 
         caption_prefix = f"{title} ({media_type} {format_choice})"
+        job_registry.update_label(
+            cancellation.job_id,
+            f"Playlist 7z ({media_type} {format_choice}) — wysyłka [0/{len(volumes)}]",
+        )
         await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
         await send_volumes(
             context.bot,
@@ -351,6 +404,7 @@ async def execute_playlist_archive_flow(
             caption_prefix=caption_prefix,
             use_mtproto=use_mtproto,
             status_cb=status,
+            cancellation=cancellation,
         )
 
         delivery = ArchivedDeliveryState(
@@ -362,13 +416,19 @@ async def execute_playlist_archive_flow(
         )
         token = register_archived_delivery(chat_id, delivery)
 
+        was_cancelled_in_send = cancellation.event.is_set()
         summary_lines = [
-            "Playlista zakończona.",
+            "Playlista zakończona." if not was_cancelled_in_send else "⏹ Wysyłka anulowana.",
             f"Pobrano: {len(downloaded)}/{total}",
             f"Spakowano: {len(downloaded)} plików → {len(volumes)} paczek 7z",
-            f"Wysłano: {len(volumes)}/{len(volumes)}",
-            f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
         ]
+        if was_cancelled_in_send:
+            summary_lines.append(f"Wysłano: <{len(volumes)} (anulowano)")
+        else:
+            summary_lines.append(f"Wysłano: {len(volumes)}/{len(volumes)}")
+        summary_lines.append(
+            f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min."
+        )
         if failed:
             summary_lines.append("")
             summary_lines.append("Nieudane elementy:")
@@ -380,27 +440,79 @@ async def execute_playlist_archive_flow(
                 "Wyślij wszystkie paczki ponownie",
                 callback_data=f"arc_resend_{token}_0",
             )],
-            [InlineKeyboardButton(
-                "Usuń teraz",
-                callback_data=f"arc_purge_{token}",
-            )],
+            [InlineKeyboardButton("Usuń teraz", callback_data=f"arc_purge_{token}")],
         ])
         try:
             await update.callback_query.edit_message_text(
-                "\n".join(summary_lines),
-                reply_markup=keyboard,
+                "\n".join(summary_lines), reply_markup=keyboard,
             )
         except Exception as exc:
             logging.debug("summary edit failed: %s", exc)
     except Exception as exc:
         logging.error("Playlist archive flow failed: %s", exc)
         await status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
-        # Workspace stays so user can retry; cleanup will remove it after retention.
     finally:
         try:
             lock_path.unlink()
         except OSError:
             pass
+        job_registry.unregister(cancellation.job_id)
+
+
+async def _save_partial_state_after_cancel(
+    update,
+    chat_id: int,
+    workspace: Path,
+    downloaded: list[Path],
+    title: str,
+    media_type: str,
+    format_choice: str,
+    use_mtproto: bool,
+    total: int,
+) -> None:
+    """Persist ArchivePartialState and edit the status message with recovery buttons."""
+
+    if not downloaded:
+        # Nothing to recover — drop the workspace.
+        shutil.rmtree(workspace, ignore_errors=True)
+        try:
+            await update.callback_query.edit_message_text(
+                "⏹ Zatrzymano. Nie pobrano żadnego elementu."
+            )
+        except Exception:
+            pass
+        return
+
+    state = ArchivePartialState(
+        workspace=workspace,
+        downloaded=list(downloaded),
+        title=title,
+        media_type=media_type,
+        format_choice=format_choice,
+        use_mtproto=use_mtproto,
+        created_at=datetime.now(),
+    )
+    bucket = partial_archive_workspaces.get(chat_id) or {}
+    token = secrets.token_hex(4)
+    bucket[token] = state
+    partial_archive_workspaces[chat_id] = bucket
+
+    keyboard = InlineKeyboardMarkup([
+        [InlineKeyboardButton(
+            "Spakuj co mam", callback_data=f"arc_pack_partial_{token}",
+        )],
+        [InlineKeyboardButton(
+            "Usuń teraz", callback_data=f"arc_purge_partial_{token}",
+        )],
+    ])
+    try:
+        await update.callback_query.edit_message_text(
+            f"⏹ Zatrzymano. Pobrano {len(downloaded)}/{total} plików.\n"
+            f"Workspace zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
+            reply_markup=keyboard,
+        )
+    except Exception as exc:
+        logging.debug("partial-state edit failed: %s", exc)
 
 
 async def execute_single_file_archive_flow(

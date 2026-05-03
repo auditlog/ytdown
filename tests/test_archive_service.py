@@ -566,6 +566,116 @@ def test_send_volumes_breaks_on_cancel(tmp_path, monkeypatch):
     assert len(sent) == 2  # third volume was not sent
 
 
+def test_execute_playlist_archive_flow_registers_and_unregisters(tmp_path, monkeypatch):
+    import asyncio
+    from bot.services import archive_service
+    from bot.jobs import JobRegistry
+    from bot.session_store import session_store
+
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+
+    test_registry = JobRegistry()
+    monkeypatch.setattr(archive_service, "job_registry", test_registry)
+
+    job_seen_during_run = {}
+
+    async def fake_download_into(workspace, entries, **kwargs):
+        # Snapshot job listing while the flow is in-flight.
+        job_seen_during_run["count"] = len(test_registry.list_for_chat(99))
+        path = workspace / "a.mp3"
+        path.write_bytes(b"x")
+        return [path], []
+
+    async def fake_pack(sources, dest_basename, volume_size_mb, **kwargs):
+        produced = dest_basename.parent / f"{dest_basename.with_suffix('.7z').name}.001"
+        produced.write_bytes(b"v")
+        return [produced]
+
+    async def fake_send(*a, **kw):
+        return None
+
+    monkeypatch.setattr(archive_service, "download_playlist_into", fake_download_into)
+    monkeypatch.setattr(archive_service, "pack_to_volumes", fake_pack)
+    monkeypatch.setattr(archive_service, "send_volumes", fake_send)
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: None)
+
+    update = mock.MagicMock()
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+
+    asyncio.run(
+        archive_service.execute_playlist_archive_flow(
+            update, context, chat_id=99,
+            playlist={"title": "Hits", "entries": [{"url": "u", "title": "a"}]},
+            media_type="audio", format_choice="mp3",
+            executor=mock.MagicMock(),
+        )
+    )
+
+    assert job_seen_during_run["count"] == 1
+    # Unregistered after success.
+    assert test_registry.list_for_chat(99) == []
+    session_store.reset()
+
+
+def test_execute_playlist_archive_flow_captures_partial_state_on_cancel(tmp_path, monkeypatch):
+    import asyncio
+    from bot.services import archive_service
+    from bot.jobs import JobRegistry
+    from bot.session_store import partial_archive_workspaces, session_store
+
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+
+    test_registry = JobRegistry()
+    monkeypatch.setattr(archive_service, "job_registry", test_registry)
+
+    async def fake_download_into(workspace, entries, *, cancellation=None, **kwargs):
+        # Simulate two entries downloaded, then cancellation.
+        p1 = workspace / "a.mp3"; p1.write_bytes(b"x")
+        p2 = workspace / "b.mp3"; p2.write_bytes(b"x")
+        cancellation.event.set()
+        return [p1, p2], ["c (anulowano)"]
+
+    pack_called = mock.AsyncMock()
+    send_called = mock.AsyncMock()
+    monkeypatch.setattr(archive_service, "download_playlist_into", fake_download_into)
+    monkeypatch.setattr(archive_service, "pack_to_volumes", pack_called)
+    monkeypatch.setattr(archive_service, "send_volumes", send_called)
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: None)
+
+    update = mock.MagicMock()
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+
+    asyncio.run(
+        archive_service.execute_playlist_archive_flow(
+            update, context, chat_id=99,
+            playlist={"title": "Hits", "entries": [
+                {"url": "u1", "title": "a"},
+                {"url": "u2", "title": "b"},
+                {"url": "u3", "title": "c"},
+            ]},
+            media_type="audio", format_choice="mp3",
+            executor=mock.MagicMock(),
+        )
+    )
+
+    # Pack and send must NOT have been called.
+    assert pack_called.await_count == 0
+    assert send_called.await_count == 0
+    # Partial state captured.
+    bucket = partial_archive_workspaces.get(99) or {}
+    assert len(bucket) == 1
+    state = next(iter(bucket.values()))
+    assert len(state.downloaded) == 2
+    assert state.title == "Hits"
+    session_store.reset()
+
+
 def test_execute_single_file_archive_flow_consumes_pending_job(tmp_path, monkeypatch):
     from bot.services import archive_service
     from bot.session_store import (
