@@ -111,7 +111,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await _extracted_handle_archive_callback(update, context, data)
         return
 
-    if data.startswith("stop_") or data == "stop_all":
+    if data.startswith("stop_"):
         from bot.telegram_commands import handle_stop_callback
         await handle_stop_callback(update, context, data)
         return

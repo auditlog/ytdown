@@ -316,16 +316,12 @@ async def process_video_file(
     return await _extracted_process_video_file(update, context, video_info)
 
 
-async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """List running jobs in this chat with cancel buttons."""
+def _build_stop_list_message(descriptors: list) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the /stop list text + keyboard from active job descriptors.
 
-    chat_id = update.effective_chat.id
-    descriptors = job_registry.list_for_chat(chat_id)
-
-    if not descriptors:
-        await update.effective_message.reply_text("Brak aktywnych operacji.")
-        return
-
+    Shared between the initial stop_command render and the stop_refresh
+    callback re-render.
+    """
     lines = [f"Aktywne operacje ({len(descriptors)}):", ""]
     keyboard_rows: list[list[InlineKeyboardButton]] = []
     for idx, descriptor in enumerate(descriptors, 1):
@@ -344,11 +340,21 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         InlineKeyboardButton("Odśwież", callback_data="stop_refresh"),
         InlineKeyboardButton("Anuluj listę", callback_data="stop_dismiss"),
     ])
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard_rows)
 
-    await update.effective_message.reply_text(
-        "\n".join(lines),
-        reply_markup=InlineKeyboardMarkup(keyboard_rows),
-    )
+
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List running jobs in this chat with cancel buttons."""
+
+    chat_id = update.effective_chat.id
+    descriptors = job_registry.list_for_chat(chat_id)
+
+    if not descriptors:
+        await update.effective_message.reply_text("Brak aktywnych operacji.")
+        return
+
+    text, keyboard = _build_stop_list_message(descriptors)
+    await update.effective_message.reply_text(text, reply_markup=keyboard)
 
 
 async def handle_stop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str) -> None:
@@ -378,29 +384,9 @@ async def handle_stop_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             except Exception:
                 pass
             return
-        lines = [f"Aktywne operacje ({len(descriptors)}):", ""]
-        keyboard_rows: list[list[InlineKeyboardButton]] = []
-        for idx, descriptor in enumerate(descriptors, 1):
-            age_min = max(
-                0,
-                int((datetime.now() - descriptor.started_at).total_seconds() // 60),
-            )
-            lines.append(f"{idx}. {descriptor.label} ({age_min} min)")
-            keyboard_rows.append([InlineKeyboardButton(
-                f"Zatrzymaj {idx}", callback_data=f"stop_{descriptor.job_id}",
-            )])
-        keyboard_rows.append([InlineKeyboardButton(
-            "Zatrzymaj wszystkie", callback_data="stop_all",
-        )])
-        keyboard_rows.append([
-            InlineKeyboardButton("Odśwież", callback_data="stop_refresh"),
-            InlineKeyboardButton("Anuluj listę", callback_data="stop_dismiss"),
-        ])
+        text, keyboard = _build_stop_list_message(descriptors)
         try:
-            await update.callback_query.edit_message_text(
-                "\n".join(lines),
-                reply_markup=InlineKeyboardMarkup(keyboard_rows),
-            )
+            await update.callback_query.edit_message_text(text, reply_markup=keyboard)
         except Exception:
             pass
         return
