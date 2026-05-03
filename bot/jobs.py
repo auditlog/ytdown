@@ -14,7 +14,7 @@ import asyncio
 import logging
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from threading import RLock
 from typing import Literal
 
@@ -169,6 +169,29 @@ class JobRegistry:
 
         logging.info("job cancel_async done: id=%s reason=%r", job_id, reason)
         return True
+
+    def purge_dead(self, threshold: timedelta) -> int:
+        """Drop entries older than ``threshold``. Used by cleanup.py.
+
+        Returns the number of entries removed. Logs each as a warning —
+        a zombie job means a layer failed to call unregister in finally.
+        """
+
+        cutoff = datetime.now() - threshold
+        removed = 0
+        with self._lock:
+            for job_id in list(self._descriptors):
+                descriptor = self._descriptors[job_id]
+                if descriptor.started_at < cutoff:
+                    age_h = (datetime.now() - descriptor.started_at).total_seconds() / 3600
+                    logging.warning(
+                        "purge zombie job: id=%s kind=%s chat=%d age=%.1fh",
+                        job_id, descriptor.kind, descriptor.chat_id, age_h,
+                    )
+                    self._descriptors.pop(job_id, None)
+                    self._cancellations.pop(job_id, None)
+                    removed += 1
+        return removed
 
 
 # Global singleton consumed by handlers/services.

@@ -224,3 +224,33 @@ def test_cancelled_reason_propagates():
     registry.cancel(c.job_id, reason="user via /stop")
 
     assert c.cancelled_reason == "user via /stop"
+
+
+def test_purge_dead_removes_old_entries():
+    from bot.jobs import JobRegistry
+
+    registry = JobRegistry()
+    old = _descriptor(label="old")
+    old.started_at = datetime.now() - timedelta(hours=7)
+    registry.register(1, old)
+    fresh = _descriptor(label="fresh")
+    registry.register(1, fresh)
+
+    removed = registry.purge_dead(threshold=timedelta(hours=6))
+
+    assert removed == 1
+    labels = [d.label for d in registry.list_for_chat(1)]
+    assert labels == ["fresh"]
+
+
+def test_purge_dead_returns_zero_when_all_fresh():
+    from bot.jobs import JobRegistry
+
+    registry = JobRegistry()
+    registry.register(1, _descriptor(label="A"))
+    registry.register(1, _descriptor(label="B"))
+
+    removed = registry.purge_dead(threshold=timedelta(hours=6))
+
+    assert removed == 0
+    assert len(registry.list_for_chat(1)) == 2
