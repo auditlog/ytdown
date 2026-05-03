@@ -198,3 +198,45 @@ def test_api_timeout_during_post_processing_uses_raw_transcript(tmp_path):
             is_text_too_long_for_correction_fn=lambda _text: False,
             rmtree_fn=lambda _path: None,
         )
+
+
+def test_transcribe_mp3_file_breaks_on_cancel(tmp_path):
+    """When cancellation event is set before chunks start, no API calls are made."""
+
+    import asyncio
+    from bot.jobs import JobCancellation
+
+    cancellation = JobCancellation(job_id="t", event=asyncio.Event())
+    cancellation.event.set()
+
+    part = tmp_path / "audio_part1.mp3"
+    part.write_bytes(b"x")
+
+    source = tmp_path / "audio.mp3"
+    source.write_bytes(b"x" * 100)
+
+    api_called = {"n": 0}
+
+    def fake_transcribe(_path, _key, language=None, prompt=None):
+        api_called["n"] += 1
+        return "should not be called"
+
+    result = pipeline.transcribe_mp3_file(
+        str(source),
+        str(tmp_path),
+        cancellation=cancellation,
+        get_api_key_fn=lambda: "groq",
+        get_claude_api_key_fn=lambda: "",
+        split_mp3_fn=lambda *_args, **_kwargs: [str(part)],
+        get_part_number_fn=lambda _filename: 1,
+        transcribe_audio_fn=fake_transcribe,
+        post_process_transcript_fn=lambda text, api_key=None: None,
+        estimate_token_count_fn=lambda text: len(text),
+        is_text_too_long_for_correction_fn=lambda _text: False,
+        rmtree_fn=lambda _path: None,
+    )
+
+    # API must NOT be called for any chunk when cancellation is already set.
+    assert api_called["n"] == 0
+    # Result must indicate cancel (None or "cancelled"/"anulowano" string).
+    assert result is None or "anulowano" in str(result).lower() or "cancelled" in str(result).lower()

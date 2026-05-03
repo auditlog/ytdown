@@ -6,7 +6,10 @@ import asyncio
 import os
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
+
+if TYPE_CHECKING:
+    from bot.jobs import JobCancellation
 
 from bot.transcription_limits import is_text_too_long_for_summary
 from bot.transcription_pipeline import transcribe_mp3_file
@@ -45,8 +48,13 @@ async def run_transcription_with_progress(
     output_dir: str,
     executor: Any,
     status_callback: Callable[[str], Any],
+    cancellation: "JobCancellation | None" = None,
 ) -> str | None:
-    """Run the MP3 transcription pipeline and forward progress updates."""
+    """Run the MP3 transcription pipeline and forward progress updates.
+
+    When cancellation is provided, it propagates to transcribe_mp3_file
+    so chunk-level polling can stop processing early.
+    """
 
     current_status = {"text": ""}
 
@@ -56,7 +64,13 @@ async def run_transcription_with_progress(
     loop = asyncio.get_event_loop()
     future = loop.run_in_executor(
         executor,
-        lambda: transcribe_mp3_file(source_path, output_dir, progress_callback, language=None),
+        lambda: transcribe_mp3_file(
+            source_path,
+            output_dir,
+            progress_callback,
+            language=None,
+            cancellation=cancellation,
+        ),
     )
 
     last_status = ""

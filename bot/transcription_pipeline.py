@@ -6,6 +6,10 @@ import logging
 import os
 import shutil
 import time
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from bot.jobs import JobCancellation
 
 from bot.transcription_chunking import get_part_number, split_mp3
 from bot.transcription_limits import estimate_token_count, is_text_too_long_for_correction
@@ -23,6 +27,7 @@ def transcribe_mp3_file(
     progress_callback=None,
     language=None,
     *,
+    cancellation: "JobCancellation | None" = None,
     get_api_key_fn=get_api_key,
     get_claude_api_key_fn=get_claude_api_key,
     split_mp3_fn=split_mp3,
@@ -33,7 +38,11 @@ def transcribe_mp3_file(
     is_text_too_long_for_correction_fn=is_text_too_long_for_correction,
     rmtree_fn=shutil.rmtree,
 ):
-    """Transcribe an MP3 file, splitting and post-processing when needed."""
+    """Transcribe an MP3 file, splitting and post-processing when needed.
+
+    When ``cancellation.event`` becomes set between chunks, processing
+    stops and the function returns None (no transcription text).
+    """
 
     api_key = get_api_key_fn()
     if not api_key:
@@ -60,6 +69,10 @@ def transcribe_mp3_file(
     logging.info("Found %s part files to transcribe.", total_parts)
 
     for index, part_path in enumerate(part_files):
+        if cancellation is not None and cancellation.event.is_set():
+            logging.info("Transcription cancelled before part %s", index + 1)
+            return None
+
         part_num = index + 1
         part_size_mb = os.path.getsize(part_path) / (1024 * 1024)
         logging.info("Transcribing file %s/%s: %s", part_num, total_parts, part_path)

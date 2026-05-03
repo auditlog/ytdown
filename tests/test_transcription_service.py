@@ -33,7 +33,7 @@ def test_run_transcription_with_progress_returns_transcript_path(monkeypatch, tm
     monkeypatch.setattr(
         ts,
         "transcribe_mp3_file",
-        lambda source_path, output_dir, progress_callback, language=None: (
+        lambda source_path, output_dir, progress_callback, language=None, cancellation=None: (
             progress_callback("step 1"),
             str(tmp_path / "audio_transcript.md"),
         )[1],
