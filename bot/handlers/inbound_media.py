@@ -263,16 +263,15 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             message_text = await loop.run_in_executor(executor, normalize_url, message_text)
 
     if not validate_url(message_text):
+        from bot.platforms import PLATFORMS
+
+        platform_lines = "\n".join(
+            f"- {p.display_name} ({p.domains[0]})" for p in PLATFORMS
+        )
         await update.message.reply_text(
             "Nieprawidłowy URL!\n\n"
             "Obsługiwane platformy:\n"
-            "- YouTube (youtube.com, youtu.be)\n"
-            "- Vimeo (vimeo.com)\n"
-            "- TikTok (tiktok.com)\n"
-            "- Instagram (instagram.com)\n"
-            "- LinkedIn (linkedin.com)\n"
-            "- Castbox (castbox.fm)\n"
-            "- Spotify podcasty (open.spotify.com/episode)"
+            f"{platform_lines}"
         )
         return
 
@@ -483,7 +482,10 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
     estimated_size = estimate_file_size(info)
     size_warning = ""
 
-    is_podcast = platform in ("castbox", "spotify")
+    from bot.platforms import get_platform
+
+    config = get_platform(platform)
+    is_podcast = config.is_podcast if config else False
     large_file = bool(estimated_size and estimated_size > MAX_FILE_SIZE_MB)
     if large_file:
         size_warning = (

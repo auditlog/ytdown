@@ -18,9 +18,14 @@ def escape_md(text: str) -> str:
 def build_main_keyboard(platform: str, large_file: bool = False) -> list:
     """Build the main format selection keyboard for a detected platform."""
 
-    is_podcast = platform in ("castbox", "spotify")
-    hide_flac = platform in ("tiktok", "castbox", "spotify")
-    hide_time_range = platform in ("tiktok", "castbox", "spotify")
+    from bot.platforms import get_platform
+
+    config = get_platform(platform)
+    if config is None:
+        raise ValueError(f"Unknown platform in session: {platform!r}")
+    is_podcast = config.is_podcast
+    hide_flac = config.hide_flac
+    hide_time_range = config.hide_time_range
 
     if is_podcast:
         return [

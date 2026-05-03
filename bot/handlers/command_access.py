@@ -29,6 +29,20 @@ from bot.session_context import (
     clear_transient_flow_state as _clear_transient_flow_state,
     get_auth_state as _get_auth_state,
 )
+from bot.platforms import PLATFORMS
+
+
+def _format_supported_platforms_block() -> str:
+    """Return a newline-joined bullet list of platforms for help messages."""
+
+    return "\n".join(f"- {p.display_name} ({p.domains[0]})" for p in PLATFORMS)
+
+
+def _format_cookies_required_names() -> str:
+    """Return a comma-separated list of platforms that typically need cookies.txt."""
+
+    names = [p.display_name for p in PLATFORMS if p.requires_cookies]
+    return ", ".join(names)
 
 
 async def process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
@@ -218,15 +232,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "3. Obsługiwane formaty audio: OGG, MP3, M4A, WAV, FLAC, OPUS\n"
         "4. Obsługiwane formaty video: MP4, MOV, MKV, AVI, WEBM\n\n"
         "🌐 *Obsługiwane platformy:*\n"
-        "- YouTube (youtube.com, youtu.be)\n"
-        "- Vimeo (vimeo.com)\n"
-        "- TikTok (tiktok.com)\n"
-        "- Instagram (instagram.com)\n"
-        "- LinkedIn (linkedin.com)\n"
-        "- Castbox (castbox.fm)\n"
-        "- Spotify podcasty (open.spotify.com/episode)\n\n"
+        f"{_format_supported_platforms_block()}\n\n"
         "🔒 *Platformy wymagające logowania:*\n"
-        "TikTok, Instagram i LinkedIn mogą wymagać pliku cookies.txt\n"
+        f"{_format_cookies_required_names()} mogą wymagać pliku cookies.txt\n"
         "do pobierania treści z ograniczonym dostępem.\n\n"
         "Komendy administracyjne:\n"
         "- /status - sprawdź przestrzeń dyskową\n"
@@ -274,7 +282,7 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         cookie_size = os.path.getsize(COOKIES_FILE)
         status_msg += f"\n**cookies.txt:** ✅ ({cookie_size} B)\n"
     else:
-        status_msg += "\n**cookies.txt:** ❌ brak (TikTok/Instagram/LinkedIn mogą wymagać)\n"
+        status_msg += f"\n**cookies.txt:** ❌ brak ({_format_cookies_required_names()} mogą wymagać)\n"
 
     await update.message.reply_text(status_msg, parse_mode="Markdown")
 

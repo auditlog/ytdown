@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable
 
+from bot.platforms import PLATFORMS
 from bot.security_limits import BLOCK_TIME, MAX_ATTEMPTS
 from bot.security_pin import (
     clear_failed_attempts,
@@ -18,6 +19,12 @@ from bot.security_pin import (
     is_user_blocked,
     register_pin_failure,
 )
+
+
+def _platforms_inline_list() -> str:
+    """Return comma-separated display names for inline sentences."""
+
+    return ", ".join(p.display_name for p in PLATFORMS)
 
 
 @dataclass
@@ -100,7 +107,7 @@ def handle_start(
         return StartResult(
             message=(
                 f"Witaj, {user_name}!\n\n"
-                "Jesteś już zalogowany. Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
+                f"Jesteś już zalogowany. Wyślij link ({_platforms_inline_list()}) "
                 "aby pobrać film lub audio."
             )
         )
@@ -178,7 +185,7 @@ def handle_pin_input(
             handled=True,
             message=(
                 "PIN poprawny! Możesz teraz korzystać z bota.\n\n"
-                "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Castbox, Spotify) "
+                f"Wyślij link ({_platforms_inline_list()}) "
                 "aby pobrać film lub audio."
             ),
             delete_message=True,
