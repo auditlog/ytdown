@@ -13,7 +13,8 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from bot.config import DOWNLOAD_PATH
-from bot.security_limits import PLAYLIST_ARCHIVE_RETENTION_MIN
+from bot.jobs import job_registry
+from bot.security_limits import JOB_DEAD_AGE_HOURS, PLAYLIST_ARCHIVE_RETENTION_MIN
 
 
 def cleanup_old_files(directory, max_age_hours=24):
@@ -260,6 +261,42 @@ def _purge_archived_deliveries(retention_min: int) -> int:
     return removed
 
 
+def _purge_dead_jobs(retention_hours: int) -> int:
+    """Remove zombie entries from JobRegistry older than retention_hours.
+
+    Delegates to JobRegistry.purge_dead which logs each removed entry
+    at WARNING level so stale jobs are visible in the audit trail.
+    """
+
+    return job_registry.purge_dead(timedelta(hours=retention_hours))
+
+
+def _purge_partial_archive_workspaces(retention_min: int) -> int:
+    """Drop partial_archive_workspaces entries older than retention_min.
+
+    In-memory state only — the on-disk workspace (if any) is already
+    handled by _purge_archive_workspaces which scans chat directories.
+    """
+
+    from bot.session_store import partial_archive_workspaces
+
+    cutoff = datetime.now() - timedelta(minutes=retention_min)
+    removed = 0
+    for chat_id in list(partial_archive_workspaces):
+        bucket = partial_archive_workspaces.get(chat_id) or {}
+        for token in list(bucket):
+            state = bucket[token]
+            if state.created_at >= cutoff:
+                continue
+            bucket.pop(token, None)
+            removed += 1
+        if not bucket:
+            partial_archive_workspaces.pop(chat_id, None)
+        else:
+            partial_archive_workspaces[chat_id] = bucket
+    return removed
+
+
 def periodic_cleanup():
     """
     Function run periodically in separate thread.
@@ -285,6 +322,8 @@ def periodic_cleanup():
                     _purge_archive_workspaces(chat_dir, PLAYLIST_ARCHIVE_RETENTION_MIN)
             _purge_pending_archive_jobs(PLAYLIST_ARCHIVE_RETENTION_MIN)
             _purge_archived_deliveries(PLAYLIST_ARCHIVE_RETENTION_MIN)
+            _purge_dead_jobs(JOB_DEAD_AGE_HOURS)
+            _purge_partial_archive_workspaces(PLAYLIST_ARCHIVE_RETENTION_MIN)
 
         except Exception as e:
             logging.error("Error during periodic cleanup: %s", e)

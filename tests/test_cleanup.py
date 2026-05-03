@@ -263,3 +263,52 @@ def test_purge_archived_deliveries_removes_old_entries(tmp_path):
 
     assert archived_deliveries.get(1, {}).get("old") is None
     session_store.reset()
+
+
+def test_purge_dead_jobs_called_in_periodic_cleanup(monkeypatch):
+    """periodic_cleanup invokes job_registry.purge_dead with 6h threshold."""
+
+    from datetime import timedelta
+    from bot import cleanup
+    from bot.jobs import JobRegistry
+
+    test_registry = JobRegistry()
+    monkeypatch.setattr(cleanup, "job_registry", test_registry)
+    captured = {}
+
+    def fake_purge(threshold):
+        captured["threshold"] = threshold
+        return 0
+
+    monkeypatch.setattr(test_registry, "purge_dead", fake_purge)
+
+    # Drive one iteration of the loop body without sleeping for an hour.
+    cleanup._purge_dead_jobs(retention_hours=6)
+
+    assert captured["threshold"] == timedelta(hours=6)
+
+
+def test_purge_partial_archive_workspaces_removes_old(tmp_path, monkeypatch):
+    from datetime import datetime, timedelta
+    from pathlib import Path
+    from bot import cleanup
+    from bot.session_store import (
+        ArchivePartialState,
+        partial_archive_workspaces,
+        session_store,
+    )
+
+    session_store.reset()
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    state = ArchivePartialState(
+        workspace=workspace, downloaded=[], title="x",
+        media_type="audio", format_choice="mp3", use_mtproto=False,
+        created_at=datetime.now() - timedelta(hours=2),
+    )
+    partial_archive_workspaces[1] = {"old": state}
+
+    cleanup._purge_partial_archive_workspaces(retention_min=60)
+
+    assert partial_archive_workspaces.get(1, {}).get("old") is None
+    session_store.reset()
