@@ -33,6 +33,13 @@ def mtproto_unavailability_reason() -> str | None:
         has_pyrogram = True
     except ImportError:
         has_pyrogram = False
+    except Exception as exc:
+        # pyrogram <2.x calls asyncio.get_event_loop() at import time which
+        # raises RuntimeError on Python 3.12+ when no loop is running. Treat
+        # any other import-time failure as "not usable" rather than crashing
+        # the surrounding handler.
+        logging.warning("pyrogram import failed: %s", exc)
+        has_pyrogram = False
 
     has_creds = bool(get_runtime_value("TELEGRAM_API_ID")) and bool(
         get_runtime_value("TELEGRAM_API_HASH")
