@@ -4,6 +4,7 @@ Unit tests for bot.mtproto — MTProto large file transfer module.
 
 import asyncio
 import os
+from unittest import mock
 from unittest.mock import patch, AsyncMock, MagicMock
 
 from bot.mtproto import (
@@ -394,3 +395,47 @@ def test_send_document_mtproto_invokes_send_document(tmp_path, monkeypatch):
     assert captured["send_kwargs"]["document"] == str(src)
     assert captured["send_kwargs"]["caption"] == "part 1"
     assert captured["send_kwargs"]["file_name"] == "playlist.7z.001"
+
+
+def test_send_video_mtproto_attaches_task_to_cancellation(tmp_path, monkeypatch):
+    import asyncio
+    import sys
+    from bot import mtproto
+    from bot.jobs import JobCancellation
+
+    src = tmp_path / "vid.mp4"
+    src.write_bytes(b"x" * 1024)
+
+    values = {
+        "TELEGRAM_API_ID": "12345",
+        "TELEGRAM_API_HASH": "abc",
+        "TELEGRAM_BOT_TOKEN": "token",
+    }
+    monkeypatch.setattr(
+        mtproto, "get_runtime_value",
+        lambda key, default="": values.get(key, default),
+    )
+
+    cancellation = JobCancellation(job_id="t", event=asyncio.Event())
+    captured = {}
+
+    class FakeClient:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *exc): return False
+        async def send_video(self, **kwargs):
+            # Snapshot cancellation.pyrogram_task during upload.
+            captured["task"] = cancellation.pyrogram_task
+
+    monkeypatch.setattr(mtproto, "_build_client", lambda *a, **kw: FakeClient())
+    # Stub pyrogram import so the guard passes.
+    monkeypatch.setitem(sys.modules, "pyrogram", mock.MagicMock())
+
+    asyncio.run(
+        mtproto.send_video_mtproto(
+            chat_id=42, file_path=str(src), caption="x",
+            cancellation=cancellation,
+        )
+    )
+
+    assert captured["task"] is not None
+    assert isinstance(captured["task"], asyncio.Task)
