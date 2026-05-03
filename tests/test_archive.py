@@ -213,3 +213,109 @@ def test_pack_to_volumes_real_7z_small_volumes(tmp_path):
     assert len(result) >= 3
     assert all(p.exists() for p in result)
     assert all(p.name.startswith("intg.7z.") for p in result)
+
+
+def test_pack_to_volumes_attaches_process_to_cancellation(tmp_path, monkeypatch):
+    from bot import archive
+    from bot.jobs import JobCancellation
+    import asyncio
+
+    src = tmp_path / "a.bin"
+    src.write_bytes(b"x")
+    dest = tmp_path / "out"
+
+    captured_cancellation = JobCancellation(job_id="t", event=asyncio.Event())
+
+    completed = mock.AsyncMock()
+    completed.communicate = mock.AsyncMock(return_value=(b"", b""))
+    completed.returncode = 0
+
+    async def fake_exec(*args, **kwargs):
+        # Simulate completed pack with one volume.
+        (tmp_path / "out.7z.001").write_bytes(b"v")
+        return completed
+
+    with mock.patch("bot.archive.asyncio.create_subprocess_exec", side_effect=fake_exec):
+        asyncio.run(
+            archive.pack_to_volumes(
+                [src], dest, volume_size_mb=1, cancellation=captured_cancellation,
+            )
+        )
+
+    # During run cancellation.process was set to the subprocess.
+    assert captured_cancellation.process is completed
+
+
+def test_pack_to_volumes_terminates_on_cancel(tmp_path):
+    from bot import archive
+    from bot.jobs import JobCancellation
+    import asyncio
+
+    src = tmp_path / "a.bin"
+    src.write_bytes(b"x")
+    dest = tmp_path / "out"
+
+    cancellation = JobCancellation(job_id="t", event=asyncio.Event())
+    cancellation.event.set()  # already cancelled
+
+    fake_proc = mock.MagicMock()
+    fake_proc.communicate = mock.AsyncMock(return_value=(b"", b""))
+    fake_proc.returncode = 0
+    fake_proc.terminate = mock.MagicMock()
+    fake_proc.kill = mock.MagicMock()
+    fake_proc.wait = mock.AsyncMock(return_value=0)
+    # Empty stdout so _stream_7z_progress exits quickly.
+    fake_proc.stdout = mock.MagicMock()
+    fake_proc.stdout.readline = mock.AsyncMock(return_value=b"")
+
+    async def fake_exec(*args, **kwargs):
+        return fake_proc
+
+    with mock.patch("bot.archive.asyncio.create_subprocess_exec", side_effect=fake_exec):
+        with pytest.raises(RuntimeError, match="cancelled"):
+            asyncio.run(
+                archive.pack_to_volumes(
+                    [src], dest, volume_size_mb=1, cancellation=cancellation,
+                )
+            )
+
+    fake_proc.terminate.assert_called_once()
+
+
+def test_pack_to_volumes_cleans_partial_volumes_on_cancel(tmp_path):
+    from bot import archive
+    from bot.jobs import JobCancellation
+    import asyncio
+
+    src = tmp_path / "a.bin"
+    src.write_bytes(b"x")
+    dest = tmp_path / "playlist"
+    cancellation = JobCancellation(job_id="t", event=asyncio.Event())
+    cancellation.event.set()
+
+    fake_proc = mock.MagicMock()
+    fake_proc.communicate = mock.AsyncMock(return_value=(b"", b""))
+    fake_proc.returncode = 0
+    fake_proc.terminate = mock.MagicMock()
+    fake_proc.kill = mock.MagicMock()
+    fake_proc.wait = mock.AsyncMock(return_value=0)
+    fake_proc.stdout = mock.MagicMock()
+    fake_proc.stdout.readline = mock.AsyncMock(return_value=b"")
+
+    async def fake_exec(*args, **kwargs):
+        # Pretend two volumes started writing before terminate.
+        (tmp_path / "playlist.7z.001").write_bytes(b"a")
+        (tmp_path / "playlist.7z.002").write_bytes(b"b")
+        return fake_proc
+
+    with mock.patch("bot.archive.asyncio.create_subprocess_exec", side_effect=fake_exec):
+        with pytest.raises(RuntimeError, match="cancelled"):
+            asyncio.run(
+                archive.pack_to_volumes(
+                    [src], dest, volume_size_mb=1, cancellation=cancellation,
+                )
+            )
+
+    # Partial volumes must be cleaned up.
+    assert not (tmp_path / "playlist.7z.001").exists()
+    assert not (tmp_path / "playlist.7z.002").exists()

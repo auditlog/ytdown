@@ -14,9 +14,12 @@ import unicodedata
 from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
-from typing import Awaitable
+from typing import TYPE_CHECKING, Awaitable
 
 from bot.security_limits import BOTAPI_VOLUME_SIZE_MB, MTPROTO_VOLUME_SIZE_MB
+
+if TYPE_CHECKING:
+    from bot.jobs import JobCancellation
 
 
 def volume_size_for(use_mtproto: bool) -> int:
@@ -65,11 +68,16 @@ async def pack_to_volumes(
     volume_size_mb: int,
     *,
     progress_cb: Callable[[str], Awaitable[None]] | None = None,
+    cancellation: "JobCancellation | None" = None,
 ) -> list[Path]:
     """Pack ``sources`` into a 7z multi-volume archive at ``dest_basename``.
 
+    When ``cancellation`` is provided, the spawned 7z process is attached
+    to it so a /stop signal can terminate it. On cancellation the partial
+    .7z.NNN volumes are removed and RuntimeError("cancelled") is raised.
+
     Resulting volumes are named ``<dest_basename>.7z.001``, ``.002`` etc.
-    Returns the sorted list of created volume paths.
+    Returns the sorted list of created volume paths on success.
 
     The 7z process is invoked with ``-t7z -v<size>m -mx0 -mmt=on`` because:
     - the inputs are already-compressed media (mp3/mp4/m4a), so further
@@ -79,6 +87,7 @@ async def pack_to_volumes(
     Raises:
         ValueError: when ``sources`` is empty.
         RuntimeError: when 7z exits with a non-zero status.
+        RuntimeError("cancelled"): when the job is cancelled via ``cancellation``.
     """
 
     if not sources:
@@ -86,12 +95,7 @@ async def pack_to_volumes(
 
     archive_path = dest_basename.with_suffix(".7z")
     args = [
-        "7z",
-        "a",
-        "-t7z",
-        f"-v{volume_size_mb}m",
-        "-mx0",
-        "-mmt=on",
+        "7z", "a", "-t7z", f"-v{volume_size_mb}m", "-mx0", "-mmt=on",
         str(archive_path),
         *[str(src) for src in sources],
     ]
@@ -102,14 +106,27 @@ async def pack_to_volumes(
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+    if cancellation is not None:
+        cancellation.process = process
 
-    if progress_cb is not None:
-        await _stream_7z_progress(process, progress_cb)
+    try:
+        if progress_cb is not None:
+            await _stream_7z_progress(process, progress_cb, cancellation)
 
-    stdout, stderr = await process.communicate()
-    if process.returncode != 0:
-        err = stderr.decode("utf-8", errors="replace")[:200]
-        raise RuntimeError(f"7z failed (exit {process.returncode}): {err}")
+        # If user cancelled before/during stdout streaming, terminate now.
+        if cancellation is not None and cancellation.event.is_set():
+            await _terminate_with_grace(process)
+            _remove_partial_volumes(dest_basename)
+            raise RuntimeError("cancelled")
+
+        stdout, stderr = await process.communicate()
+        if process.returncode != 0:
+            err = stderr.decode("utf-8", errors="replace")[:200]
+            raise RuntimeError(f"7z failed (exit {process.returncode}): {err}")
+    except asyncio.CancelledError:
+        await _terminate_with_grace(process)
+        _remove_partial_volumes(dest_basename)
+        raise
 
     parent = dest_basename.parent
     prefix = f"{archive_path.name}."
@@ -121,11 +138,55 @@ async def pack_to_volumes(
     return volumes
 
 
+async def _terminate_with_grace(process: asyncio.subprocess.Process) -> None:
+    """SIGTERM → grace period → SIGKILL fallback for a 7z subprocess.
+
+    Uses JOB_TERMINATE_GRACE_SEC from security_limits so the grace
+    window stays consistent with cancel_async in JobRegistry.
+    ProcessLookupError is swallowed — the process may have already exited.
+    """
+
+    from bot.security_limits import JOB_TERMINATE_GRACE_SEC
+
+    try:
+        process.terminate()
+        try:
+            await asyncio.wait_for(process.wait(), timeout=JOB_TERMINATE_GRACE_SEC)
+        except asyncio.TimeoutError:
+            logging.warning("7z SIGTERM grace expired, sending SIGKILL")
+            process.kill()
+            await process.wait()
+    except ProcessLookupError:
+        pass
+
+
+def _remove_partial_volumes(dest_basename: Path) -> None:
+    """Delete any <dest>.7z.NNN files left after a cancelled pack.
+
+    Only files whose suffix after the last dot consists entirely of digits
+    are considered volumes (e.g. ``.001``, ``.002``).
+    """
+
+    archive_name = dest_basename.with_suffix(".7z").name
+    prefix = f"{archive_name}."
+    for entry in dest_basename.parent.iterdir():
+        if entry.name.startswith(prefix) and entry.name[len(prefix):].isdigit():
+            try:
+                entry.unlink()
+            except OSError as exc:
+                logging.warning("Could not remove partial volume %s: %s", entry, exc)
+
+
 async def _stream_7z_progress(
     process: asyncio.subprocess.Process,
     progress_cb: Callable[[str], Awaitable[None]],
+    cancellation: "JobCancellation | None" = None,
 ) -> None:
-    """Throttle 7z stdout updates to one progress_cb call every 2 seconds."""
+    """Throttle 7z stdout updates to one progress_cb call every 2 seconds.
+
+    When ``cancellation`` is provided and its event becomes set, the loop
+    exits so the caller can terminate the subprocess.
+    """
 
     if process.stdout is None:
         return
@@ -133,6 +194,8 @@ async def _stream_7z_progress(
     last_update = 0.0
     loop = asyncio.get_running_loop()
     while True:
+        if cancellation is not None and cancellation.event.is_set():
+            return
         line = await process.stdout.readline()
         if not line:
             break
