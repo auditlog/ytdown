@@ -234,3 +234,28 @@ def test_archived_deliveries_field_holds_volume_state():
 
     assert archived_deliveries[42] == {"tok-z": delivery}
     session_store.reset()
+
+
+def test_partial_archive_workspaces_field_holds_state():
+    from bot.session_store import (
+        ArchivePartialState,
+        partial_archive_workspaces,
+        session_store,
+    )
+    from datetime import datetime
+    from pathlib import Path
+
+    session_store.reset()
+    state = ArchivePartialState(
+        workspace=Path("/tmp/ws"),
+        downloaded=[Path("/tmp/ws/a.mp3"), Path("/tmp/ws/b.mp3")],
+        title="My playlist",
+        media_type="audio",
+        format_choice="mp3",
+        use_mtproto=True,
+        created_at=datetime(2026, 5, 3, 10, 0, 0),
+    )
+    partial_archive_workspaces[55] = {"tok-1": state}
+
+    assert partial_archive_workspaces[55] == {"tok-1": state}
+    session_store.reset()

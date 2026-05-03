@@ -38,6 +38,24 @@ class ArchivedDeliveryState:
 
 
 @dataclass
+class ArchivePartialState:
+    """In-memory state for a cancelled-mid-flight playlist archive.
+
+    Captured by execute_playlist_archive_flow when a cancel signal arrives
+    after some entries downloaded; lets the user click [Spakuj co mam] to
+    package whatever was already pulled.
+    """
+
+    workspace: Any        # pathlib.Path
+    downloaded: list[Any] # list[Path]
+    title: str
+    media_type: str
+    format_choice: str
+    use_mtproto: bool
+    created_at: Any       # datetime
+
+
+@dataclass
 class SessionState:
     """Chat-scoped runtime state used by Telegram handlers."""
 
@@ -55,6 +73,7 @@ class SessionState:
     subtitle_pending: dict[str, Any] | None = None
     pending_archive_jobs: dict[str, "ArchiveJobState"] | None = None
     archived_deliveries: dict[str, "ArchivedDeliveryState"] | None = None
+    partial_archive_workspaces: dict[str, "ArchivePartialState"] | None = None
 
 
 @dataclass
@@ -191,6 +210,7 @@ class SessionStore:
             and session.subtitle_pending is None
             and session.pending_archive_jobs is None
             and session.archived_deliveries is None
+            and session.partial_archive_workspaces is None
         ):
             self._sessions.pop(chat_id, None)
 
@@ -237,6 +257,7 @@ user_playlist_data = SessionFieldMap(session_store, "playlist_data")
 download_progress = SessionFieldMap(session_store, "download_progress")
 pending_archive_jobs = SessionFieldMap(session_store, "pending_archive_jobs")
 archived_deliveries = SessionFieldMap(session_store, "archived_deliveries")
+partial_archive_workspaces = SessionFieldMap(session_store, "partial_archive_workspaces")
 
 
 class SecurityStore:
