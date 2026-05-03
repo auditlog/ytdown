@@ -700,7 +700,7 @@ async def _offer_archive_or_cancel(
 
 
 async def handle_archive_callback(update, context, data: str) -> None:
-    """Dispatch arc_split_/arc_cancel_/arc_resend_/arc_purge_ callbacks."""
+    """Dispatch arc_split_/arc_cancel_/arc_pack_partial_/arc_purge_partial_/arc_resend_/arc_purge_ callbacks."""
 
     chat_id = update.effective_chat.id
 
@@ -714,6 +714,21 @@ async def handle_archive_callback(update, context, data: str) -> None:
     if data.startswith("arc_cancel_"):
         token = data[len("arc_cancel_"):]
         await _handle_arc_cancel(update, chat_id, token)
+        return
+
+    # arc_pack_partial_ and arc_purge_partial_ must be matched before arc_purge_
+    # to avoid the shorter prefix swallowing the longer one.
+    if data.startswith("arc_pack_partial_"):
+        token = data[len("arc_pack_partial_"):]
+        from bot.services.archive_service import execute_partial_archive_flow
+        await execute_partial_archive_flow(
+            update, context, chat_id=chat_id, token=token,
+        )
+        return
+
+    if data.startswith("arc_purge_partial_"):
+        token = data[len("arc_purge_partial_"):]
+        await _handle_arc_purge_partial(update, chat_id, token)
         return
 
     if data.startswith("arc_resend_"):
@@ -808,3 +823,26 @@ async def _handle_arc_purge(update, chat_id: int, token: str) -> None:
         await update.callback_query.edit_message_text("Folder usunięty.")
     except Exception as exc:
         logging.debug("arc_purge edit failed: %s", exc)
+
+
+async def _handle_arc_purge_partial(update, chat_id: int, token: str) -> None:
+    from bot.session_store import partial_archive_workspaces
+
+    bucket = partial_archive_workspaces.get(chat_id) or {}
+    state = bucket.pop(token, None)
+    if not bucket:
+        partial_archive_workspaces.pop(chat_id, None)
+    else:
+        partial_archive_workspaces[chat_id] = bucket
+    if state is None:
+        try:
+            await update.callback_query.edit_message_text("Sesja wygasła.")
+        except Exception:
+            pass
+        return
+    if state.workspace.exists():
+        shutil.rmtree(state.workspace, ignore_errors=True)
+    try:
+        await update.callback_query.edit_message_text("Folder usunięty.")
+    except Exception as exc:
+        logging.debug("arc_purge_partial edit failed: %s", exc)

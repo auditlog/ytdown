@@ -515,6 +515,107 @@ async def _save_partial_state_after_cancel(
         logging.debug("partial-state edit failed: %s", exc)
 
 
+async def execute_partial_archive_flow(
+    update,
+    context,
+    *,
+    chat_id: int,
+    token: str,
+) -> None:
+    """Pack and send a previously-cancelled playlist's downloaded files.
+
+    Triggered by the [Spakuj co mam] button on a cancel-status message.
+    Reads ArchivePartialState from session_store, registers a fresh
+    archive_pack job, and runs pack_to_volumes + send_volumes.
+    """
+
+    bucket = partial_archive_workspaces.get(chat_id) or {}
+    state = bucket.get(token)
+    if state is None:
+        await _safe_status_edit(update, "Sesja wygasła.")
+        return
+
+    if not is_7z_available():
+        await _safe_status_edit(
+            update,
+            "Funkcja 7z niedostępna — administrator nie zainstalował p7zip-full.",
+        )
+        return
+
+    use_mtproto = mtproto_unavailability_reason() is None
+    volume_size_mb = volume_size_for(use_mtproto)
+
+    descriptor = JobDescriptor(
+        job_id="", chat_id=chat_id, kind="archive_pack",
+        label=f"Pakowanie częściowej playlisty ({state.title})",
+        started_at=datetime.now(),
+    )
+    cancellation = job_registry.register(chat_id, descriptor)
+
+    async def status(text: str) -> None:
+        await _safe_status_edit(update, text)
+
+    try:
+        await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
+        slug = _build_slug(state.title)
+        dest_basename = state.workspace / compute_archive_basename(
+            f"{slug}_{state.media_type}_{state.format_choice}", datetime.now()
+        )
+        volumes = await pack_to_volumes(
+            state.downloaded, dest_basename, volume_size_mb,
+            cancellation=cancellation,
+        )
+
+        if cancellation.event.is_set():
+            await status("⏹ Zatrzymano w trakcie pakowania.")
+            return
+
+        caption_prefix = f"{state.title} ({state.media_type} {state.format_choice})"
+        job_registry.update_label(
+            cancellation.job_id,
+            f"Wysyłka częściowej playlisty [0/{len(volumes)}]",
+        )
+        await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
+        await send_volumes(
+            context.bot, chat_id=chat_id, volumes=volumes,
+            caption_prefix=caption_prefix, use_mtproto=use_mtproto,
+            status_cb=status, cancellation=cancellation,
+        )
+
+        delivery = ArchivedDeliveryState(
+            workspace=state.workspace, volumes=volumes,
+            caption_prefix=caption_prefix, use_mtproto=use_mtproto,
+            created_at=datetime.now(),
+        )
+        delivery_token = register_archived_delivery(chat_id, delivery)
+
+        keyboard = InlineKeyboardMarkup([
+            [InlineKeyboardButton(
+                "Wyślij wszystkie paczki ponownie",
+                callback_data=f"arc_resend_{delivery_token}_0",
+            )],
+            [InlineKeyboardButton(
+                "Usuń teraz",
+                callback_data=f"arc_purge_{delivery_token}",
+            )],
+        ])
+        await update.callback_query.edit_message_text(
+            f"Częściowa playlista wysłana w {len(volumes)} paczkach.",
+            reply_markup=keyboard,
+        )
+    except Exception as exc:
+        logging.error("Partial archive flow failed: %s", exc)
+        await status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
+    finally:
+        # Consume partial state regardless of outcome.
+        bucket.pop(token, None)
+        if not bucket:
+            partial_archive_workspaces.pop(chat_id, None)
+        else:
+            partial_archive_workspaces[chat_id] = bucket
+        job_registry.unregister(cancellation.job_id)
+
+
 async def execute_single_file_archive_flow(
     update,
     context,

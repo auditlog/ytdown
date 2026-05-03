@@ -734,3 +734,55 @@ def test_execute_single_file_archive_flow_consumes_pending_job(tmp_path, monkeyp
     # File migrated into workspace and a volume produced + sent.
     assert len(sent) == 1
     session_store.reset()
+
+
+def test_execute_partial_archive_flow_packs_remaining(tmp_path, monkeypatch):
+    import asyncio
+    from datetime import datetime
+    from pathlib import Path
+    from bot.services import archive_service
+    from bot.session_store import (
+        ArchivePartialState,
+        partial_archive_workspaces,
+        session_store,
+    )
+
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    p1 = workspace / "a.mp3"; p1.write_bytes(b"x")
+    p2 = workspace / "b.mp3"; p2.write_bytes(b"x")
+
+    state = ArchivePartialState(
+        workspace=workspace, downloaded=[p1, p2],
+        title="Hits", media_type="audio", format_choice="mp3",
+        use_mtproto=False,
+        created_at=datetime(2026, 5, 3),
+    )
+    partial_archive_workspaces[44] = {"tok": state}
+
+    pack_called = mock.AsyncMock(return_value=[workspace / "out.7z.001"])
+    send_called = mock.AsyncMock()
+    monkeypatch.setattr(archive_service, "pack_to_volumes", pack_called)
+    monkeypatch.setattr(archive_service, "send_volumes", send_called)
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: "n/a")
+
+    update = mock.MagicMock()
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+    context.bot = mock.MagicMock()
+
+    asyncio.run(
+        archive_service.execute_partial_archive_flow(
+            update, context, chat_id=44, token="tok",
+        )
+    )
+
+    pack_called.assert_awaited_once()
+    send_called.assert_awaited_once()
+    # Partial state consumed.
+    assert partial_archive_workspaces.get(44, {}).get("tok") is None
+    session_store.reset()
