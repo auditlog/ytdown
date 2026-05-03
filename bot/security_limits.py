@@ -46,3 +46,12 @@ MAX_ARCHIVE_ITEM_SIZE_MB = 10240
 # after success, so the user can resend a single failed volume without
 # having to re-download the whole playlist.
 PLAYLIST_ARCHIVE_RETENTION_MIN = 60
+
+# Cleanup of stale (zombie) entries in JobRegistry. Defends /stop list
+# against operations that never unregistered due to bugs or crashes.
+JOB_DEAD_AGE_HOURS = 6
+
+# Grace between SIGTERM and SIGKILL when terminating a 7z subprocess
+# attached to a JobCancellation. Long enough for 7z to finish writing
+# its current 1 MiB block, short enough to not block /stop UX.
+JOB_TERMINATE_GRACE_SEC = 1.0

@@ -411,3 +411,17 @@ def test_playlist_archive_retention_defined():
     # Retention must expire before the 24h cleanup safety net so workspaces
     # eligible for retry never collide with the daily eviction.
     assert security_limits.PLAYLIST_ARCHIVE_RETENTION_MIN < 24 * 60
+
+
+def test_job_dead_age_constant_defined():
+    from bot import security_limits
+
+    assert security_limits.JOB_DEAD_AGE_HOURS == 6
+    assert security_limits.JOB_DEAD_AGE_HOURS > 0
+
+
+def test_job_terminate_grace_constant_defined():
+    from bot import security_limits
+
+    assert security_limits.JOB_TERMINATE_GRACE_SEC == 1.0
+    assert 0 < security_limits.JOB_TERMINATE_GRACE_SEC <= 5.0
