@@ -121,3 +121,106 @@ def test_global_singleton_is_jobregistry():
     from bot.jobs import JobRegistry, job_registry
 
     assert isinstance(job_registry, JobRegistry)
+
+
+def test_cancel_sets_event_and_returns_true():
+    from bot.jobs import JobRegistry
+
+    registry = JobRegistry()
+    c = registry.register(1, _descriptor())
+
+    result = registry.cancel(c.job_id, reason="test")
+
+    assert result is True
+    assert c.event.is_set() is True
+    assert c.cancelled_reason == "test"
+
+
+def test_cancel_unknown_returns_false():
+    from bot.jobs import JobRegistry
+
+    registry = JobRegistry()
+    result = registry.cancel("nonexistent")
+
+    assert result is False
+
+
+def test_cancel_terminates_attached_subprocess(monkeypatch):
+    from bot.jobs import JobRegistry
+
+    registry = JobRegistry()
+    c = registry.register(1, _descriptor())
+
+    fake_process = mock.MagicMock()
+    fake_process.terminate = mock.MagicMock()
+    fake_process.wait = mock.AsyncMock(return_value=0)
+    fake_process.returncode = None
+    fake_process.kill = mock.MagicMock()
+    c.process = fake_process
+
+    asyncio.run(registry.cancel_async(c.job_id, reason="t"))
+
+    fake_process.terminate.assert_called_once()
+    fake_process.kill.assert_not_called()
+
+
+def test_cancel_kills_subprocess_when_terminate_times_out():
+    from bot.jobs import JobRegistry
+    from bot.security_limits import JOB_TERMINATE_GRACE_SEC
+
+    registry = JobRegistry()
+    c = registry.register(1, _descriptor())
+
+    fake_process = mock.MagicMock()
+    fake_process.terminate = mock.MagicMock()
+    fake_process.wait = mock.AsyncMock(side_effect=asyncio.TimeoutError())
+    fake_process.kill = mock.MagicMock()
+    c.process = fake_process
+
+    asyncio.run(registry.cancel_async(c.job_id, reason="t"))
+
+    fake_process.terminate.assert_called_once()
+    fake_process.kill.assert_called_once()
+
+
+def test_cancel_cancels_attached_pyrogram_task():
+    from bot.jobs import JobRegistry
+
+    registry = JobRegistry()
+    c = registry.register(1, _descriptor())
+
+    fake_task = mock.MagicMock()
+    fake_task.done = mock.MagicMock(return_value=False)
+    fake_task.cancel = mock.MagicMock()
+    c.pyrogram_task = fake_task
+
+    asyncio.run(registry.cancel_async(c.job_id, reason="t"))
+
+    fake_task.cancel.assert_called_once()
+
+
+def test_cancel_skips_already_done_pyrogram_task():
+    from bot.jobs import JobRegistry
+
+    registry = JobRegistry()
+    c = registry.register(1, _descriptor())
+
+    fake_task = mock.MagicMock()
+    fake_task.done = mock.MagicMock(return_value=True)
+    fake_task.cancel = mock.MagicMock()
+    c.pyrogram_task = fake_task
+
+    asyncio.run(registry.cancel_async(c.job_id, reason="t"))
+
+    fake_task.cancel.assert_not_called()
+
+
+def test_cancelled_reason_propagates():
+    from bot.jobs import JobRegistry
+
+    registry = JobRegistry()
+    c = registry.register(1, _descriptor())
+
+    registry.cancel(c.job_id, reason="user via /stop")
+
+    assert c.cancelled_reason == "user via /stop"

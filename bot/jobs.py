@@ -117,6 +117,59 @@ class JobRegistry:
                 descriptor.chat_id, descriptor.kind, job_id,
             )
 
+    def cancel(self, job_id: str, reason: str = "user via /stop") -> bool:
+        """Sync cancel: set the event + reason. Subprocess/task teardown happens
+        in cancel_async (called by the /stop handler which is async).
+
+        Returns True if the job was registered and signalled, False otherwise.
+        """
+
+        with self._lock:
+            cancellation = self._cancellations.get(job_id)
+            if cancellation is None:
+                return False
+            cancellation.cancelled_reason = reason
+            cancellation.event.set()
+        logging.info("job cancel: id=%s reason=%r", job_id, reason)
+        return True
+
+    async def cancel_async(self, job_id: str, reason: str = "user via /stop") -> bool:
+        """Async cancel: also terminates an attached subprocess and cancels an
+        attached pyrogram_task. Used by the /stop callback handler."""
+
+        from bot.security_limits import JOB_TERMINATE_GRACE_SEC
+
+        with self._lock:
+            cancellation = self._cancellations.get(job_id)
+            if cancellation is None:
+                return False
+            cancellation.cancelled_reason = reason
+            cancellation.event.set()
+            process = cancellation.process
+            task = cancellation.pyrogram_task
+
+        if process is not None:
+            try:
+                process.terminate()
+                try:
+                    await asyncio.wait_for(
+                        process.wait(), timeout=JOB_TERMINATE_GRACE_SEC,
+                    )
+                except asyncio.TimeoutError:
+                    logging.warning(
+                        "job %s: SIGTERM grace expired, sending SIGKILL", job_id,
+                    )
+                    process.kill()
+            except ProcessLookupError:
+                # Already exited — nothing to do.
+                pass
+
+        if task is not None and not task.done():
+            task.cancel()
+
+        logging.info("job cancel_async done: id=%s reason=%r", job_id, reason)
+        return True
+
 
 # Global singleton consumed by handlers/services.
 job_registry = JobRegistry()
