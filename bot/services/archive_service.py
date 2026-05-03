@@ -16,7 +16,10 @@ import shutil
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import TYPE_CHECKING, Any, Awaitable, Callable
+
+if TYPE_CHECKING:
+    from bot.jobs import JobCancellation
 
 from bot.archive import (
     compute_archive_basename,
@@ -159,13 +162,17 @@ async def download_playlist_into(
     format_choice: str,
     executor: ThreadPoolExecutor,
     status_cb: Callable[[str], Awaitable[None]],
+    cancellation: "JobCancellation | None" = None,
 ) -> tuple[list[Path], list[str]]:
     """Download every entry into workspace, keeping the files (no os.remove).
 
+    When ``cancellation.event`` becomes set, the loop breaks early; titles
+    of entries that didn't run get ``" (anulowano)"`` suffix in failed_titles.
+
     Returns (downloaded_paths, failed_titles). Items exceeding the
     MAX_ARCHIVE_ITEM_SIZE_MB cap are reported on failed_titles with a
-    ``(za duzy: X MB)`` suffix. Network failures are similarly recorded
-    with the original title.
+    ``(za duzy: X MB)`` suffix. Network failures are recorded with the
+    original title.
     """
 
     downloaded: list[Path] = []
@@ -174,6 +181,10 @@ async def download_playlist_into(
 
     for idx, entry in enumerate(entries, 1):
         title = entry.get("title", f"item_{idx}")
+        if cancellation is not None and cancellation.event.is_set():
+            for skipped in entries[idx - 1:]:
+                failed.append(f"{skipped.get('title', '?')} (anulowano)")
+            break
         await status_cb(f"[{idx}/{total}] Pobieranie: {title}...")
         try:
             path, size = await _download_one_into_workspace(

@@ -489,6 +489,45 @@ def test_execute_playlist_archive_flow_aborts_when_no_items_succeed(tmp_path, mo
     session_store.reset()
 
 
+def test_download_playlist_into_breaks_on_cancel(tmp_path, monkeypatch):
+    import asyncio
+    from bot.services import archive_service
+    from bot.jobs import JobCancellation
+
+    workspace = tmp_path / "pl_x"
+    workspace.mkdir()
+
+    cancellation = JobCancellation(job_id="t", event=asyncio.Event())
+    iter_count = {"n": 0}
+
+    async def fake_run(entry, workspace_path, **kwargs):
+        iter_count["n"] += 1
+        if iter_count["n"] == 2:
+            cancellation.event.set()
+        produced = workspace_path / f"{entry['title']}.bin"
+        produced.write_bytes(b"x")
+        return produced, 0.5
+
+    monkeypatch.setattr(archive_service, "_download_one_into_workspace", fake_run)
+
+    entries = [
+        {"url": "u1", "title": "first"},
+        {"url": "u2", "title": "second"},
+        {"url": "u3", "title": "third"},
+    ]
+
+    paths, failed = asyncio.run(
+        archive_service.download_playlist_into(
+            workspace, entries, media_type="audio", format_choice="mp3",
+            executor=mock.MagicMock(), status_cb=mock.AsyncMock(),
+            cancellation=cancellation,
+        )
+    )
+
+    assert {p.name for p in paths} == {"first.bin", "second.bin"}
+    assert any("anulowano" in t.lower() for t in failed)
+
+
 def test_execute_single_file_archive_flow_consumes_pending_job(tmp_path, monkeypatch):
     from bot.services import archive_service
     from bot.session_store import (
