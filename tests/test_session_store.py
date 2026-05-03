@@ -174,3 +174,88 @@ def test_session_context_value_with_runtime_ignores_legacy_user_data():
     )
 
     assert value is None
+
+
+def test_pending_archive_jobs_field_is_independent_per_chat():
+    from bot.session_store import (
+        ArchiveJobState,
+        pending_archive_jobs,
+        session_store,
+    )
+    from datetime import datetime
+    from pathlib import Path
+
+    session_store.reset()
+    state_a = ArchiveJobState(
+        file_path=Path("/tmp/a.mp4"),
+        title="A",
+        media_type="video",
+        format_choice="best",
+        file_size_mb=12.0,
+        use_mtproto=False,
+        created_at=datetime(2026, 5, 2, 12, 0, 0),
+    )
+    pending_archive_jobs[111] = {"tok-a": state_a}
+
+    state_b = ArchiveJobState(
+        file_path=Path("/tmp/b.mp4"),
+        title="B",
+        media_type="video",
+        format_choice="best",
+        file_size_mb=15.0,
+        use_mtproto=False,
+        created_at=datetime(2026, 5, 2, 12, 1, 0),
+    )
+    pending_archive_jobs[222] = {"tok-b": state_b}
+
+    assert pending_archive_jobs[111] == {"tok-a": state_a}
+    assert pending_archive_jobs[222] == {"tok-b": state_b}
+    session_store.reset()
+
+
+def test_archived_deliveries_field_holds_volume_state():
+    from bot.session_store import (
+        ArchivedDeliveryState,
+        archived_deliveries,
+        session_store,
+    )
+    from datetime import datetime
+    from pathlib import Path
+
+    session_store.reset()
+    delivery = ArchivedDeliveryState(
+        workspace=Path("/tmp/pl_ws"),
+        volumes=[Path("/tmp/pl_ws/x.7z.001"), Path("/tmp/pl_ws/x.7z.002")],
+        caption_prefix="My playlist",
+        use_mtproto=True,
+        created_at=datetime(2026, 5, 2, 12, 30, 0),
+    )
+    archived_deliveries[42] = {"tok-z": delivery}
+
+    assert archived_deliveries[42] == {"tok-z": delivery}
+    session_store.reset()
+
+
+def test_partial_archive_workspaces_field_holds_state():
+    from bot.session_store import (
+        ArchivePartialState,
+        partial_archive_workspaces,
+        session_store,
+    )
+    from datetime import datetime
+    from pathlib import Path
+
+    session_store.reset()
+    state = ArchivePartialState(
+        workspace=Path("/tmp/ws"),
+        downloaded=[Path("/tmp/ws/a.mp3"), Path("/tmp/ws/b.mp3")],
+        title="My playlist",
+        media_type="audio",
+        format_choice="mp3",
+        use_mtproto=True,
+        created_at=datetime(2026, 5, 3, 10, 0, 0),
+    )
+    partial_archive_workspaces[55] = {"tok-1": state}
+
+    assert partial_archive_workspaces[55] == {"tok-1": state}
+    session_store.reset()

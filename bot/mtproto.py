@@ -9,10 +9,15 @@ Configuration: TELEGRAM_API_ID and TELEGRAM_API_HASH in api_key.md or env vars.
 These are free credentials from https://my.telegram.org
 """
 
+import asyncio
 import logging
 import os
+from typing import TYPE_CHECKING
 
 from bot.config import get_runtime_value
+
+if TYPE_CHECKING:
+    from bot.jobs import JobCancellation
 
 
 def mtproto_unavailability_reason() -> str | None:
@@ -27,6 +32,13 @@ def mtproto_unavailability_reason() -> str | None:
         import pyrogram  # noqa: F401
         has_pyrogram = True
     except ImportError:
+        has_pyrogram = False
+    except Exception as exc:
+        # pyrogram <2.x calls asyncio.get_event_loop() at import time which
+        # raises RuntimeError on Python 3.12+ when no loop is running. Treat
+        # any other import-time failure as "not usable" rather than crashing
+        # the surrounding handler.
+        logging.warning("pyrogram import failed: %s", exc)
         has_pyrogram = False
 
     has_creds = bool(get_runtime_value("TELEGRAM_API_ID")) and bool(
@@ -162,8 +174,13 @@ async def send_audio_mtproto(
     title: str | None = None,
     caption: str | None = None,
     thumb_path: str | None = None,
+    *,
+    cancellation: "JobCancellation | None" = None,
 ) -> bool:
     """Send an audio file via MTProto (up to 2 GB).
+
+    When cancellation is provided, the underlying upload task is attached
+    so /stop can cancel it.
 
     Args:
         chat_id: Destination chat ID.
@@ -171,6 +188,9 @@ async def send_audio_mtproto(
         title: Audio track title shown in the player.
         caption: Message caption.
         thumb_path: Optional thumbnail image path.
+        cancellation: Optional job cancellation handle; when set, the upload
+            coroutine is wrapped in a Task and assigned to
+            cancellation.pyrogram_task so /stop can abort it.
 
     Returns:
         True on success, False on error.
@@ -196,13 +216,22 @@ async def send_audio_mtproto(
 
     try:
         async with client:
-            await client.send_audio(
+            coro = client.send_audio(
                 chat_id=chat_id,
                 audio=file_path,
                 title=title,
                 caption=caption,
                 thumb=thumb_path,
             )
+            if cancellation is not None:
+                task = asyncio.ensure_future(coro)
+                cancellation.pyrogram_task = task
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    return False
+            else:
+                await coro
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
             logging.info(
                 "MTProto send_audio OK: %s (%.1f MB) to chat %d",
@@ -219,14 +248,22 @@ async def send_video_mtproto(
     file_path: str,
     caption: str | None = None,
     thumb_path: str | None = None,
+    *,
+    cancellation: "JobCancellation | None" = None,
 ) -> bool:
     """Send a video file via MTProto (up to 2 GB).
+
+    When cancellation is provided, the underlying upload task is attached
+    so /stop can cancel it.
 
     Args:
         chat_id: Destination chat ID.
         file_path: Local path to the video file.
         caption: Message caption.
         thumb_path: Optional thumbnail image path.
+        cancellation: Optional job cancellation handle; when set, the upload
+            coroutine is wrapped in a Task and assigned to
+            cancellation.pyrogram_task so /stop can abort it.
 
     Returns:
         True on success, False on error.
@@ -252,12 +289,21 @@ async def send_video_mtproto(
 
     try:
         async with client:
-            await client.send_video(
+            coro = client.send_video(
                 chat_id=chat_id,
                 video=file_path,
                 caption=caption,
                 thumb=thumb_path,
             )
+            if cancellation is not None:
+                task = asyncio.ensure_future(coro)
+                cancellation.pyrogram_task = task
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    return False
+            else:
+                await coro
             file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
             logging.info(
                 "MTProto send_video OK: %s (%.1f MB) to chat %d",
@@ -266,4 +312,83 @@ async def send_video_mtproto(
             return True
     except Exception as e:
         logging.error("MTProto send_video failed: %s", e)
+        return False
+
+
+async def send_document_mtproto(
+    chat_id: int,
+    file_path: str,
+    caption: str | None = None,
+    file_name: str | None = None,
+    *,
+    cancellation: "JobCancellation | None" = None,
+) -> bool:
+    """Send a document file via MTProto (up to 2 GB).
+
+    Used to ship 7z volumes (.7z.001, ...) so Telegram does not try to
+    render them as media. ``file_name`` (when provided) overrides the
+    visible attachment name in the chat — useful when the on-disk path
+    contains a workspace prefix we don't want users to see.
+
+    When cancellation is provided, the underlying upload task is attached
+    so /stop can cancel it.
+
+    Args:
+        chat_id: Destination chat ID.
+        file_path: Local path to the document.
+        caption: Optional message caption.
+        file_name: Optional override for the displayed filename.
+        cancellation: Optional job cancellation handle; when set, the upload
+            coroutine is wrapped in a Task and assigned to
+            cancellation.pyrogram_task so /stop can abort it.
+
+    Returns:
+        True on success, False on error.
+    """
+
+    try:
+        from pyrogram import Client  # noqa: F401
+    except ImportError:
+        logging.error("pyrogram not installed — cannot send large document")
+        return False
+
+    api_id = get_runtime_value("TELEGRAM_API_ID", "")
+    api_hash = get_runtime_value("TELEGRAM_API_HASH", "")
+    if not api_id or not api_hash:
+        logging.error("TELEGRAM_API_ID/TELEGRAM_API_HASH not configured")
+        return False
+
+    api_id_int = _parse_api_id(api_id)
+    if api_id_int is None:
+        return False
+
+    client = _build_client(chat_id, "send_document", api_id_int, api_hash)
+
+    try:
+        async with client:
+            send_kwargs: dict = {
+                "chat_id": chat_id,
+                "document": file_path,
+                "caption": caption,
+            }
+            if file_name is not None:
+                send_kwargs["file_name"] = file_name
+            coro = client.send_document(**send_kwargs)
+            if cancellation is not None:
+                task = asyncio.ensure_future(coro)
+                cancellation.pyrogram_task = task
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    return False
+            else:
+                await coro
+            file_size_mb = os.path.getsize(file_path) / (1024 * 1024)
+            logging.info(
+                "MTProto send_document OK: %s (%.1f MB) to chat %d",
+                os.path.basename(file_path), file_size_mb, chat_id,
+            )
+            return True
+    except Exception as e:
+        logging.error("MTProto send_document failed: %s", e)
         return False

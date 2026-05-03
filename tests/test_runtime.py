@@ -48,3 +48,15 @@ def test_runtime_config_helpers_use_attached_runtime():
     assert get_config_for(context) is runtime.config
     assert get_config_value_for(context, "TELEGRAM_BOT_TOKEN") == "runtime-token"
     assert get_config_value_for(context, "MISSING", "fallback") == "fallback"
+
+
+def test_app_runtime_includes_archive_available_flag(monkeypatch):
+    from bot import runtime as runtime_module
+
+    monkeypatch.setattr("bot.archive.is_7z_available", lambda: True)
+    rt = runtime_module.build_app_runtime()
+    assert rt.archive_available is True
+
+    monkeypatch.setattr("bot.archive.is_7z_available", lambda: False)
+    rt = runtime_module.build_app_runtime()
+    assert rt.archive_available is False

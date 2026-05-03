@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 from telegram import InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
@@ -15,6 +16,7 @@ from bot.downloader_metadata import get_video_info
 from bot.handlers.common_ui import build_main_keyboard, escape_md
 from bot.security_limits import MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.security_policy import get_media_label
+from bot.services.archive_service import execute_playlist_archive_flow
 from bot.services.playlist_service import (
     build_playlist_message,
     build_single_video_url,
@@ -22,7 +24,8 @@ from bot.services.playlist_service import (
     load_playlist,
     parse_playlist_download_choice,
 )
-from bot.runtime import record_download_for
+from bot.jobs import JobDescriptor, job_registry
+from bot.runtime import get_app_runtime, record_download_for
 from bot.session_context import (
     clear_session_value as _clear_session_value,
     get_session_context_value as _get_session_context_value,
@@ -81,7 +84,11 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text("Nie udało się pobrać informacji o playliście.")
                 return
             _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
-            msg, reply_markup = build_playlist_message(playlist_info)
+            runtime = get_app_runtime(context)
+            archive_available = runtime.archive_available if runtime is not None else False
+            msg, reply_markup = build_playlist_message(
+                playlist_info, archive_available=archive_available,
+            )
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
         return
 
@@ -94,8 +101,16 @@ async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT
                 await query.edit_message_text("Nie udało się pobrać rozszerzonej listy.")
                 return
             _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
-            msg, reply_markup = build_playlist_message(playlist_info)
+            runtime = get_app_runtime(context)
+            archive_available = runtime.archive_available if runtime is not None else False
+            msg, reply_markup = build_playlist_message(
+                playlist_info, archive_available=archive_available,
+            )
             await query.edit_message_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
+        return
+
+    if data.startswith("pl_zip_dl_"):
+        await _dispatch_archive_playlist(update, context, data)
         return
 
     if data.startswith("pl_dl_"):
@@ -120,38 +135,71 @@ async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     succeeded = 0
     failed_titles = []
 
+    descriptor = JobDescriptor(
+        job_id="",
+        chat_id=chat_id,
+        kind="playlist_legacy",
+        label=f"Playlist ({media_type} {format_choice}) [0/{total}]",
+        started_at=datetime.now(),
+    )
+    cancellation = job_registry.register(chat_id, descriptor)
+
     await query.edit_message_text(
-        f"Rozpoczynam pobieranie playlisty ({total} filmów)...\nFormat: {media_type} {format_choice}"
+        f"Rozpoczynam pobieranie playlisty ({total} filmów)...\n"
+        f"Format: {media_type} {format_choice}"
     )
 
-    for i, entry in enumerate(entries, 1):
-        entry_url = entry["url"]
-        entry_title = entry.get("title", f"Film {i}")
+    try:
+        for i, entry in enumerate(entries, 1):
+            if cancellation.event.is_set():
+                break
+            entry_url = entry["url"]
+            entry_title = entry.get("title", f"Film {i}")
+            job_registry.update_label(
+                cancellation.job_id,
+                f"Playlist ({media_type} {format_choice}) [{i}/{total}]",
+            )
 
-        try:
-            status_msg = await context.bot.send_message(chat_id=chat_id, text=f"[{i}/{total}] Pobieranie: {entry_title}...")
-            await _download_single_playlist_item(context, chat_id, entry_url, entry_title, media_type, format_choice, status_msg)
-            succeeded += 1
-        except Exception as exc:
-            failed_titles.append(entry_title)
-            logging.error("Playlist item %d/%d failed: %s", i, total, exc)
             try:
-                await status_msg.edit_text(f"[{i}/{total}] Błąd: {entry_title}\n{str(exc)[:100]}")
-            except Exception:
-                pass
+                status_msg = await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=f"[{i}/{total}] Pobieranie: {entry_title}...",
+                )
+                await _download_single_playlist_item(
+                    context, chat_id, entry_url, entry_title,
+                    media_type, format_choice, status_msg,
+                )
+                succeeded += 1
+            except Exception as exc:
+                failed_titles.append(entry_title)
+                logging.error("Playlist item %d/%d failed: %s", i, total, exc)
+                try:
+                    await status_msg.edit_text(
+                        f"[{i}/{total}] Błąd: {entry_title}\n{str(exc)[:100]}"
+                    )
+                except Exception:
+                    pass
 
-        if i < total:
-            await asyncio.sleep(1)
+            if i < total and not cancellation.event.is_set():
+                await asyncio.sleep(1)
 
-    failed = len(failed_titles)
-    summary = f"Playlista zakończona!\n\nPobrano: {succeeded}/{total}\n"
-    if failed:
-        summary += f"Błędy: {failed}\n"
-        for title in failed_titles[:5]:
-            summary += f"  - {title[:40]}\n"
+        failed = len(failed_titles)
+        if cancellation.event.is_set():
+            summary = (
+                f"⏹ Zatrzymano playlistę. Pobrano {succeeded}/{total} "
+                f"(pliki usunięte).\n"
+            )
+        else:
+            summary = f"Playlista zakończona!\n\nPobrano: {succeeded}/{total}\n"
+        if failed:
+            summary += f"Błędy: {failed}\n"
+            for title in failed_titles[:5]:
+                summary += f"  - {title[:40]}\n"
 
-    await context.bot.send_message(chat_id=chat_id, text=summary)
-    _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
+        await context.bot.send_message(chat_id=chat_id, text=summary)
+        _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
+    finally:
+        job_registry.unregister(cancellation.job_id)
 
 
 async def _download_single_playlist_item(context, chat_id, url, title, media_type, format_choice, status_msg):
@@ -234,3 +282,32 @@ async def _download_single_playlist_item(context, chat_id, url, title, media_typ
 
     record_download_for(context, chat_id, title, url, f"{media_type}_{format_choice}", file_size_mb)
     await status_msg.edit_text(f"[✅] {title}")
+
+
+async def _dispatch_archive_playlist(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    callback_data: str,
+) -> None:
+    """Dispatch a `pl_zip_dl_*` callback to the archive (7z) flow."""
+
+    chat_id = update.effective_chat.id
+    playlist = _get_session_value(context, chat_id, "playlist_data", user_playlist_data)
+    if not playlist:
+        await update.callback_query.edit_message_text(
+            "Sesja playlisty wygasła. Wyślij link ponownie."
+        )
+        return
+
+    choice = parse_playlist_download_choice(callback_data)
+
+    await execute_playlist_archive_flow(
+        update,
+        context,
+        chat_id=chat_id,
+        playlist=playlist,
+        media_type=choice.media_type,
+        format_choice=choice.format_choice,
+        executor=_executor,
+    )
+    _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)

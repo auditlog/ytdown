@@ -387,3 +387,41 @@ def test_register_pin_failure_returns_actual_attempt_after_reblock():
     )
     assert remaining == 0
     assert actual == 3  # Real attempt count, not capped at max_attempts
+
+
+def test_archive_volume_size_constants_defined():
+    from bot import security_limits
+
+    assert security_limits.MTPROTO_VOLUME_SIZE_MB == 1900
+    assert security_limits.BOTAPI_VOLUME_SIZE_MB == 49
+    assert security_limits.BOTAPI_VOLUME_SIZE_MB < security_limits.TELEGRAM_UPLOAD_LIMIT_MB
+
+
+def test_archive_item_size_limit_defined():
+    from bot import security_limits
+
+    assert security_limits.MAX_ARCHIVE_ITEM_SIZE_MB == 10240
+    assert security_limits.MAX_ARCHIVE_ITEM_SIZE_MB > security_limits.MAX_FILE_SIZE_MB
+
+
+def test_playlist_archive_retention_defined():
+    from bot import security_limits
+
+    assert security_limits.PLAYLIST_ARCHIVE_RETENTION_MIN == 60
+    # Retention must expire before the 24h cleanup safety net so workspaces
+    # eligible for retry never collide with the daily eviction.
+    assert security_limits.PLAYLIST_ARCHIVE_RETENTION_MIN < 24 * 60
+
+
+def test_job_dead_age_constant_defined():
+    from bot import security_limits
+
+    assert security_limits.JOB_DEAD_AGE_HOURS == 6
+    assert security_limits.JOB_DEAD_AGE_HOURS > 0
+
+
+def test_job_terminate_grace_constant_defined():
+    from bot import security_limits
+
+    assert security_limits.JOB_TERMINATE_GRACE_SEC == 1.0
+    assert 0 < security_limits.JOB_TERMINATE_GRACE_SEC <= 5.0

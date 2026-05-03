@@ -9,8 +9,12 @@ import time
 import shutil
 import logging
 import subprocess
+from datetime import datetime, timedelta
+from pathlib import Path
 
 from bot.config import DOWNLOAD_PATH
+from bot.jobs import job_registry
+from bot.security_limits import JOB_DEAD_AGE_HOURS, PLAYLIST_ARCHIVE_RETENTION_MIN
 
 
 def cleanup_old_files(directory, max_age_hours=24):
@@ -155,6 +159,144 @@ def monitor_disk_space():
             cleanup_old_files(DOWNLOAD_PATH, max_age_hours=24)
 
 
+_ARCHIVE_PREFIXES = ("pl_", "big_")
+
+
+def _purge_archive_workspaces(chat_dir: Path, retention_min: int) -> int:
+    """Remove archive workspaces older than retention_min, unless locked.
+
+    Workspaces are subdirectories named ``pl_*`` or ``big_*``. A
+    ``.lock`` file inside a young workspace blocks deletion (used during
+    pack/send operations). After 24h workspaces are removed regardless
+    of the lock — the long-running cleanup acts as a safety net.
+    """
+
+    if not chat_dir.exists():
+        return 0
+
+    now = time.time()
+    threshold = retention_min * 60
+    safety_net = 24 * 3600
+    removed = 0
+
+    for entry in chat_dir.iterdir():
+        if not entry.is_dir():
+            continue
+        if not any(entry.name.startswith(p) for p in _ARCHIVE_PREFIXES):
+            continue
+        try:
+            age = now - entry.stat().st_mtime
+        except OSError as exc:
+            logging.warning("Could not stat %s: %s", entry, exc)
+            continue
+
+        lock = entry / ".lock"
+        if age <= threshold:
+            continue
+        if lock.exists() and age <= safety_net:
+            continue
+
+        try:
+            shutil.rmtree(entry)
+            removed += 1
+            logging.info("Removed stale archive workspace: %s (age %.1f h)",
+                         entry, age / 3600)
+        except OSError as exc:
+            logging.error("Failed to remove %s: %s", entry, exc)
+
+    return removed
+
+
+def _purge_pending_archive_jobs(retention_min: int) -> int:
+    """Drop pending_archive_jobs entries older than retention_min and delete files."""
+
+    from bot.session_store import pending_archive_jobs
+
+    cutoff = datetime.now() - timedelta(minutes=retention_min)
+    removed = 0
+    for chat_id in list(pending_archive_jobs):
+        bucket = pending_archive_jobs.get(chat_id) or {}
+        for token in list(bucket):
+            state = bucket[token]
+            if state.created_at >= cutoff:
+                continue
+            bucket.pop(token, None)
+            try:
+                os.remove(str(state.file_path))
+            except OSError:
+                pass
+            removed += 1
+        if not bucket:
+            pending_archive_jobs.pop(chat_id, None)
+        else:
+            pending_archive_jobs[chat_id] = bucket
+    return removed
+
+
+def _purge_archived_deliveries(retention_min: int) -> int:
+    """Drop archived_deliveries entries older than retention_min.
+
+    The on-disk workspace is removed by _purge_archive_workspaces; this
+    function drops the in-memory metadata (volume paths + caption) so the
+    user is not offered a 'Wyślij ponownie' button that would fail with
+    FileNotFoundError because the workspace already vanished.
+    """
+
+    from bot.session_store import archived_deliveries
+
+    cutoff = datetime.now() - timedelta(minutes=retention_min)
+    removed = 0
+    for chat_id in list(archived_deliveries):
+        bucket = archived_deliveries.get(chat_id) or {}
+        for token in list(bucket):
+            state = bucket[token]
+            if state.created_at >= cutoff:
+                continue
+            bucket.pop(token, None)
+            removed += 1
+        if not bucket:
+            archived_deliveries.pop(chat_id, None)
+        else:
+            archived_deliveries[chat_id] = bucket
+    return removed
+
+
+def _purge_dead_jobs(retention_hours: int) -> int:
+    """Remove zombie entries from JobRegistry older than retention_hours.
+
+    Delegates to JobRegistry.purge_dead which logs each removed entry
+    at WARNING level so stale jobs are visible in the audit trail.
+    """
+
+    return job_registry.purge_dead(timedelta(hours=retention_hours))
+
+
+def _purge_partial_archive_workspaces(retention_min: int) -> int:
+    """Drop partial_archive_workspaces entries older than retention_min.
+
+    In-memory state only — the on-disk workspace (if any) is already
+    handled by _purge_archive_workspaces which scans chat directories.
+    """
+
+    from bot.session_store import partial_archive_workspaces
+
+    cutoff = datetime.now() - timedelta(minutes=retention_min)
+    removed = 0
+    for chat_id in list(partial_archive_workspaces):
+        bucket = partial_archive_workspaces.get(chat_id) or {}
+        for token in list(bucket):
+            state = bucket[token]
+            if state.created_at >= cutoff:
+                continue
+            bucket.pop(token, None)
+            removed += 1
+        if not bucket:
+            partial_archive_workspaces.pop(chat_id, None)
+        else:
+            partial_archive_workspaces[chat_id] = bucket
+    return removed
+
+
 def periodic_cleanup():
     """
     Function run periodically in separate thread.
@@ -174,6 +316,14 @@ def periodic_cleanup():
 
             if deleted_count > 0:
                 logging.info("Periodic cleanup: deleted %d old files", deleted_count)
+
+            for chat_dir in Path(DOWNLOAD_PATH).iterdir():
+                if chat_dir.is_dir():
+                    _purge_archive_workspaces(chat_dir, PLAYLIST_ARCHIVE_RETENTION_MIN)
+            _purge_pending_archive_jobs(PLAYLIST_ARCHIVE_RETENTION_MIN)
+            _purge_archived_deliveries(PLAYLIST_ARCHIVE_RETENTION_MIN)
+            _purge_dead_jobs(JOB_DEAD_AGE_HOURS)
+            _purge_partial_archive_workspaces(PLAYLIST_ARCHIVE_RETENTION_MIN)
 
         except Exception as e:
             logging.error("Error during periodic cleanup: %s", e)

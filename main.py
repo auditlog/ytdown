@@ -39,6 +39,7 @@ from bot.handlers.inbound_media import (
     handle_video_upload,
 )
 from bot.telegram_callbacks import handle_callback
+from bot.telegram_commands import stop_command
 
 # Configure logging
 logging.basicConfig(
@@ -102,6 +103,7 @@ def register_handlers(application) -> None:
     application.add_handler(CommandHandler("cleanup", cleanup_command))
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("logout", logout_command))
+    application.add_handler(CommandHandler("stop", stop_command))
 
     # Handler for text messages (including PIN and links)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_youtube_link))

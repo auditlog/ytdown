@@ -42,10 +42,14 @@ class AppRuntime:
     authorized_users_repository: Any
     download_history_repository: Any
     authorized_users_set: set[int]
+    archive_available: bool = False
 
 
 def build_app_runtime() -> AppRuntime:
     """Build an application runtime from the active bootstrap state."""
+    # Local import avoids a potential circular dependency if bot.archive ever
+    # needs to import from bot.runtime in the future.
+    from bot.archive import is_7z_available
 
     return AppRuntime(
         config=get_runtime_config(),
@@ -55,6 +59,7 @@ def build_app_runtime() -> AppRuntime:
         authorized_users_repository=get_authorized_users_repository(),
         download_history_repository=get_download_history_repository(),
         authorized_users_set=get_runtime_authorized_users(),
+        archive_available=is_7z_available(),
     )
 
 

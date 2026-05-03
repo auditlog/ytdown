@@ -8,9 +8,12 @@ feature logic to the extracted handler modules.
 from __future__ import annotations
 
 import subprocess
+from datetime import datetime
 
-from telegram import InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
+
+from bot.jobs import job_registry
 
 from bot.cleanup import cleanup_old_files, get_disk_usage
 from bot.config import DOWNLOAD_PATH, get_download_stats, get_runtime_value
@@ -240,8 +243,15 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
     return await _extracted_handle_youtube_link(update, context)
 
 
-def _build_playlist_message(playlist_info: dict) -> tuple[str, InlineKeyboardMarkup]:
-    return build_playlist_message(playlist_info)
+def _build_playlist_message(playlist_info: dict, context=None) -> tuple[str, InlineKeyboardMarkup]:
+    """Compatibility wrapper for playlist menu rendering.
+
+    Resolves ``archive_available`` from the live runtime when ``context`` is
+    provided, so callers don't need to import ``bot.runtime`` themselves.
+    """
+    runtime = get_app_runtime(context) if context is not None else None
+    archive_available = runtime.archive_available if runtime is not None else False
+    return build_playlist_message(playlist_info, archive_available=archive_available)
 
 
 async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
@@ -304,3 +314,105 @@ async def process_video_file(
 ):
     _sync_inbound_media_dependencies()
     return await _extracted_process_video_file(update, context, video_info)
+
+
+def _build_stop_list_message(descriptors: list) -> tuple[str, InlineKeyboardMarkup]:
+    """Build the /stop list text + keyboard from active job descriptors.
+
+    Shared between the initial stop_command render and the stop_refresh
+    callback re-render.
+    """
+    lines = [f"Aktywne operacje ({len(descriptors)}):", ""]
+    keyboard_rows: list[list[InlineKeyboardButton]] = []
+    for idx, descriptor in enumerate(descriptors, 1):
+        age_min = max(
+            0,
+            int((datetime.now() - descriptor.started_at).total_seconds() // 60),
+        )
+        lines.append(f"{idx}. {descriptor.label} ({age_min} min)")
+        keyboard_rows.append([InlineKeyboardButton(
+            f"Zatrzymaj {idx}", callback_data=f"stop_{descriptor.job_id}",
+        )])
+    keyboard_rows.append([InlineKeyboardButton(
+        "Zatrzymaj wszystkie", callback_data="stop_all",
+    )])
+    keyboard_rows.append([
+        InlineKeyboardButton("Odśwież", callback_data="stop_refresh"),
+        InlineKeyboardButton("Anuluj listę", callback_data="stop_dismiss"),
+    ])
+    return "\n".join(lines), InlineKeyboardMarkup(keyboard_rows)
+
+
+async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List running jobs in this chat with cancel buttons."""
+
+    user_id = update.effective_user.id
+    if not _is_authorized(context, user_id):
+        await update.effective_message.reply_text(
+            "Brak autoryzacji. Użyj /start aby się zalogować."
+        )
+        return
+
+    chat_id = update.effective_chat.id
+    descriptors = job_registry.list_for_chat(chat_id)
+
+    if not descriptors:
+        await update.effective_message.reply_text("Brak aktywnych operacji.")
+        return
+
+    text, keyboard = _build_stop_list_message(descriptors)
+    await update.effective_message.reply_text(text, reply_markup=keyboard)
+
+
+async def handle_stop_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str) -> None:
+    """Dispatch stop_<id>, stop_all, stop_refresh, stop_dismiss."""
+
+    chat_id = update.effective_chat.id
+
+    if data == "stop_all":
+        descriptors = job_registry.list_for_chat(chat_id)
+        cancelled = 0
+        for descriptor in descriptors:
+            if await job_registry.cancel_async(descriptor.job_id, "user via /stop"):
+                cancelled += 1
+        try:
+            await update.callback_query.edit_message_text(
+                f"Wysłano sygnał zatrzymania do {cancelled} operacji."
+            )
+        except Exception:
+            pass
+        return
+
+    if data == "stop_refresh":
+        descriptors = job_registry.list_for_chat(chat_id)
+        if not descriptors:
+            try:
+                await update.callback_query.edit_message_text("Brak aktywnych operacji.")
+            except Exception:
+                pass
+            return
+        text, keyboard = _build_stop_list_message(descriptors)
+        try:
+            await update.callback_query.edit_message_text(text, reply_markup=keyboard)
+        except Exception:
+            pass
+        return
+
+    if data == "stop_dismiss":
+        try:
+            await update.callback_query.edit_message_text("Lista zamknięta.")
+        except Exception:
+            pass
+        return
+
+    if data.startswith("stop_"):
+        job_id = data[len("stop_"):]
+        ok = await job_registry.cancel_async(job_id, reason="user via /stop")
+        text = (
+            "Wysłano sygnał zatrzymania. Czekam na potwierdzenie..."
+            if ok else "Operacja już zakończona."
+        )
+        try:
+            await update.callback_query.edit_message_text(text)
+        except Exception:
+            pass

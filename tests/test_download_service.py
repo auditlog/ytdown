@@ -449,3 +449,31 @@ def test_execute_download_async_raises_when_no_file(monkeypatch, tmp_path):
     with pytest.raises(FileNotFoundError):
         asyncio.run(run())
     executor.shutdown(wait=False)
+
+
+def test_execute_download_progress_hook_raises_on_cancel():
+    """When cancellation.event is set, the wrapped hook raises DownloadError."""
+    import yt_dlp
+
+    from bot.jobs import JobCancellation
+    from bot.services.download_service import _build_cancellable_progress_hook
+
+    cancellation = JobCancellation(job_id="t", event=asyncio.Event())
+    base_called = {"n": 0}
+
+    def base(d):
+        base_called["n"] += 1
+
+    hook = _build_cancellable_progress_hook(base, cancellation)
+
+    # Without cancellation — base hook should be called normally.
+    hook({"status": "downloading"})
+    assert base_called["n"] == 1
+
+    # With cancellation set — DownloadError must be raised before calling base.
+    cancellation.event.set()
+    with pytest.raises(yt_dlp.utils.DownloadError, match="cancelled"):
+        hook({"status": "downloading"})
+
+    # Base hook must not have been called after cancellation.
+    assert base_called["n"] == 1

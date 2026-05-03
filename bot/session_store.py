@@ -10,6 +10,52 @@ from typing import Any
 
 
 @dataclass
+class ArchiveJobState:
+    """In-memory state for a single-file archive flow waiting for user choice.
+
+    Created when a downloaded file exceeds the active Telegram transport
+    limit; consumed by arc_split_<token> / arc_cancel_<token> callbacks.
+    """
+
+    file_path: Any  # pathlib.Path; Any avoids importing Path here
+    title: str
+    media_type: str
+    format_choice: str
+    file_size_mb: float
+    use_mtproto: bool
+    created_at: Any  # datetime
+
+
+@dataclass
+class ArchivedDeliveryState:
+    """In-memory state for a sent archive set, kept for retry/purge buttons."""
+
+    workspace: Any        # pathlib.Path
+    volumes: list[Any]    # list[Path]
+    caption_prefix: str
+    use_mtproto: bool
+    created_at: Any       # datetime
+
+
+@dataclass
+class ArchivePartialState:
+    """In-memory state for a cancelled-mid-flight playlist archive.
+
+    Captured by execute_playlist_archive_flow when a cancel signal arrives
+    after some entries downloaded; lets the user click [Spakuj co mam] to
+    package whatever was already pulled.
+    """
+
+    workspace: Any        # pathlib.Path
+    downloaded: list[Any] # list[Path]
+    title: str
+    media_type: str
+    format_choice: str
+    use_mtproto: bool
+    created_at: Any       # datetime
+
+
+@dataclass
 class SessionState:
     """Chat-scoped runtime state used by Telegram handlers."""
 
@@ -25,6 +71,9 @@ class SessionState:
     audio_file_path: str | None = None
     audio_file_title: str | None = None
     subtitle_pending: dict[str, Any] | None = None
+    pending_archive_jobs: dict[str, "ArchiveJobState"] | None = None
+    archived_deliveries: dict[str, "ArchivedDeliveryState"] | None = None
+    partial_archive_workspaces: dict[str, "ArchivePartialState"] | None = None
 
 
 @dataclass
@@ -159,6 +208,9 @@ class SessionStore:
             and session.audio_file_path is None
             and session.audio_file_title is None
             and session.subtitle_pending is None
+            and session.pending_archive_jobs is None
+            and session.archived_deliveries is None
+            and session.partial_archive_workspaces is None
         ):
             self._sessions.pop(chat_id, None)
 
@@ -203,6 +255,9 @@ user_urls = SessionFieldMap(session_store, "current_url")
 user_time_ranges = SessionFieldMap(session_store, "time_range")
 user_playlist_data = SessionFieldMap(session_store, "playlist_data")
 download_progress = SessionFieldMap(session_store, "download_progress")
+pending_archive_jobs = SessionFieldMap(session_store, "pending_archive_jobs")
+archived_deliveries = SessionFieldMap(session_store, "archived_deliveries")
+partial_archive_workspaces = SessionFieldMap(session_store, "partial_archive_workspaces")
 
 
 class SecurityStore:
