@@ -20,7 +20,7 @@ import os
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Any, Callable
 
 import yt_dlp
 
@@ -28,6 +28,9 @@ from bot.config import YTDLP_REMOTE_COMPONENTS
 from bot.downloader_metadata import COOKIES_FILE, get_video_info
 from bot.downloader_validation import is_valid_audio_quality, sanitize_filename
 from bot.security_limits import MAX_FILE_SIZE_MB
+
+if TYPE_CHECKING:
+    from bot.jobs import JobCancellation
 
 
 ArtifactSuffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
@@ -227,6 +230,25 @@ def estimate_download_size(plan: DownloadPlan) -> float | None:
     return size_mb
 
 
+def _build_cancellable_progress_hook(
+    base_hook: Callable[[dict[str, Any]], None],
+    cancellation: "JobCancellation",
+) -> Callable[[dict[str, Any]], None]:
+    """Wrap a yt-dlp progress hook so it raises DownloadError on cancel.
+
+    yt-dlp invokes the hook synchronously many times per second; raising
+    DownloadError lets it clean up the .part file and propagate the error
+    out of the threadpool worker into ``execute_download``'s caller.
+    """
+
+    def hook(d: dict[str, Any]) -> None:
+        if cancellation.event.is_set():
+            raise yt_dlp.utils.DownloadError("cancelled by user")
+        base_hook(d)
+
+    return hook
+
+
 async def execute_download(
     plan: DownloadPlan,
     *,
@@ -237,14 +259,23 @@ async def execute_download(
     status_callback: Callable[[str], Any],
     format_bytes: Callable[[int | float | None], str],
     format_eta: Callable[[int | float | None], str],
+    cancellation: "JobCancellation | None" = None,
 ) -> DownloadResult:
     """Run yt-dlp download and stream progress updates through a callback.
+
+    When ``cancellation`` is provided, the progress hook raises
+    yt_dlp.utils.DownloadError("cancelled by user") whenever the event is
+    set. yt-dlp catches that and cleans up the .part file automatically.
 
     Raises FileNotFoundError when yt-dlp finishes without producing a file.
     """
 
     ydl_opts = plan.ydl_opts.copy()
-    ydl_opts['progress_hooks'] = [progress_hook_factory(chat_id)]
+    base_hook = progress_hook_factory(chat_id)
+    if cancellation is not None:
+        ydl_opts['progress_hooks'] = [_build_cancellable_progress_hook(base_hook, cancellation)]
+    else:
+        ydl_opts['progress_hooks'] = [base_hook]
     progress_state[chat_id] = {'status': 'starting', 'updated': time.time()}
 
     loop = asyncio.get_event_loop()
