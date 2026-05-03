@@ -3,6 +3,7 @@ Unit tests for playlist support.
 """
 
 import asyncio
+from unittest import mock
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 
 from bot.downloader import (
@@ -490,4 +491,55 @@ def test_handle_playlist_callback_pl_zip_dl_dispatches_to_archive_flow():
     assert kwargs["chat_id"] == 42
     assert kwargs["media_type"] == "audio"
     assert kwargs["format_choice"] == "mp3"
+    session_store.reset()
+
+
+def test_legacy_download_playlist_breaks_on_cancel(monkeypatch):
+    import asyncio
+    from bot.handlers import playlist_callbacks
+    from bot.jobs import JobRegistry
+    from bot.session_store import session_store, user_playlist_data
+
+    session_store.reset()
+    user_playlist_data[42] = {
+        "title": "Pl",
+        "entries": [
+            {"url": "u1", "title": "a"},
+            {"url": "u2", "title": "b"},
+            {"url": "u3", "title": "c"},
+        ],
+    }
+    test_registry = JobRegistry()
+    monkeypatch.setattr(playlist_callbacks, "job_registry", test_registry)
+
+    iter_count = {"n": 0}
+
+    async def fake_dl(*args, **kwargs):
+        iter_count["n"] += 1
+        if iter_count["n"] == 2:
+            # Cancel after 2nd iteration starts.
+            jobs = test_registry.list_for_chat(42)
+            test_registry.cancel(jobs[0].job_id, reason="t")
+
+    monkeypatch.setattr(
+        playlist_callbacks, "_download_single_playlist_item", fake_dl,
+    )
+
+    update = mock.MagicMock()
+    update.effective_chat.id = 42
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+    context.bot.send_message = mock.AsyncMock()
+
+    asyncio.run(
+        playlist_callbacks.download_playlist(
+            update, context, "pl_dl_audio_mp3",
+        )
+    )
+
+    # Job unregistered.
+    assert test_registry.list_for_chat(42) == []
+    # Loop broke after 2nd iteration; 3rd not invoked.
+    assert iter_count["n"] == 2
     session_store.reset()
