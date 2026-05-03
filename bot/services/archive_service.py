@@ -218,6 +218,7 @@ async def send_volumes(
     *,
     start_index: int = 0,
     status_cb: Callable[[str], Awaitable[None]] | None = None,
+    cancellation: "JobCancellation | None" = None,
 ) -> None:
     """Send 7z volumes [start_index:] to ``chat_id`` as documents.
 
@@ -229,6 +230,8 @@ async def send_volumes(
     ``use_mtproto`` is informational for higher layers — the per-volume
     transport decision is based solely on volume size vs TELEGRAM_UPLOAD_LIMIT_MB.
 
+    When cancellation.event is set the loop breaks before the next volume.
+
     Raises:
         RuntimeError: when a volume needs MTProto but it is unavailable, or
             when MTProto sending returns False.
@@ -236,6 +239,8 @@ async def send_volumes(
 
     total = len(volumes)
     for idx in range(start_index, total):
+        if cancellation is not None and cancellation.event.is_set():
+            return
         volume = volumes[idx]
         size_mb = volume.stat().st_size / (1024 * 1024)
         caption = f"{caption_prefix} [{idx + 1}/{total}]"

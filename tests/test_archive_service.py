@@ -528,6 +528,44 @@ def test_download_playlist_into_breaks_on_cancel(tmp_path, monkeypatch):
     assert any("anulowano" in t.lower() for t in failed)
 
 
+def test_send_volumes_breaks_on_cancel(tmp_path, monkeypatch):
+    import asyncio
+    from bot.services import archive_service
+    from bot.jobs import JobCancellation
+
+    volumes = []
+    for i in range(1, 6):
+        v = tmp_path / f"out.7z.00{i}"
+        v.write_bytes(b"x")
+        volumes.append(v)
+
+    cancellation = JobCancellation(job_id="t", event=asyncio.Event())
+
+    bot = mock.MagicMock()
+    sent = []
+
+    async def fake_send(**kwargs):
+        sent.append(kwargs["caption"])
+        if len(sent) == 2:
+            cancellation.event.set()
+
+    bot.send_document = fake_send
+
+    monkeypatch.setattr(
+        archive_service, "mtproto_unavailability_reason", lambda: "n/a",
+    )
+
+    asyncio.run(
+        archive_service.send_volumes(
+            bot, chat_id=1, volumes=volumes, caption_prefix="X",
+            use_mtproto=False, status_cb=mock.AsyncMock(),
+            cancellation=cancellation,
+        )
+    )
+
+    assert len(sent) == 2  # third volume was not sent
+
+
 def test_execute_single_file_archive_flow_consumes_pending_job(tmp_path, monkeypatch):
     from bot.services import archive_service
     from bot.session_store import (
