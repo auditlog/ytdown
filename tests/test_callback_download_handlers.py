@@ -408,3 +408,36 @@ def test_arc_purge_removes_workspace(tmp_path, monkeypatch):
     assert not workspace.exists()
     assert archived_deliveries.get(5, {}).get("tk2") is None
     session_store.reset()
+
+
+def test_download_file_registers_and_unregisters_job(tmp_path, monkeypatch):
+    import asyncio
+    from bot.handlers import download_callbacks
+    from bot.jobs import JobRegistry
+    from bot.session_store import session_store
+
+    session_store.reset()
+    test_registry = JobRegistry()
+    monkeypatch.setattr(download_callbacks, "job_registry", test_registry)
+
+    # Patch prepare_download_plan to short-circuit by returning None.
+    monkeypatch.setattr(
+        download_callbacks, "prepare_download_plan", lambda **kw: None,
+    )
+
+    update = mock.MagicMock()
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    update.effective_chat.id = 7
+    context = mock.MagicMock()
+
+    asyncio.run(
+        download_callbacks.download_file(
+            update, context,
+            type="video", format="best", url="https://x",
+        )
+    )
+
+    # Even on early-exit path the job should register and unregister.
+    assert test_registry.list_for_chat(7) == []
+    session_store.reset()

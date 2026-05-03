@@ -75,6 +75,7 @@ from bot.services.transcription_service import (
     transcript_too_long_for_summary,
 )
 from bot.runtime import record_download_for
+from bot.jobs import JobDescriptor, job_registry
 from bot.handlers.media_extras_callbacks import (
     _handle_instagram_download as _extracted_handle_instagram_download,
     _show_spotify_summary_options as _extracted_show_spotify_summary_options,
@@ -339,308 +340,321 @@ async def download_file(
     title = "Unknown"
     success_recorded = False
 
-    async def update_status(text):
-        await safe_edit_message(query, text)
-
-    media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
-    await update_status(f"Pobieranie informacji o {media_name}...")
-
-    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
-    os.makedirs(chat_download_path, exist_ok=True)
-
-    time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
-    try:
-        plan = prepare_download_plan(
-            url=url,
-            media_type=media_type,
-            format_choice=format,
-            chat_download_path=chat_download_path,
-            time_range=time_range,
-            transcribe=transcribe,
-            use_format_id=use_format_id,
-            audio_quality=audio_quality,
-        )
-    except ValueError:
-        await update_status("Nieobsługiwana jakość audio. Spróbuj zmienić opcję.")
-        return
-
-    if not plan:
-        await update_status(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
-        return
-
-    info = plan.info
-    title = plan.title
-    duration_str = plan.duration_str
-    sanitized_title = plan.sanitized_title
+    descriptor = JobDescriptor(
+        job_id="",
+        chat_id=chat_id,
+        kind="single_dl",
+        label=f"Pojedynczy plik ({media_type} {format}) — pobieranie",
+        started_at=datetime.now(),
+    )
+    cancellation = job_registry.register(chat_id, descriptor)
 
     try:
-        await update_status(f"Sprawdzanie rozmiaru pliku...\n({duration_str})")
-        size_mb = await asyncio.get_event_loop().run_in_executor(_executor, lambda: estimate_download_size(plan))
-        if not ensure_size_within_limit(size_mb, max_size_mb=MAX_FILE_SIZE_MB):
-            await update_status(
-                f"Wybrany format jest zbyt duży!\n\n"
-                f"Rozmiar: {size_mb:.1f} MB\n"
-                f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
-                f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
+        async def update_status(text):
+            await safe_edit_message(query, text)
+
+        media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
+        await update_status(f"Pobieranie informacji o {media_name}...")
+
+        chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+        os.makedirs(chat_download_path, exist_ok=True)
+
+        time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
+        try:
+            plan = prepare_download_plan(
+                url=url,
+                media_type=media_type,
+                format_choice=format,
+                chat_download_path=chat_download_path,
+                time_range=time_range,
+                transcribe=transcribe,
+                use_format_id=use_format_id,
+                audio_quality=audio_quality,
             )
+        except ValueError:
+            await update_status("Nieobsługiwana jakość audio. Spróbuj zmienić opcję.")
             return
 
-        time_range_info = ""
-        if time_range:
-            time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
-        await update_status(f"Rozpoczynam pobieranie...\nCzas trwania: {duration_str}{time_range_info}")
-        download_result = await execute_download(
-            plan,
-            chat_id=chat_id,
-            executor=_executor,
-            progress_hook_factory=create_progress_hook,
-            progress_state=_download_progress,
-            status_callback=update_status,
-            format_bytes=format_bytes,
-            format_eta=format_eta,
-        )
-        downloaded_file_path = download_result.file_path
-        file_size_mb = download_result.file_size_mb
+        if not plan:
+            await update_status(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
+            return
 
-        if transcribe:
-            await update_status(
-                f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\n"
-                f"Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut."
-            )
+        info = plan.info
+        title = plan.title
+        duration_str = plan.duration_str
+        sanitized_title = plan.sanitized_title
 
-            if not get_runtime_value("GROQ_API_KEY", ""):
+        try:
+            await update_status(f"Sprawdzanie rozmiaru pliku...\n({duration_str})")
+            size_mb = await asyncio.get_event_loop().run_in_executor(_executor, lambda: estimate_download_size(plan))
+            if not ensure_size_within_limit(size_mb, max_size_mb=MAX_FILE_SIZE_MB):
                 await update_status(
-                    "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
-                    "Skontaktuj się z administratorem."
+                    f"Wybrany format jest zbyt duży!\n\n"
+                    f"Rozmiar: {size_mb:.1f} MB\n"
+                    f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
+                    f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
                 )
                 return
 
-            transcript_path = await run_transcription_with_progress(
-                source_path=downloaded_file_path,
-                output_dir=chat_download_path,
+            time_range_info = ""
+            if time_range:
+                time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
+            await update_status(f"Rozpoczynam pobieranie...\nCzas trwania: {duration_str}{time_range_info}")
+            download_result = await execute_download(
+                plan,
+                chat_id=chat_id,
                 executor=_executor,
-                status_callback=lambda status: update_status(f"Transkrypcja w toku...\n\n{status}"),
+                progress_hook_factory=create_progress_hook,
+                progress_state=_download_progress,
+                status_callback=update_status,
+                format_bytes=format_bytes,
+                format_eta=format_eta,
+                cancellation=cancellation,
             )
+            downloaded_file_path = download_result.file_path
+            file_size_mb = download_result.file_size_mb
 
-            if not transcript_path or not os.path.exists(transcript_path):
-                await update_status("Wystąpił błąd podczas transkrypcji.")
-                return
+            if transcribe:
+                await update_status(
+                    f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\n"
+                    f"Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut."
+                )
 
-            transcript_result = load_transcript_result(transcript_path)
-
-            if summary:
-                if not get_runtime_value("CLAUDE_API_KEY", ""):
+                if not get_runtime_value("GROQ_API_KEY", ""):
                     await update_status(
-                        "Funkcja niedostępna — brak klucza API do podsumowań.\n"
+                        "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
                         "Skontaktuj się z administratorem."
                     )
                     return
 
-                transcript_text = transcript_result.display_text
-                if transcript_too_long_for_summary(transcript_text):
-                    await update_status(
-                        "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
-                        "Wysyłam samą transkrypcję."
+                transcript_path = await run_transcription_with_progress(
+                    source_path=downloaded_file_path,
+                    output_dir=chat_download_path,
+                    executor=_executor,
+                    status_callback=lambda status: update_status(f"Transkrypcja w toku...\n\n{status}"),
+                )
+
+                if not transcript_path or not os.path.exists(transcript_path):
+                    await update_status("Wystąpił błąd podczas transkrypcji.")
+                    return
+
+                transcript_result = load_transcript_result(transcript_path)
+
+                if summary:
+                    if not get_runtime_value("CLAUDE_API_KEY", ""):
+                        await update_status(
+                            "Funkcja niedostępna — brak klucza API do podsumowań.\n"
+                            "Skontaktuj się z administratorem."
+                        )
+                        return
+
+                    transcript_text = transcript_result.display_text
+                    if transcript_too_long_for_summary(transcript_text):
+                        await update_status(
+                            "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
+                            "Wysyłam samą transkrypcję."
+                        )
+                        with open(transcript_path, "rb") as file_obj:
+                            await context.bot.send_document(
+                                chat_id=chat_id,
+                                document=file_obj,
+                                filename=os.path.basename(transcript_path),
+                                caption=f"Transkrypcja: {title} (podsumowanie pominięte — tekst zbyt długi)",
+                                read_timeout=60,
+                                write_timeout=60,
+                            )
+                        record_download_for(context, chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
+                        success_recorded = True
+                        return
+
+                    await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
+                    summary_result = await generate_summary_artifact(
+                        transcript_text=transcript_text,
+                        summary_type=summary_type,
+                        title=title,
+                        sanitized_title=sanitized_title,
+                        output_dir=chat_download_path,
+                        executor=_executor,
                     )
+                    if not summary_result:
+                        await update_status("Wystąpił błąd podczas generowania podsumowania.")
+                        return
+
+                    await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
+                    await send_long_message(
+                        context.bot,
+                        chat_id,
+                        summary_result.summary_text,
+                        header=f"*{escape_md(title)} - {summary_result.summary_type_name}*\n\n",
+                    )
+                    await update_status("Wysyłanie pliku z pełną transkrypcją...")
                     with open(transcript_path, "rb") as file_obj:
                         await context.bot.send_document(
                             chat_id=chat_id,
                             document=file_obj,
                             filename=os.path.basename(transcript_path),
-                            caption=f"Transkrypcja: {title} (podsumowanie pominięte — tekst zbyt długi)",
+                            caption=f"Pełna transkrypcja: {title}",
                             read_timeout=60,
                             write_timeout=60,
                         )
+                    record_download_for(
+                        context,
+                        chat_id,
+                        title,
+                        url,
+                        f"transcription_summary_{summary_type}",
+                        file_size_mb,
+                        time_range,
+                        selected_format=format,
+                    )
+                    success_recorded = True
+                    await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+                else:
+                    await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
+                    display_text = transcript_result.display_text
+                    if len(display_text) <= 30000:
+                        await send_long_message(
+                            context.bot,
+                            chat_id,
+                            display_text,
+                            header=f"*Transkrypcja: {escape_md(title)}*\n\n",
+                        )
+                    with open(transcript_path, "rb") as file_obj:
+                        await context.bot.send_document(
+                            chat_id=chat_id,
+                            document=file_obj,
+                            filename=os.path.basename(transcript_path),
+                            caption=(
+                                f"Transkrypcja: {title}"
+                                if len(display_text) <= 30000
+                                else f"Transkrypcja: {title} ({len(display_text):,} znaków — tylko plik)"
+                            ),
+                            read_timeout=60,
+                            write_timeout=60,
+                        )
+                    try:
+                        cleanup_transcription_artifacts(
+                            source_media_path=downloaded_file_path,
+                            output_dir=chat_download_path,
+                            transcript_prefix=sanitized_title,
+                        )
+                    except Exception as exc:
+                        logging.error("Error deleting files: %s", exc)
                     record_download_for(context, chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
+                    success_recorded = True
+                    await update_status("Transkrypcja została wysłana!")
+            else:
+                use_mtproto = file_size_mb > TELEGRAM_UPLOAD_LIMIT_MB
+
+                # Detect files that exceed the active Telegram transport limit.
+                # When too large, offer the 7z archive split instead of failing.
+                transport_limit_mb = volume_size_for(
+                    use_mtproto=_mtproto_unavailability_reason() is None
+                )
+                if file_size_mb > transport_limit_mb and is_7z_available():
+                    await _offer_archive_or_cancel(
+                        update,
+                        context,
+                        chat_id=chat_id,
+                        file_path=downloaded_file_path,
+                        title=title,
+                        media_type=media_type,
+                        format_choice=format,
+                        file_size_mb=file_size_mb,
+                    )
+                    # The archive flow now owns the file; skip cleanup.
                     success_recorded = True
                     return
 
-                await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
-                summary_result = await generate_summary_artifact(
-                    transcript_text=transcript_text,
-                    summary_type=summary_type,
-                    title=title,
-                    sanitized_title=sanitized_title,
-                    output_dir=chat_download_path,
-                    executor=_executor,
-                )
-                if not summary_result:
-                    await update_status("Wystąpił błąd podczas generowania podsumowania.")
-                    return
+                method_label = " (MTProto)" if use_mtproto else ""
+                await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie pliku do Telegram...{method_label}")
+                thumb_path = await asyncio.get_event_loop().run_in_executor(_executor, download_thumbnail, info, chat_download_path, True)
+                try:
+                    if use_mtproto:
+                        from bot.mtproto import mtproto_unavailability_reason, send_audio_mtproto, send_video_mtproto
 
-                await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
-                await send_long_message(
-                    context.bot,
-                    chat_id,
-                    summary_result.summary_text,
-                    header=f"*{escape_md(title)} - {summary_result.summary_type_name}*\n\n",
-                )
-                await update_status("Wysyłanie pliku z pełną transkrypcją...")
-                with open(transcript_path, "rb") as file_obj:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=file_obj,
-                        filename=os.path.basename(transcript_path),
-                        caption=f"Pełna transkrypcja: {title}",
-                        read_timeout=60,
-                        write_timeout=60,
-                    )
+                        reason = mtproto_unavailability_reason()
+                        if reason is not None:
+                            raise RuntimeError(
+                                f"Plik za duży dla Bot API ({file_size_mb:.0f} MB, limit: {TELEGRAM_UPLOAD_LIMIT_MB} MB).\n"
+                                f"{reason}"
+                            )
+                        if media_type == "audio":
+                            ok = await send_audio_mtproto(chat_id, downloaded_file_path, title=title, caption=title, thumb_path=thumb_path)
+                        else:
+                            ok = await send_video_mtproto(chat_id, downloaded_file_path, caption=title, thumb_path=thumb_path)
+                        if not ok:
+                            raise RuntimeError("Wysyłanie pliku przez MTProto nie powiodło się.")
+                    else:
+                        with open(downloaded_file_path, "rb") as file_obj:
+                            thumb_file = open(thumb_path, "rb") if thumb_path else None
+                            try:
+                                if media_type == "audio":
+                                    await context.bot.send_audio(
+                                        chat_id=chat_id,
+                                        audio=file_obj,
+                                        title=title,
+                                        caption=title,
+                                        thumbnail=thumb_file,
+                                        read_timeout=60,
+                                        write_timeout=60,
+                                    )
+                                else:
+                                    await context.bot.send_video(
+                                        chat_id=chat_id,
+                                        video=file_obj,
+                                        caption=title,
+                                        thumbnail=thumb_file,
+                                        read_timeout=60,
+                                        write_timeout=60,
+                                    )
+                            finally:
+                                if thumb_file:
+                                    thumb_file.close()
+                finally:
+                    if thumb_path and os.path.exists(thumb_path):
+                        try:
+                            os.remove(thumb_path)
+                        except OSError:
+                            pass
+
+                try:
+                    os.remove(downloaded_file_path)
+                except OSError:
+                    pass
+                record_download_for(context, chat_id, title, url, f"{media_type}_{format}", file_size_mb, time_range, selected_format=format)
+                success_recorded = True
+                await update_status("Plik został wysłany!")
+        except Exception as exc:
+            if not success_recorded:
                 record_download_for(
                     context,
                     chat_id,
                     title,
                     url,
-                    f"transcription_summary_{summary_type}",
-                    file_size_mb,
-                    time_range,
+                    f"{media_type}_{format}",
+                    status="failure",
                     selected_format=format,
+                    error_message=str(exc),
                 )
-                success_recorded = True
-                await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+            logging.error("Error in download_file: %s", exc)
+
+            error_str = str(exc).lower()
+            if any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
+                platform_name = _get_session_context_value(
+                    context, chat_id, "platform", legacy_key="platform"
+                )
+                config = get_platform(platform_name)
+                hint = (
+                    config.cookies_hint
+                    if config and config.cookies_hint
+                    else GENERIC_COOKIES_HINT
+                )
+                await update_status(hint)
             else:
-                await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
-                display_text = transcript_result.display_text
-                if len(display_text) <= 30000:
-                    await send_long_message(
-                        context.bot,
-                        chat_id,
-                        display_text,
-                        header=f"*Transkrypcja: {escape_md(title)}*\n\n",
-                    )
-                with open(transcript_path, "rb") as file_obj:
-                    await context.bot.send_document(
-                        chat_id=chat_id,
-                        document=file_obj,
-                        filename=os.path.basename(transcript_path),
-                        caption=(
-                            f"Transkrypcja: {title}"
-                            if len(display_text) <= 30000
-                            else f"Transkrypcja: {title} ({len(display_text):,} znaków — tylko plik)"
-                        ),
-                        read_timeout=60,
-                        write_timeout=60,
-                    )
-                try:
-                    cleanup_transcription_artifacts(
-                        source_media_path=downloaded_file_path,
-                        output_dir=chat_download_path,
-                        transcript_prefix=sanitized_title,
-                    )
-                except Exception as exc:
-                    logging.error("Error deleting files: %s", exc)
-                record_download_for(context, chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
-                success_recorded = True
-                await update_status("Transkrypcja została wysłana!")
-        else:
-            use_mtproto = file_size_mb > TELEGRAM_UPLOAD_LIMIT_MB
-
-            # Detect files that exceed the active Telegram transport limit.
-            # When too large, offer the 7z archive split instead of failing.
-            transport_limit_mb = volume_size_for(
-                use_mtproto=_mtproto_unavailability_reason() is None
-            )
-            if file_size_mb > transport_limit_mb and is_7z_available():
-                await _offer_archive_or_cancel(
-                    update,
-                    context,
-                    chat_id=chat_id,
-                    file_path=downloaded_file_path,
-                    title=title,
-                    media_type=media_type,
-                    format_choice=format,
-                    file_size_mb=file_size_mb,
-                )
-                # The archive flow now owns the file; skip cleanup.
-                success_recorded = True
-                return
-
-            method_label = " (MTProto)" if use_mtproto else ""
-            await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie pliku do Telegram...{method_label}")
-            thumb_path = await asyncio.get_event_loop().run_in_executor(_executor, download_thumbnail, info, chat_download_path, True)
-            try:
-                if use_mtproto:
-                    from bot.mtproto import mtproto_unavailability_reason, send_audio_mtproto, send_video_mtproto
-
-                    reason = mtproto_unavailability_reason()
-                    if reason is not None:
-                        raise RuntimeError(
-                            f"Plik za duży dla Bot API ({file_size_mb:.0f} MB, limit: {TELEGRAM_UPLOAD_LIMIT_MB} MB).\n"
-                            f"{reason}"
-                        )
-                    if media_type == "audio":
-                        ok = await send_audio_mtproto(chat_id, downloaded_file_path, title=title, caption=title, thumb_path=thumb_path)
-                    else:
-                        ok = await send_video_mtproto(chat_id, downloaded_file_path, caption=title, thumb_path=thumb_path)
-                    if not ok:
-                        raise RuntimeError("Wysyłanie pliku przez MTProto nie powiodło się.")
-                else:
-                    with open(downloaded_file_path, "rb") as file_obj:
-                        thumb_file = open(thumb_path, "rb") if thumb_path else None
-                        try:
-                            if media_type == "audio":
-                                await context.bot.send_audio(
-                                    chat_id=chat_id,
-                                    audio=file_obj,
-                                    title=title,
-                                    caption=title,
-                                    thumbnail=thumb_file,
-                                    read_timeout=60,
-                                    write_timeout=60,
-                                )
-                            else:
-                                await context.bot.send_video(
-                                    chat_id=chat_id,
-                                    video=file_obj,
-                                    caption=title,
-                                    thumbnail=thumb_file,
-                                    read_timeout=60,
-                                    write_timeout=60,
-                                )
-                        finally:
-                            if thumb_file:
-                                thumb_file.close()
-            finally:
-                if thumb_path and os.path.exists(thumb_path):
-                    try:
-                        os.remove(thumb_path)
-                    except OSError:
-                        pass
-
-            try:
-                os.remove(downloaded_file_path)
-            except OSError:
-                pass
-            record_download_for(context, chat_id, title, url, f"{media_type}_{format}", file_size_mb, time_range, selected_format=format)
-            success_recorded = True
-            await update_status("Plik został wysłany!")
-    except Exception as exc:
-        if not success_recorded:
-            record_download_for(
-                context,
-                chat_id,
-                title,
-                url,
-                f"{media_type}_{format}",
-                status="failure",
-                selected_format=format,
-                error_message=str(exc),
-            )
-        logging.error("Error in download_file: %s", exc)
-
-        error_str = str(exc).lower()
-        if any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
-            platform_name = _get_session_context_value(
-                context, chat_id, "platform", legacy_key="platform"
-            )
-            config = get_platform(platform_name)
-            hint = (
-                config.cookies_hint
-                if config and config.cookies_hint
-                else GENERIC_COOKIES_HINT
-            )
-            await update_status(hint)
-        else:
-            await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
+                await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
+    finally:
+        job_registry.unregister(cancellation.job_id)
 
 
 async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
