@@ -346,6 +346,13 @@ def _build_stop_list_message(descriptors: list) -> tuple[str, InlineKeyboardMark
 async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List running jobs in this chat with cancel buttons."""
 
+    user_id = update.effective_user.id
+    if not _is_authorized(context, user_id):
+        await update.effective_message.reply_text(
+            "Brak autoryzacji. Użyj /start aby się zalogować."
+        )
+        return
+
     chat_id = update.effective_chat.id
     descriptors = job_registry.list_for_chat(chat_id)
 

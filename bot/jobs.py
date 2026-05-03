@@ -66,7 +66,13 @@ class JobRegistry:
         self._cancellations: dict[str, JobCancellation] = {}
 
     def register(self, chat_id: int, descriptor: JobDescriptor) -> JobCancellation:
-        """Register a new job for ``chat_id`` and return its cancellation handle."""
+        """Register a new job for ``chat_id`` and return its cancellation handle.
+
+        Note: ``asyncio.Event()`` is created here and must be bound to an
+        active event loop. Call this from an async context (e.g. a Telegram
+        handler coroutine). Calling from a synchronous thread without a
+        running loop is not supported in Python >=3.10.
+        """
 
         job_id = secrets.token_hex(4)
         with self._lock:

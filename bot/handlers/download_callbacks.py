@@ -432,6 +432,7 @@ async def download_file(
                     output_dir=chat_download_path,
                     executor=_executor,
                     status_callback=lambda status: update_status(f"Transkrypcja w toku...\n\n{status}"),
+                    cancellation=cancellation,
                 )
 
                 if not transcript_path or not os.path.exists(transcript_path):
@@ -580,9 +581,9 @@ async def download_file(
                                 f"{reason}"
                             )
                         if media_type == "audio":
-                            ok = await send_audio_mtproto(chat_id, downloaded_file_path, title=title, caption=title, thumb_path=thumb_path)
+                            ok = await send_audio_mtproto(chat_id, downloaded_file_path, title=title, caption=title, thumb_path=thumb_path, cancellation=cancellation)
                         else:
-                            ok = await send_video_mtproto(chat_id, downloaded_file_path, caption=title, thumb_path=thumb_path)
+                            ok = await send_video_mtproto(chat_id, downloaded_file_path, caption=title, thumb_path=thumb_path, cancellation=cancellation)
                         if not ok:
                             raise RuntimeError("Wysyłanie pliku przez MTProto nie powiodło się.")
                     else:

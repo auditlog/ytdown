@@ -11,10 +11,12 @@ def test_stop_command_returns_empty_message_when_no_jobs():
     registry = JobRegistry()
     update = mock.MagicMock()
     update.effective_chat.id = 1
+    update.effective_user.id = 1
     update.effective_message.reply_text = mock.AsyncMock()
     context = mock.MagicMock()
 
-    with mock.patch("bot.telegram_commands.job_registry", registry):
+    with mock.patch("bot.telegram_commands.job_registry", registry), \
+         mock.patch("bot.telegram_commands._is_authorized", return_value=True):
         asyncio.run(telegram_commands.stop_command(update, context))
 
     update.effective_message.reply_text.assert_awaited_once()
@@ -42,10 +44,12 @@ def test_stop_command_lists_active_jobs():
 
     update = mock.MagicMock()
     update.effective_chat.id = 7
+    update.effective_user.id = 7
     update.effective_message.reply_text = mock.AsyncMock()
     context = mock.MagicMock()
 
-    with mock.patch("bot.telegram_commands.job_registry", registry):
+    with mock.patch("bot.telegram_commands.job_registry", registry), \
+         mock.patch("bot.telegram_commands._is_authorized", return_value=True):
         asyncio.run(telegram_commands.stop_command(update, context))
 
     text = update.effective_message.reply_text.await_args.args[0]
