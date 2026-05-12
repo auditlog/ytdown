@@ -652,6 +652,11 @@ async def download_file(
                     else GENERIC_COOKIES_HINT
                 )
                 await update_status(hint)
+            elif "requested format is not available" in error_str:
+                await update_status(
+                    "Wybrana jakość nie jest dostępna dla tego filmu. "
+                    "Spróbuj wybrać inną rozdzielczość lub opcję „best”."
+                )
             else:
                 await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
     finally:

@@ -151,9 +151,12 @@ def prepare_download_plan(
             ydl_opts['merge_output_format'] = 'mp4'
         elif format_choice == "medium":
             # Cap at 720p HD for a smaller, faster download while staying watchable.
+            # Trailing /best fallback handles portrait formats (TikTok, Reels, Shorts)
+            # whose `height` is the longer side and would otherwise fail height<=N.
             ydl_opts['format'] = (
                 'bestvideo[height<=720]+bestaudio'
                 '/best[height<=720]'
+                '/best'
             )
             ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
             ydl_opts['merge_output_format'] = 'mp4'
@@ -162,6 +165,7 @@ def prepare_download_plan(
             ydl_opts['format'] = (
                 f'bestvideo[height<={height}]+bestaudio'
                 f'/best[height<={height}]'
+                f'/best'
             )
             ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
             ydl_opts['merge_output_format'] = 'mp4'
