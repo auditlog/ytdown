@@ -380,8 +380,15 @@ authorized_users: set[int] = set()
 def _replace_runtime_authorized_users(user_ids) -> set[int]:
     """Replace runtime authorized-user cache in place and return it."""
 
+    # Materialize before clearing: ``user_ids`` may alias the module-level
+    # ``authorized_users`` set itself (load_authorized_users returns the live
+    # set, which initialize_runtime then feeds back here). Clearing before
+    # iterating would otherwise wipe the very IDs we intend to keep, dropping
+    # every persisted user on each startup and forcing a PIN re-entry after
+    # every restart.
+    new_ids = {int(user_id) for user_id in user_ids}
     authorized_users.clear()
-    authorized_users.update(int(user_id) for user_id in user_ids)
+    authorized_users.update(new_ids)
     return authorized_users
 
 

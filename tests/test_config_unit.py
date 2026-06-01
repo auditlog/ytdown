@@ -113,6 +113,44 @@ def test_initialize_runtime_updates_exported_globals_in_place(tmp_path):
     assert config.PIN_CODE == "87654321"
 
 
+def test_initialize_runtime_preserves_authorized_users_from_disk(tmp_path, monkeypatch):
+    """Regression: persisted authorized users must survive a full
+    initialize_runtime() cycle (i.e. across a process restart).
+
+    Guards against a self-aliasing defect where initialize_runtime cleared the
+    runtime authorized-user set while re-applying the same set object, wiping
+    every persisted user on each startup and forcing a PIN re-entry after every
+    restart (e.g. the nightly systemd restart timer).
+    """
+    cfg = tmp_path / "api_key.md"
+    _write_file(cfg, "TELEGRAM_BOT_TOKEN=file_token\nPIN_CODE=87654321")
+
+    users_file = tmp_path / "authorized_users.json"
+    users_file.write_text(
+        '{"authorized_users": ["398389039"], "last_updated": "", "version": "1.0"}',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(config, "AUTHORIZED_USERS_FILE", str(users_file))
+
+    original_users = config.authorized_users
+    original_snapshot = original_users.copy()
+
+    try:
+        config.initialize_runtime(
+            config_file_path=str(cfg),
+            env={},
+            load_env_file=False,
+            ensure_downloads_dir=False,
+        )
+
+        assert config.authorized_users is original_users
+        assert config.authorized_users == {398389039}
+        assert config.get_runtime_authorized_users() == {398389039}
+    finally:
+        original_users.clear()
+        original_users.update(original_snapshot)
+
+
 def test_initialize_runtime_refreshes_runtime_services_paths(tmp_path, monkeypatch):
     cfg = tmp_path / "api_key.md"
     users_file = tmp_path / "authorized_users.json"
