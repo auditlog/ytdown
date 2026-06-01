@@ -64,9 +64,14 @@ def cleanup_old_files(directory, max_age_hours=24):
                 except Exception as e:
                     logging.error("Error deleting file %s: %s", file_path, e)
 
-            # Remove empty directories
+            # Remove empty subdirectories, but never the top-level target
+            # directory itself. os.walk yields `directory` as its first `root`;
+            # deleting it when empty would drop e.g. downloads/ on every run,
+            # breaking later disk-usage checks (false "0.0 GB"/low-space alarms
+            # and recurring "No such file or directory" cleanup errors).
             try:
-                if not os.listdir(root):
+                is_top_level = os.path.abspath(root) == os.path.abspath(directory)
+                if not is_top_level and not os.listdir(root):
                     os.rmdir(root)
                     logging.info("Deleted empty directory: %s", root)
             except OSError as e:
