@@ -74,8 +74,10 @@ def test_prepare_download_plan_video_medium_caps_at_720p(monkeypatch, tmp_path):
     )
 
     assert plan is not None
+    # Trailing /best is the unconditional fallback for portrait sources whose
+    # height filter would otherwise match no format (see download_service).
     assert plan.ydl_opts["format"] == (
-        "bestvideo[height<=720]+bestaudio/best[height<=720]"
+        "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
     )
     assert plan.ydl_opts["format_sort"] == ds.VIDEO_FORMAT_SORT
     assert plan.ydl_opts["merge_output_format"] == "mp4"
