@@ -9,7 +9,7 @@ from datetime import datetime
 
 import yt_dlp
 
-from bot.config import COOKIES_FILE, YTDLP_REMOTE_COMPONENTS
+from bot.config import COOKIES_FILE, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
 from bot.downloader_validation import sanitize_filename
 
 
@@ -81,6 +81,7 @@ def download_subtitles(url, lang, output_dir, auto=False, title=""):
             'quiet': True,
             'no_warnings': True,
             'remote_components': YTDLP_REMOTE_COMPONENTS,
+            'js_runtimes': YTDLP_JS_RUNTIMES,
         }
         if os.path.exists(COOKIES_FILE):
             ydl_opts['cookiefile'] = COOKIES_FILE
