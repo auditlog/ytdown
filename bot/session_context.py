@@ -27,6 +27,8 @@ TRANSIENT_FLOW_FIELDS = (
     "audio_file_path",
     "audio_file_title",
     "subtitle_pending",
+    "transcript_contexts",
+    "pending_transcript_prompt",
 )
 
 TRANSIENT_FLOW_LEGACY_KEYS = (
@@ -36,6 +38,8 @@ TRANSIENT_FLOW_LEGACY_KEYS = (
     "audio_file_path",
     "audio_file_title",
     "subtitle_pending",
+    "transcript_contexts",
+    "pending_transcript_prompt",
 )
 
 

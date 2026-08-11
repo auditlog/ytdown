@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 
 from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_message
+from bot.handlers.transcript_prompt_handlers import offer_custom_transcript_prompt
 from bot.runtime import record_download_for
 from bot.services.spotify_service import download_resolved_audio
 from bot.services.transcription_service import (
@@ -169,6 +170,13 @@ async def _handle_transcription(
         source_media_path=downloaded_file_path,
         output_dir=chat_download_path,
         transcript_prefix=sanitized_title,
+    )
+    await offer_custom_transcript_prompt(
+        context,
+        chat_id=chat_id,
+        requester_id=update.effective_user.id,
+        transcript_path=transcript_path,
+        title=title,
     )
 
 

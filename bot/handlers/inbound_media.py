@@ -61,6 +61,7 @@ from bot.handlers.inbound_video import (
     _extract_video_info,
     extracted_process_video_file,
 )
+from bot.handlers.transcript_prompt_handlers import handle_pending_transcript_prompt
 
 
 async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -193,6 +194,9 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
             "Wymagane uwierzytelnienie!\n\n"
             "Proszę podaj 8-cyfrowy kod PIN, aby uzyskać dostęp."
         )
+        return
+
+    if await handle_pending_transcript_prompt(update, context):
         return
 
     current_url = _get_session_value(context, chat_id, "current_url", user_urls)
@@ -517,5 +521,4 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
-
 

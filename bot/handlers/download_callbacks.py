@@ -93,6 +93,7 @@ from bot.handlers.time_range_callbacks import (
     back_to_main_menu,
     show_time_range_options,
 )
+from bot.handlers.transcript_prompt_handlers import offer_custom_transcript_prompt
 from bot.platforms import get_platform
 
 GENERIC_COOKIES_HINT = (
@@ -467,6 +468,13 @@ async def download_file(
                             )
                         record_download_for(context, chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
                         success_recorded = True
+                        await offer_custom_transcript_prompt(
+                            context,
+                            chat_id=chat_id,
+                            requester_id=update.effective_user.id,
+                            transcript_path=transcript_path,
+                            title=title,
+                        )
                         return
 
                     await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
@@ -511,6 +519,13 @@ async def download_file(
                     )
                     success_recorded = True
                     await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+                    await offer_custom_transcript_prompt(
+                        context,
+                        chat_id=chat_id,
+                        requester_id=update.effective_user.id,
+                        transcript_path=transcript_path,
+                        title=title,
+                    )
                 else:
                     await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
                     display_text = transcript_result.display_text
@@ -545,6 +560,13 @@ async def download_file(
                     record_download_for(context, chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
                     success_recorded = True
                     await update_status("Transkrypcja została wysłana!")
+                    await offer_custom_transcript_prompt(
+                        context,
+                        chat_id=chat_id,
+                        requester_id=update.effective_user.id,
+                        transcript_path=transcript_path,
+                        title=title,
+                    )
             else:
                 use_mtproto = file_size_mb > TELEGRAM_UPLOAD_LIMIT_MB
 
