@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any, Callable
 
 import yt_dlp
 
-from bot.config import YTDLP_REMOTE_COMPONENTS
+from bot.config import YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
 from bot.downloader_metadata import COOKIES_FILE, get_video_info
 from bot.downloader_validation import is_valid_audio_quality, sanitize_filename
 from bot.security_limits import MAX_FILE_SIZE_MB
@@ -112,6 +112,7 @@ def prepare_download_plan(
         'buffer_size': 1024 * 16,
         'http_chunk_size': 10485760,
         'remote_components': YTDLP_REMOTE_COMPONENTS,
+        'js_runtimes': YTDLP_JS_RUNTIMES,
     }
     if os.path.exists(COOKIES_FILE):
         ydl_opts['cookiefile'] = COOKIES_FILE
@@ -151,9 +152,12 @@ def prepare_download_plan(
             ydl_opts['merge_output_format'] = 'mp4'
         elif format_choice == "medium":
             # Cap at 720p HD for a smaller, faster download while staying watchable.
+            # Trailing /best fallback handles portrait formats (TikTok, Reels, Shorts)
+            # whose `height` is the longer side and would otherwise fail height<=N.
             ydl_opts['format'] = (
                 'bestvideo[height<=720]+bestaudio'
                 '/best[height<=720]'
+                '/best'
             )
             ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
             ydl_opts['merge_output_format'] = 'mp4'
@@ -162,6 +166,7 @@ def prepare_download_plan(
             ydl_opts['format'] = (
                 f'bestvideo[height<={height}]+bestaudio'
                 f'/best[height<={height}]'
+                f'/best'
             )
             ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
             ydl_opts['merge_output_format'] = 'mp4'

@@ -15,7 +15,7 @@ import yt_dlp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
 from telegram.ext import ContextTypes
 
-from bot.config import DOWNLOAD_PATH, YTDLP_REMOTE_COMPONENTS, get_runtime_value
+from bot.config import DOWNLOAD_PATH, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS, get_runtime_value
 from bot.handlers.common_ui import (
     build_main_keyboard,
     escape_md,
@@ -268,6 +268,7 @@ async def _download_and_send_ig_videos(
             "no_warnings": True,
             "noplaylist": True,
             "remote_components": YTDLP_REMOTE_COMPONENTS,
+            "js_runtimes": YTDLP_JS_RUNTIMES,
         }
         if os.path.exists(COOKIES_FILE):
             ydl_opts["cookiefile"] = COOKIES_FILE
@@ -652,6 +653,11 @@ async def download_file(
                     else GENERIC_COOKIES_HINT
                 )
                 await update_status(hint)
+            elif "requested format is not available" in error_str:
+                await update_status(
+                    "Wybrana jakość nie jest dostępna dla tego filmu. "
+                    "Spróbuj wybrać inną rozdzielczość lub opcję „best”."
+                )
             else:
                 await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
     finally:

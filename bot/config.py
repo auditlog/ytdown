@@ -11,6 +11,7 @@ Handles loading and validation of configuration from various sources:
 import os
 import re
 import logging
+import shutil
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -45,6 +46,27 @@ COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 
 # Remote components for yt-dlp YouTube JS challenge solving (signature + n-parameter)
 YTDLP_REMOTE_COMPONENTS = ['ejs:github']
+
+# yt-dlp needs a JavaScript runtime to solve YouTube's "n challenge"; without one
+# extraction degrades to "Only images are available for download". Only deno is
+# enabled by default, so a host that ships node instead must say so explicitly.
+# Order mirrors yt-dlp's own priority. NOTE: quickjs is omitted because its binary
+# is named "qjs", so probing for "quickjs" would never match anyway.
+_JS_RUNTIME_PREFERENCE = ('deno', 'node', 'bun')
+
+
+def detect_js_runtimes(which=shutil.which) -> dict[str, dict]:
+    """Return the first available JS runtime in yt-dlp's option format."""
+
+    for runtime in _JS_RUNTIME_PREFERENCE:
+        if which(runtime):
+            return {runtime: {}}
+    # Keep yt-dlp's own default rather than {} - an empty dict disables every
+    # runtime, silencing the warning that tells the user what to install.
+    return {'deno': {}}
+
+
+YTDLP_JS_RUNTIMES = detect_js_runtimes()
 
 # Path to authorized users file
 AUTHORIZED_USERS_FILE = "authorized_users.json"
@@ -380,8 +402,15 @@ authorized_users: set[int] = set()
 def _replace_runtime_authorized_users(user_ids) -> set[int]:
     """Replace runtime authorized-user cache in place and return it."""
 
+    # Materialize before clearing: ``user_ids`` may alias the module-level
+    # ``authorized_users`` set itself (load_authorized_users returns the live
+    # set, which initialize_runtime then feeds back here). Clearing before
+    # iterating would otherwise wipe the very IDs we intend to keep, dropping
+    # every persisted user on each startup and forcing a PIN re-entry after
+    # every restart.
+    new_ids = {int(user_id) for user_id in user_ids}
     authorized_users.clear()
-    authorized_users.update(int(user_id) for user_id in user_ids)
+    authorized_users.update(new_ids)
     return authorized_users
 
 

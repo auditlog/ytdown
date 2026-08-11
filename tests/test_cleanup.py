@@ -43,6 +43,22 @@ def test_cleanup_old_files_nonexistent_directory():
     assert cleanup_old_files("/tmp/path-that-does-not-exist", max_age_hours=24) == 0
 
 
+def test_cleanup_old_files_preserves_root_directory(tmp_path):
+    """An empty target directory must survive cleanup.
+
+    os.walk yields the target as its first ``root``; deleting it when empty
+    previously removed downloads/ on every run, which broke later disk-usage
+    checks (false "0.0 GB"/low-space alarms and recurring cleanup errors).
+    """
+    target = tmp_path / "downloads"
+    target.mkdir()
+
+    deleted = cleanup_old_files(str(target), max_age_hours=24)
+
+    assert deleted == 0
+    assert target.exists()
+
+
 def test_get_disk_usage_returns_disk_usage(monkeypatch):
     total = 100 * 1024 ** 3
     used = 40 * 1024 ** 3
