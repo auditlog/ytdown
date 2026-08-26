@@ -139,13 +139,16 @@ def test_resolve_video_episode_normalizes_missing_manifest_contents(monkeypatch)
 
 
 def test_get_video_error_message_covers_every_reason():
-    reasons = ("no_cookie", "expired_session", "api_changed", "drm_protected", "ffmpeg_missing")
+    reasons = (
+        "no_cookie", "expired_session", "api_changed", "drm_protected",
+        "ffmpeg_missing", "mux_timeout",
+    )
     fallback = svs.get_video_error_message("__unmapped__")
     for reason in reasons:
         message = svs.get_video_error_message(reason)
         assert message and message != reason
         assert message != fallback
-    # Pins that the five codes produce five distinct messages, not one
+    # Pins that the six codes produce six distinct messages, not one
     # message reused for all of them -- an empty _ERROR_MESSAGES map would
     # satisfy every assertion above but collapse this set to size 1.
     assert len({svs.get_video_error_message(r) for r in reasons}) == len(reasons)
@@ -155,16 +158,37 @@ def test_get_video_error_message_drm_refuses_clearly():
     assert "DRM" in svs.get_video_error_message("drm_protected")
 
 
-def test_get_video_error_message_handles_ffmpeg_timeout():
-    """mux() raises SpotifyVideoError(f"ffmpeg mux timeout: {N}s exceeded"),
-    not a bare reason code. An exact-match-only lookup would silently
-    degrade this to the generic fallback text; it must get its own message
-    instead, distinguishable from both ffmpeg_missing and the fallback."""
+def test_get_video_error_message_mux_timeout_is_distinct_from_ffmpeg_missing():
+    """mux() raises the bare code "mux_timeout" (not a descriptive sentence,
+    and not the same code as "ffmpeg_missing") when ffmpeg itself times out.
+    The causes and the right user advice differ, so the messages must too."""
 
-    message = svs.get_video_error_message("ffmpeg mux timeout: 600s exceeded")
-    assert message != svs.get_video_error_message("some_unmapped_reason")
+    message = svs.get_video_error_message("mux_timeout")
     assert message != svs.get_video_error_message("ffmpeg_missing")
     assert "limit czasu" in message.lower()
+
+
+def test_get_video_error_message_does_not_collide_with_network_timeout():
+    """Regression for a real defect: get_video_error_message used to match
+    the substring "timeout" against any reason string. download_track wraps
+    a stalled segment download into SpotifyVideoError("Segment download
+    failed after N attempts: ... read timeout=30 ..."), whose text also
+    contains "timeout" -- so a user whose network stalled mid-download was
+    told ffmpeg exceeded its time limit, a wrong and confusing message
+    about a component that never ran. Now that mux_timeout is an exact-match
+    reason code, an unrelated message merely containing "timeout" must fall
+    through to the generic fallback, not the mux-specific message."""
+
+    network_stall_message = (
+        "Segment download failed after 3 attempts; last error from "
+        "https://video-fa.scdn.co/segments/0.mp4: HTTPSConnectionPool"
+        "(host='video-fa.scdn.co', port=443): Read timed out. (read timeout=30)"
+    )
+
+    result = svs.get_video_error_message(network_stall_message)
+
+    assert result != svs.get_video_error_message("mux_timeout")
+    assert result == svs.get_video_error_message("__totally_unmapped__")
 
 
 def test_download_episode_media_creates_missing_output_dir(monkeypatch, tmp_path):
@@ -298,7 +322,7 @@ def test_download_episode_media_removes_truncated_output_on_mux_failure(monkeypa
     def fake_mux(video_path, audio_path, out_path):
         # Simulate ffmpeg having written a partial file before the timeout.
         Path(out_path).write_bytes(b"truncated")
-        raise sv.SpotifyVideoError("ffmpeg mux timeout: 600s exceeded")
+        raise sv.SpotifyVideoError("mux_timeout")
 
     monkeypatch.setattr(svs, "download_track", fake_download_track)
     monkeypatch.setattr(svs, "mux", fake_mux)
@@ -317,7 +341,7 @@ def test_download_episode_media_removes_truncated_output_on_mux_failure(monkeypa
     out_path = Path(tmp_path) / "Testowy odcinek.mp4"
 
     with ThreadPoolExecutor(max_workers=1) as executor:
-        with pytest.raises(sv.SpotifyVideoError):
+        with pytest.raises(sv.SpotifyVideoError) as exc:
             asyncio.run(
                 svs.download_episode_media(
                     episode=episode,
@@ -328,6 +352,12 @@ def test_download_episode_media_removes_truncated_output_on_mux_failure(monkeypa
             )
 
     assert not out_path.exists()
+    # Pins that a mux failure keeps its own identity rather than being
+    # rewritten to "api_changed" by download_episode_media's manifest-shape
+    # normalization -- without this, an over-broad try around the mux call
+    # would leave this test green while silently erasing the distinction
+    # the narrow wrapping (see item 2, fix round 1) was built to preserve.
+    assert str(exc.value) == "mux_timeout"
 
 
 def test_build_quality_options_describes_profiles_with_estimated_sizes():

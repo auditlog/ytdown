@@ -589,7 +589,15 @@ def test_mux_raises_timeout_expired(tmp_path, monkeypatch):
     monkeypatch.setattr(sv.subprocess, "run", raise_timeout)
     with pytest.raises(sv.SpotifyVideoError) as exc:
         sv.mux(str(tmp_path / "v.mp4"), str(tmp_path / "a.mp4"), str(tmp_path / "o.mp4"))
-    assert "timeout" in str(exc.value).lower()
+    # Bare reason code (not a descriptive sentence): the service layer maps
+    # this by exact string match, same as ffmpeg_missing and every other
+    # SpotifyVideoError this pipeline raises. A substring/keyword match on an
+    # English sentence previously collided with unrelated network-timeout
+    # messages -- see test_get_video_error_message_does_not_collide_with_
+    # network_timeout in tests/test_spotify_video_service.py.
+    assert str(exc.value) == "mux_timeout"
+    # The original TimeoutExpired must still be chained for debugging.
+    assert isinstance(exc.value.__cause__, sv.subprocess.TimeoutExpired)
 
 
 def test_download_track_preserves_original_error_when_cleanup_fails(tmp_path, monkeypatch):

@@ -522,9 +522,12 @@ def mux(video_path: str, audio_path: str, out_path: str) -> str:
     except FileNotFoundError as exc:
         raise SpotifyVideoError("ffmpeg_missing") from exc
     except subprocess.TimeoutExpired as exc:
-        raise SpotifyVideoError(
-            f"ffmpeg mux timeout: {MUX_TIMEOUT_SECONDS}s exceeded"
-        ) from exc
+        # Bare reason code, not a descriptive sentence: the service layer
+        # (bot/services/spotify_video_service.py) maps this by exact string
+        # match, the same as every other SpotifyVideoError this pipeline
+        # raises. The original TimeoutExpired is still chained via `from exc`
+        # so the MUX_TIMEOUT_SECONDS detail survives in logs/tracebacks.
+        raise SpotifyVideoError("mux_timeout") from exc
 
     if result.returncode != 0:
         detail = (result.stderr or b"").decode("utf-8", "replace")[:200]

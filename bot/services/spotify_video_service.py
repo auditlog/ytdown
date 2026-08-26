@@ -69,30 +69,29 @@ _ERROR_MESSAGES = {
         "Brak programu ffmpeg na serwerze — nie mogę połączyć obrazu z dźwiękiem.\n\n"
         "Zgłoś to administratorowi bota."
     ),
+    "mux_timeout": (
+        "Łączenie obrazu z dźwiękiem (ffmpeg) przekroczyło limit czasu.\n\n"
+        "Odcinek może być zbyt długi lub serwer jest chwilowo przeciążony. "
+        "Spróbuj ponownie lub pobierz sam dźwięk zamiast wideo."
+    ),
 }
 
 
 def get_video_error_message(reason: str) -> str:
     """Map a resolution failure code to a user-facing Polish message.
 
-    ``reason`` is usually one of the bare codes resolve_video_episode raises,
-    but download_episode_media can also let mux()'s own SpotifyVideoError
-    propagate unchanged (e.g. an ffmpeg timeout), whose message is a full
-    sentence rather than a bare code — matched here by keyword instead of
-    exact lookup so it still gets a specific message.
+    ``reason`` is an exact-match lookup only: every SpotifyVideoError this
+    pipeline raises for an actionable failure (including mux()'s own
+    "mux_timeout") carries a bare reason code, never a descriptive sentence.
+    A prior keyword/substring match here collided with unrelated failures
+    (e.g. a requests read-timeout message from a stalled segment download
+    also containing the word "timeout") and was removed for that reason.
     """
 
-    if reason in _ERROR_MESSAGES:
-        return _ERROR_MESSAGES[reason]
-
-    if "timeout" in reason.lower():
-        return (
-            "Łączenie obrazu z dźwiękiem (ffmpeg) przekroczyło limit czasu.\n\n"
-            "Odcinek może być zbyt długi lub serwer jest chwilowo przeciążony. "
-            "Spróbuj ponownie lub pobierz sam dźwięk zamiast wideo."
-        )
-
-    return "Nie udało się przygotować wideo z tego odcinka Spotify."
+    return _ERROR_MESSAGES.get(
+        reason,
+        "Nie udało się przygotować wideo z tego odcinka Spotify.",
+    )
 
 
 def resolve_video_episode(
