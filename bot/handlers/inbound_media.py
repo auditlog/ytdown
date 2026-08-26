@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -34,9 +35,16 @@ from bot.services.spotify_service import (
     get_resolution_error_message,
     resolve_episode,
 )
+from bot.services.spotify_video_service import (
+    build_quality_options,
+    get_video_error_message,
+    resolve_video_episode,
+)
+from bot.spotify_video import SpotifyVideoError
 from bot.handlers.common_ui import (
     build_instagram_photo_keyboard as _build_instagram_photo_keyboard,
     build_main_keyboard as _build_main_keyboard,
+    build_spotify_episode_keyboard,
     escape_md,
 )
 from bot.handlers.time_range import parse_time_range as _shared_parse_time_range
@@ -314,37 +322,96 @@ async def extracted_process_playlist_link(update: Update, context: ContextTypes.
 
 
 async def extracted_process_spotify_episode(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
-    """Resolves a Spotify episode URL and shows download options."""
+    """Resolves a Spotify episode URL and shows download options.
+
+    Video resolution runs first because it needs only a session cookie, while
+    the legacy iTunes/YouTube path needs Spotify Web API credentials. Both
+    may apply, so the keyboard is assembled from whichever source actually
+    resolved -- a button that cannot work under the current configuration is
+    never shown. If neither resolves, the user gets the most specific error
+    available.
+    """
     chat_id = update.effective_chat.id
-    progress_message = await update.message.reply_text("Spotify: wyszukiwanie odcinka podcastu...")
+    progress_message = await update.message.reply_text("Spotify: sprawdzanie odcinka...")
+
+    _set_session_value(context, chat_id, "current_url", url, user_urls)
+
+    video_episode = None
+    video_error = None
+    try:
+        video_episode = await asyncio.get_event_loop().run_in_executor(
+            None, resolve_video_episode, url
+        )
+    except SpotifyVideoError as exc:
+        video_error = str(exc)
 
     resolved = await resolve_episode(url)
-    error_message = get_resolution_error_message(resolved)
-    if error_message:
+    fallback_available = resolved is not None and resolved.get("source") in ("itunes", "youtube")
+
+    if video_episode is None and not fallback_available:
+        error_message = (
+            get_video_error_message(video_error)
+            if video_error
+            else get_resolution_error_message(resolved) or "Nie udało się przygotować tego odcinka."
+        )
         await progress_message.edit_text(error_message)
         return
 
-    _set_session_context_value(
-        context,
-        chat_id,
-        "spotify_resolved",
-        resolved,
-        legacy_key="spotify_resolved",
-    )
-    _set_session_value(context, chat_id, "current_url", url, user_urls)
+    if video_episode is not None:
+        _set_session_context_value(
+            context,
+            chat_id,
+            "spotify_video",
+            {
+                "episode_id": video_episode.episode_id,
+                "title": video_episode.title,
+                "show_name": video_episode.show_name,
+                "duration_ms": video_episode.duration_ms,
+                "manifest": video_episode.manifest,
+                "subtitle_languages": video_episode.subtitle_languages,
+            },
+            legacy_key="spotify_video",
+        )
+    else:
+        _clear_session_context_value(context, chat_id, "spotify_video", legacy_key="spotify_video")
 
-    caption_data = build_episode_caption_data(resolved)
-    title = caption_data["title"]
-    show_name = caption_data["show_name"]
-    duration_str = caption_data["duration_str"]
-    source_label = caption_data["source_label"]
+    if fallback_available:
+        _set_session_context_value(
+            context, chat_id, "spotify_resolved", resolved, legacy_key="spotify_resolved"
+        )
+
+    quality_options = build_quality_options(video_episode) if video_episode else []
+
+    if video_episode is not None:
+        title = video_episode.title
+        show_name = video_episode.show_name
+        duration_seconds = video_episode.duration_ms // 1000
+        duration_str = f"{duration_seconds // 60}:{duration_seconds % 60:02d}" if duration_seconds else "?"
+        source_line = "Źródło: Spotify (wideo)"
+    else:
+        caption_data = build_episode_caption_data(resolved)
+        title = caption_data["title"]
+        show_name = caption_data["show_name"]
+        duration_str = caption_data["duration_str"]
+        source_line = f"Źródło audio: {caption_data['source_label']}"
+
     show_info = f"\nPodcast: {escape_md(show_name)}" if show_name else ""
+    # Video resolution failed but the legacy audio path still worked -- tell
+    # the user why native video/audio buttons are missing instead of staying
+    # silent about it.
+    notice = f"\n\n{get_video_error_message(video_error)}" if video_error and fallback_available else ""
 
-    reply_markup = InlineKeyboardMarkup(_build_main_keyboard("spotify"))
+    reply_markup = InlineKeyboardMarkup(
+        build_spotify_episode_keyboard(
+            quality_options=quality_options,
+            has_native_audio=video_episode is not None,
+            has_fallback_audio=fallback_available,
+        )
+    )
     await progress_message.edit_text(
         f"*{escape_md(title)}*{show_info}\n"
         f"Czas trwania: {duration_str}\n"
-        f"Źródło audio: {source_label}\n\n"
+        f"{source_line}{notice}\n\n"
         f"Wybierz opcję:",
         reply_markup=reply_markup,
         parse_mode="Markdown",
