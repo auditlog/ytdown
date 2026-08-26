@@ -779,32 +779,55 @@ def test_download_spotify_video_progress_bridge_error_does_not_abort_download(mo
     assert final_text == "Gotowe: Test Episode"
 
 
-def test_download_spotify_video_stale_progress_edit_never_reaches_telegram_after_download_completes(
+def test_download_spotify_video_waits_for_pending_progress_edit_before_next_message(
     monkeypatch, tmp_path
 ):
-    """The last progress_cb call and download_episode_media's return can
-    race (most visibly on the audio-only path, where nothing else happens
-    between them). A progress edit still pending at that point must never
-    reach Telegram once the download attempt has concluded, so it can't
-    land after -- and clobber -- the final status message.
+    """After download_episode_media returns, a progress edit still in
+    flight must be allowed to finish before the handler's own next status
+    edit begins -- otherwise the two edit_message_text calls run
+    concurrently with no guarantee which one Telegram applies last (two
+    independent HTTP requests, ordered only by whichever server-side
+    round-trip happens to finish first).
 
-    Keeping the loop running for a few extra ticks after
-    download_spotify_video returns (rather than checking immediately, or
-    relying on asyncio.run()'s own teardown) is what makes this
-    meaningful: a scheduled-but-unfinished coroutine that merely "never
-    got a turn before shutdown" would look identical from the outside to
-    one that was genuinely suppressed, and production's event loop
-    (Application.run_polling) never tears down between callbacks either.
+    Every other progress test in this file uses a plain AsyncMock that
+    resolves the progress edit instantly, which can look correctly
+    ordered purely by asyncio scheduling coincidence -- as this exact
+    test did in an earlier, weaker form, passing against the flag-gate
+    code that provides no ordering guarantee at all. Making the progress
+    edit's underlying call take many genuine event-loop ticks (simulating
+    a slow Telegram round-trip) is what actually distinguishes "ordering
+    is enforced" from "ordering happened not to break yet": with the
+    flag-gate mechanism, the handler's next message starts while the
+    slow progress edit is still suspended mid-flight; with a mechanism
+    that genuinely waits for the pending edit, it cannot.
     """
 
     produced = tmp_path / "episode.mp4"
     produced.write_bytes(b"X" * 1024)
 
+    log = []
+
+    async def fake_edit_message_text(text, reply_markup=None, parse_mode=None):
+        log.append(f"start:{text}")
+        if text.startswith("Pobieranie wideo:"):
+            # Simulate a slow Telegram round-trip for the progress edit
+            # specifically, so it is still in flight when the handler's
+            # own post-download code becomes ready to send its next edit.
+            for _ in range(50):
+                await asyncio.sleep(0)
+        log.append(f"finish:{text}")
+
     async def fake_download(*, progress_cb, **kwargs):
-        # No await between the last progress report and returning: the
-        # scheduled progress-edit coroutine never gets a turn before
-        # download_spotify_video reaches its post-download code.
-        progress_cb(100, 100)
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            # Last progress report, then the executor call returns --
+            # exactly download_track's real shape: progress_cb fires from
+            # a worker thread with nothing else happening between the
+            # last call and download_episode_media's return.
+            progress_cb(100, 100)
+
+        await loop.run_in_executor(None, worker)
         return str(produced)
 
     monkeypatch.setattr(sc, "download_episode_media", fake_download)
@@ -813,17 +836,16 @@ def test_download_spotify_video_stale_progress_edit_never_reaches_telegram_after
 
     update = _make_update("spv_video_720p", chat_id=123)
     context = _make_context()
+    update.callback_query.edit_message_text = AsyncMock(side_effect=fake_edit_message_text)
 
-    async def _run():
-        await sc.download_spotify_video(update, context, _spotify_video_session(), height=720)
-        for _ in range(5):
-            await asyncio.sleep(0)
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
 
-    asyncio.run(_run())
-
-    edited_texts = [call.args[0] for call in update.callback_query.edit_message_text.await_args_list]
-    assert "Pobieranie wideo: 100/100" not in edited_texts
-    assert edited_texts[-1] == "Gotowe: Test Episode"
+    assert "finish:Pobieranie wideo: 100/100" in log
+    finish_progress_idx = log.index("finish:Pobieranie wideo: 100/100")
+    next_message_start_idx = next(
+        i for i, entry in enumerate(log) if entry.startswith("start:Pobieranie zakończone")
+    )
+    assert finish_progress_idx < next_message_start_idx
 
 
 def test_download_spotify_video_progress_throttle_uses_real_interval(monkeypatch, tmp_path):

@@ -197,47 +197,50 @@ async def download_spotify_video(
     # touching the bot API directly from the worker thread.
     loop = asyncio.get_event_loop()
     reporter = _ThrottledProgressReporter(label, min_interval=_PROGRESS_EDIT_MIN_INTERVAL_SEC)
-    # Guards a scheduled-but-not-yet-run progress edit from landing after --
-    # and clobbering -- the status message that follows the download
-    # attempt (most visible on the audio-only path, where nothing else
-    # happens between the last progress_cb call and download_episode_media
-    # returning). This can't be done by cancelling the concurrent.futures.Future
-    # that run_coroutine_threadsafe returns: cancelling it before its inner
-    # Task exists routes through an extra call_soon_threadsafe hop (see
-    # asyncio.futures._chain_future), which lets the Task's first step --
-    # and hence the edit -- run anyway before that deferred cancellation
-    # ever takes effect. A plain flag checked at the very top of the
-    # scheduled coroutine has no such gap: it is flipped synchronously,
-    # strictly before that coroutine's first step can possibly run.
-    progress_active = {"value": True}
+    # Tracks the most recently scheduled progress edit so it can be waited
+    # on (not suppressed -- see below) before the next status message goes
+    # out. A plain flag checked inside the scheduled coroutine does not
+    # work for this: run_coroutine_threadsafe defers creating its Task
+    # through a call_soon_threadsafe hop, and FIFO callback ordering
+    # guarantees that deferred Task's first step runs before this
+    # coroutine can resume and flip any such flag -- confirmed with a
+    # standalone repro of the real cross-thread (run_in_executor) call
+    # shape, not just reasoned about, since it is exactly backwards from
+    # what a same-thread-only repro suggests.
+    last_progress_future: "asyncio.Future | None" = None
 
     async def _push_progress(text):
-        if not progress_active["value"]:
-            return
         try:
             await update_status(text)
         except Exception:
             # A status edit must never disturb the download. This is most
-            # commonly RetryAfter/Forbidden -- neither is a NetworkError or
-            # TimedOut, so safe_edit_message doesn't swallow them -- and
-            # since this coroutine's result/exception is never retrieved by
-            # anyone (it's fire-and-forget), an uncaught raise here would
-            # otherwise only surface as an "exception was never retrieved"
-            # warning at garbage-collection time, correlated to nothing.
-            logging.debug("Spotify progress edit failed", exc_info=True)
+            # commonly RetryAfter (Telegram flood control) or Forbidden
+            # (the user blocked the bot) -- neither is a NetworkError or
+            # TimedOut, so safe_edit_message doesn't swallow them. Warning
+            # level, not debug: an operator needs to see flood control or
+            # a block even though the download keeps going, and contained
+            # here is the *only* place this failure is ever visible --
+            # asyncio.futures._chain_future's _call_set_state copies this
+            # coroutine's exception onto the concurrent.futures.Future
+            # that nobody awaits or retrieves, which silently clears the
+            # Task's own "exception was never retrieved" warning in the
+            # process. Left uncaught, this failure would not be logged
+            # anywhere at all, not even as that warning.
+            logging.warning("Spotify progress edit failed", exc_info=True)
 
     def progress_cb(done, total):
+        nonlocal last_progress_future
         try:
             text = reporter.record_and_check(done, total)
             if text is not None:
-                asyncio.run_coroutine_threadsafe(_push_progress(text), loop)
+                last_progress_future = asyncio.run_coroutine_threadsafe(_push_progress(text), loop)
         except Exception:
             # progress_cb runs synchronously on download_track's worker
             # thread; an uncaught raise here propagates into its caller and
             # (in the real pipeline) triggers the .part-file cleanup that
             # discards a partially downloaded episode. A broken progress
             # report must never be able to do that.
-            logging.debug("Spotify progress bridge failed", exc_info=True)
+            logging.warning("Spotify progress bridge failed", exc_info=True)
 
     downloaded_path = None
     try:
@@ -267,11 +270,25 @@ async def download_spotify_video(
                 progress_cb=progress_cb,
             )
         finally:
-            # No progress edit scheduled from here on may ever reach the
-            # Telegram API, whether control proceeds to the success path
-            # below or to one of the except blocks further down (this
-            # finally runs before control reaches those too).
-            progress_active["value"] = False
+            # A progress edit can still be queued -- or genuinely mid-flight
+            # against Telegram's API -- at this point. Wait for it to
+            # actually finish here, before any further status edit is
+            # issued (whether control proceeds to the success path below or
+            # to one of the except blocks further down; this finally runs
+            # before control reaches those too). Two concurrent
+            # edit_message_text calls on the same message have no ordering
+            # guarantee between their underlying HTTP requests -- awaiting
+            # this is what guarantees the status message that follows is
+            # always the one the user sees last.
+            if last_progress_future is not None:
+                try:
+                    await asyncio.wrap_future(last_progress_future, loop=loop)
+                except Exception:
+                    # _push_progress already contains its own failures, so
+                    # this branch should be unreachable in practice; kept
+                    # only so a wrap/chain failure can't take the download
+                    # down with it either.
+                    logging.warning("Waiting for pending Spotify progress edit failed", exc_info=True)
 
         file_size_mb = os.path.getsize(downloaded_path) / (1024 * 1024)
         await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie...")
