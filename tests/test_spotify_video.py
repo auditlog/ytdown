@@ -580,3 +580,41 @@ def test_mux_raises_when_ffmpeg_fails(tmp_path, monkeypatch):
     monkeypatch.setattr(sv.subprocess, "run", lambda cmd, **kwargs: _Result())
     with pytest.raises(sv.SpotifyVideoError):
         sv.mux(str(tmp_path / "v.mp4"), str(tmp_path / "a.mp4"), str(tmp_path / "o.mp4"))
+
+
+def test_mux_raises_timeout_expired(tmp_path, monkeypatch):
+    def raise_timeout(cmd, **kwargs):
+        raise sv.subprocess.TimeoutExpired("ffmpeg", 600)
+
+    monkeypatch.setattr(sv.subprocess, "run", raise_timeout)
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        sv.mux(str(tmp_path / "v.mp4"), str(tmp_path / "a.mp4"), str(tmp_path / "o.mp4"))
+    assert "timeout" in str(exc.value).lower()
+
+
+def test_download_track_preserves_original_error_when_cleanup_fails(tmp_path, monkeypatch):
+    """Regression: os.remove failure must not mask the original SpotifyVideoError."""
+    remove_calls = []
+
+    def fake_remove(path):
+        remove_calls.append(path)
+        if path.endswith(".part"):
+            raise OSError("Permission denied")
+        # Allow other removes to succeed
+        if (tmp_path / path).exists():
+            import os as real_os
+            real_os.remove(path)
+
+    monkeypatch.setattr(sv.os, "remove", fake_remove)
+
+    # Drive download_track into its failure path by making fetch fail
+    def fake_fetch(url, timeout=30):
+        raise sv.SpotifyVideoError("Network error")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
+
+    # The original SpotifyVideoError should propagate, not OSError from remove
+    with pytest.raises(sv.SpotifyVideoError, match="Network error"):
+        sv.download_track(
+            ["https://cdn/init"], [["https://cdn/0"]], str(tmp_path / "v.mp4")
+        )

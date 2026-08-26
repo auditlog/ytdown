@@ -521,6 +521,10 @@ def mux(video_path: str, audio_path: str, out_path: str) -> str:
         )
     except FileNotFoundError as exc:
         raise SpotifyVideoError("ffmpeg_missing") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise SpotifyVideoError(
+            f"ffmpeg mux timeout: {MUX_TIMEOUT_SECONDS}s exceeded"
+        ) from exc
 
     if result.returncode != 0:
         detail = (result.stderr or b"").decode("utf-8", "replace")[:200]
