@@ -454,7 +454,7 @@ def _redact_url_query(text: str) -> str:
     anyway.
     """
 
-    def _replace(match: "re.Match[str]") -> str:
+    def _replace(match: re.Match[str]) -> str:
         query = match.group(2)
         trailing = query[len(query.rstrip(_TRAILING_PUNCTUATION)):]
         return f"{match.group(1)}?{_REDACTED_MARKER}{trailing}"
