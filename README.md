@@ -27,7 +27,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram, Link
 | Instagram | instagram.com | Reels i posty video przez yt-dlp. Zdjęcia i karuzele wymagają dodatkowo `instaloader` oraz `cookies.txt` |
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
 | X (Twitter) | x.com, twitter.com, mobile.twitter.com | Video z tweetów. Treści oznaczone jako Sensitive wymagają cookies.txt |
-| Spotify | open.spotify.com | Odcinki podcastów. Wymaga SPOTIFY_CLIENT_ID/SECRET. Audio z iTunes lub YouTube |
+| Spotify | open.spotify.com | Odcinki podcastów. Wideo i audio (M4A) prosto ze Spotify — wymaga pliku `spotify_cookies.txt` z ciasteczkiem `sp_dc`, bez kluczy Web API. Starsza ścieżka (audio z iTunes lub YouTube) nadal działa i wymaga SPOTIFY_CLIENT_ID/SECRET |
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik
@@ -166,6 +166,8 @@ SPOTIFY_CLIENT_SECRET=twój_spotify_client_secret
 `PIN_CODE` musi mieć dokładnie 8 cyfr.
 
 Klucze Spotify uzyskasz na [Spotify Developer Dashboard](https://developer.spotify.com/) — utwórz aplikację z Web API.
+Są potrzebne **wyłącznie** starszej ścieżce audio (iTunes/YouTube). Pobieranie wideo prosto ze Spotify
+ich nie używa — wymaga za to pliku `spotify_cookies.txt` (patrz [Cookies](#cookies-opcjonalne-dla-platform-wymagających-logowania)).
 
 **UWAGA**: Plik `api_key.md` jest ignorowany przez git - nie commituj go do repozytorium!
 
@@ -225,6 +227,25 @@ Bot automatycznie wykrywa brak cookies i wyświetla odpowiedni komunikat.
 
 **UWAGA**: Plik `cookies.txt` zawiera dane sesji — nie udostępniaj go i nie commituj do repozytorium! Jest ignorowany przez git.
 
+#### Osobny plik cookies dla Spotify (`spotify_cookies.txt`)
+
+Pobieranie wideo i audio prosto ze Spotify korzysta z **osobnego** słoika ciasteczek —
+`spotify_cookies.txt` w głównym katalogu projektu (ścieżkę zmienia klucz `SPOTIFY_COOKIES_FILE`).
+Jest celowo oddzielony od `cookies.txt`: ciasteczko `sp_dc` uwierzytelnia odtwarzacz webowy
+Spotify i nie ma nic wspólnego z yt-dlp, więc mieszanie obu plików byłoby mylące.
+
+Jak go przygotować:
+1. Zaloguj się na `open.spotify.com` w przeglądarce
+2. Wyeksportuj ciasteczka tej domeny do formatu Netscape (to samo rozszerzenie co wyżej)
+3. Zapisz plik jako `ytdown/spotify_cookies.txt` — musi zawierać wpis `sp_dc`
+
+Ta ścieżka **nie wymaga** `SPOTIFY_CLIENT_ID` ani `SPOTIFY_CLIENT_SECRET` — komplet metadanych
+odcinka pochodzi ze strony embed. Klucze Web API są nadal potrzebne wyłącznie starszej ścieżce
+audio (dopasowanie odcinka w iTunes lub na YouTube), która obsługuje odcinki bez wideo.
+
+**UWAGA**: `spotify_cookies.txt` to żywe poświadczenie sesji — traktuj go jak hasło.
+Wzorce `*cookies*.txt` są ignorowane przez git.
+
 ### Pliki runtime i lokalne artefakty
 
 Te pliki nie są częścią kodu aplikacji i powinny pozostać lokalne:
@@ -232,6 +253,7 @@ Te pliki nie są częścią kodu aplikacji i powinny pozostać lokalne:
 - `.env`
 - `api_key.md`
 - `cookies.txt`
+- `spotify_cookies.txt`
 - `authorized_users.json`
 - `download_history.json`
 - `downloads/`
@@ -324,9 +346,25 @@ python -m pytest tests/test_subtitles.py -v
 
 ### Podcasty Spotify
 1. Wyślij link do odcinka podcastu ze Spotify (`open.spotify.com/episode/...`)
-2. Bot automatycznie wyszuka audio w iTunes (priorytet — bezpośredni MP3) lub na YouTube (fallback)
-3. Wybierz opcję: Audio (MP3), Transkrypcja lub Transkrypcja + Podsumowanie
-4. Wymaga skonfigurowania `SPOTIFY_CLIENT_ID` i `SPOTIFY_CLIENT_SECRET`
+2. Bot sprawdza, czy odcinek ma wideo, i buduje klawiaturę z faktycznie dostępnych źródeł —
+   przycisk, który przy obecnej konfiguracji nie zadziałałby, nie jest pokazywany
+3. Dla odcinków wideo (wymagany `spotify_cookies.txt`): `Video 1080p`, `720p`, `480p`, `320p`
+   oraz `Audio (M4A) — Spotify`, pobierane bezpośrednio z CDN Spotify. Etykieta przycisku
+   zawiera szacowany rozmiar pliku
+4. Dla odcinków bez wideo (lub bez ciasteczek): starsza ścieżka audio — bot wyszuka odcinek
+   w iTunes (priorytet — bezpośredni MP3) lub na YouTube (fallback). Wymaga
+   `SPOTIFY_CLIENT_ID` i `SPOTIFY_CLIENT_SECRET`
+5. Transkrypcja: gdy odcinek ma napisy WebVTT, bot używa ich jako źródła transkrypcji —
+   wynik jest natychmiast, bez kosztu API i bez limitu długości nagrania. Gdy napisów nie ma,
+   bot pobiera ścieżkę audio i przepuszcza ją przez Groq, tak jak dotąd
+6. Odcinki oznaczone jako chronione DRM są odrzucane — bot nie obchodzi zabezpieczeń
+
+**Wysyłka plików wideo wymaga skonfigurowanego MTProto.** Każda jakość wideo przekracza limit
+50 MB Telegram Bot API: dla odcinka trwającego ~40 minut jest to około 103 MiB (320p),
+192 MiB (480p), 336 MiB (720p) i 621 MiB (1080p). Bez `TELEGRAM_API_ID` i `TELEGRAM_API_HASH`
+(oraz zainstalowanego `pyrogram`) bot pobierze plik, ale nie będzie miał czym go wysłać i
+poprosi o uzupełnienie konfiguracji. Podział pliku na wolumeny `7z` (dostępny na zwykłej ścieżce
+pobierania, wymaga binarki `7z` w PATH) nie jest jeszcze podpięty do ścieżki Spotify wideo.
 
 ### Transkrypcja plików audio
 1. Wyślij wiadomość głosową, plik audio lub dokument audio (np. notatkę głosową z WhatsApp)
