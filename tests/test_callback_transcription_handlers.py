@@ -261,6 +261,41 @@ def test_handle_callback_spotify_transcribe_summary_shows_options(monkeypatch):
     assert called.get("invoked") is True
 
 
+def test_show_spotify_summary_options_titles_a_video_only_session(monkeypatch):
+    """A video-only session has no spotify_resolved at all, so reading the
+    title from there alone left the summary menu headed "Odcinek podcastu"
+    for an episode whose title the session knows perfectly well."""
+
+    from bot.handlers import media_extras_callbacks as mec
+
+    update = _make_update("transcribe_summary", chat_id=123)
+    context = _make_context()
+    context.user_data["platform"] = "spotify"
+    context.user_data["spotify_video"] = _spotify_video_session()
+
+    asyncio.run(mec._show_spotify_summary_options(update, context))
+
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert "Test Episode" in text
+    assert "Odcinek podcastu" not in text
+
+
+def test_show_spotify_summary_options_falls_back_to_resolved_title():
+    """The legacy audio-only session still supplies the title."""
+
+    from bot.handlers import media_extras_callbacks as mec
+
+    update = _make_update("transcribe_summary", chat_id=123)
+    context = _make_context()
+    context.user_data["platform"] = "spotify"
+    context.user_data["spotify_resolved"] = {"title": "Odcinek z iTunes"}
+
+    asyncio.run(mec._show_spotify_summary_options(update, context))
+
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert "Odcinek z iTunes" in text
+
+
 def test_handle_callback_spotify_summary_option_calls_download(monkeypatch):
     tc.user_urls[123] = "https://open.spotify.com/episode/abc123"
     update = _make_update("summary_option_2", chat_id=123)
@@ -1389,6 +1424,81 @@ def test_download_spotify_video_waits_for_pending_progress_edit_before_next_mess
         i for i, entry in enumerate(log) if entry.startswith("start:Pobieranie zakończone")
     )
     assert finish_progress_idx < next_message_start_idx
+
+
+def test_download_spotify_video_announces_audio_and_mux_phases(monkeypatch, tmp_path):
+    """After the last video segment the message sat frozen on "Pobieranie
+    wideo: 602/602" through another ~600 audio fetches and an ffmpeg pass
+    over a multi-hundred-megabyte file. Each remaining phase now says what
+    it is doing, in Polish."""
+
+    produced = tmp_path / "episode.mp4"
+    produced.write_bytes(b"X" * 1024)
+
+    async def fake_download(*, phase_cb=None, **kwargs):
+        await phase_cb("audio")
+        await phase_cb("mux")
+        return str(produced)
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    texts = [call.args[0] for call in update.callback_query.edit_message_text.await_args_list]
+    assert "Pobieranie ścieżki dźwiękowej..." in texts
+    assert "Łączenie obrazu z dźwiękiem..." in texts
+
+
+def test_download_spotify_video_phase_message_waits_for_pending_progress_edit(
+    monkeypatch, tmp_path
+):
+    """Task 11's ordering guarantee covers every status write, not just the
+    one after the download returns: a phase message issued while a slow
+    progress edit is still in flight would race it, and Telegram applies
+    whichever HTTP round-trip finishes last. Same shape as
+    test_download_spotify_video_waits_for_pending_progress_edit_before_next_message,
+    for the new mid-download writes."""
+
+    produced = tmp_path / "episode.mp4"
+    produced.write_bytes(b"X" * 1024)
+
+    log = []
+
+    async def fake_edit_message_text(text, reply_markup=None, parse_mode=None):
+        log.append(f"start:{text}")
+        if text.startswith("Pobieranie wideo:"):
+            for _ in range(50):
+                await asyncio.sleep(0)
+        log.append(f"finish:{text}")
+
+    async def fake_download(*, progress_cb, phase_cb=None, **kwargs):
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            progress_cb(100, 100)
+
+        await loop.run_in_executor(None, worker)
+        await phase_cb("audio")
+        return str(produced)
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+    update.callback_query.edit_message_text = AsyncMock(side_effect=fake_edit_message_text)
+
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    assert "finish:Pobieranie wideo: 100/100" in log
+    finish_progress_idx = log.index("finish:Pobieranie wideo: 100/100")
+    phase_start_idx = log.index("start:Pobieranie ścieżki dźwiękowej...")
+    assert finish_progress_idx < phase_start_idx
 
 
 def test_download_spotify_video_progress_throttle_uses_real_interval(monkeypatch, tmp_path):

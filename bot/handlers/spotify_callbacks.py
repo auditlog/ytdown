@@ -52,6 +52,14 @@ _executor = ThreadPoolExecutor(max_workers=2)
 # argument) so tests can monkeypatch it down to 0 for deterministic runs.
 _PROGRESS_EDIT_MIN_INTERVAL_SEC = 3.0
 
+# What the user is told during the download phases that report no per-segment
+# progress of their own. download_episode_media names the phase in English;
+# the wording the user sees belongs here, with the rest of the UI text.
+_PHASE_MESSAGES = {
+    "audio": "Pobieranie ścieżki dźwiękowej...",
+    "mux": "Łączenie obrazu z dźwiękiem...",
+}
+
 
 class _ThrottledProgressReporter:
     """Decides which Spotify download progress updates reach the user.
@@ -317,6 +325,16 @@ async def download_spotify_video(
         label, update_status=update_status, min_interval=_PROGRESS_EDIT_MIN_INTERVAL_SEC
     )
 
+    async def report_phase(phase):
+        text = _PHASE_MESSAGES.get(phase)
+        if text is None:
+            return
+        # Task 11's ordering guarantee covers every status write, not only
+        # the one issued after the download returns: drain first so a
+        # progress edit still in flight cannot land on top of this one.
+        await bridge.drain()
+        await update_status(text)
+
     downloaded_path = None
     try:
         # Profiles are recomputed from the stored manifest rather than kept
@@ -343,6 +361,7 @@ async def download_spotify_video(
                 output_dir=chat_download_path,
                 executor=_executor,
                 progress_cb=bridge.callback,
+                phase_cb=report_phase,
             )
         finally:
             # Wait for every progress edit dispatched so far, before any

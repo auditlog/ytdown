@@ -293,8 +293,17 @@ async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def _show_spotify_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     chat_id = update.effective_chat.id
-    resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved", default={})
-    title = resolved.get("title", "Odcinek podcastu")
+    # The native video session is preferred: a video-only episode has no
+    # spotify_resolved at all (the legacy iTunes/YouTube path never ran), so
+    # reading only from there headed this menu "Odcinek podcastu" for an
+    # episode whose real title the session already holds.
+    video_session = _get_session_context_value(
+        context, chat_id, "spotify_video", legacy_key="spotify_video", default={}
+    ) or {}
+    resolved = _get_session_context_value(
+        context, chat_id, "spotify_resolved", legacy_key="spotify_resolved", default={}
+    ) or {}
+    title = video_session.get("title") or resolved.get("title") or "Odcinek podcastu"
     keyboard = [
         [InlineKeyboardButton("1. Krótkie podsumowanie", callback_data="summary_option_1")],
         [InlineKeyboardButton("2. Szczegółowe podsumowanie", callback_data="summary_option_2")],

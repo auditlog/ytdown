@@ -450,6 +450,106 @@ def test_download_episode_media_video_muxes_and_cleans_temp_files(monkeypatch, t
         assert not Path(temp_path).exists()
 
 
+def test_download_episode_media_reports_audio_and_mux_phases(monkeypatch, tmp_path):
+    """The video download's own progress callback stops at the last segment,
+    and the companion audio track (another ~600 fetches) plus the ffmpeg pass
+    reported nothing at all -- the status message sat frozen on "Pobieranie
+    wideo: 602/602" for the whole tail of the job. The service announces each
+    remaining phase so the caller can say what is happening."""
+
+    events = []
+
+    def fake_download_track(init_urls, segment_urls, dest_path, **kwargs):
+        events.append("download:" + ("audio" if ".audio." in dest_path else "video"))
+        Path(dest_path).write_bytes(b"track-bytes")
+        return dest_path
+
+    def fake_mux(video_path, audio_path, out_path):
+        events.append("mux")
+        Path(out_path).write_bytes(b"muxed-bytes")
+        return out_path
+
+    async def phase_cb(phase):
+        events.append("phase:" + phase)
+
+    monkeypatch.setattr(svs, "download_track", fake_download_track)
+    monkeypatch.setattr(svs, "mux", fake_mux)
+
+    manifest = _manifest()
+    episode = svs.VideoEpisode(
+        episode_id="abc123",
+        title="Testowy odcinek",
+        show_name="Testowy podcast",
+        duration_ms=32000,
+        manifest=manifest,
+        profiles=sv.list_profiles(manifest),
+        subtitle_languages=[],
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        asyncio.run(
+            svs.download_episode_media(
+                episode=episode,
+                height=720,
+                output_dir=str(tmp_path),
+                executor=executor,
+                phase_cb=phase_cb,
+            )
+        )
+
+    # Each phase is announced *before* the work it describes, not after.
+    assert events == [
+        "download:video",
+        "phase:audio",
+        "download:audio",
+        "phase:mux",
+        "mux",
+    ]
+
+
+def test_download_episode_media_phase_report_failure_does_not_abort_download(monkeypatch, tmp_path):
+    """A status edit must never take a download with it -- the same rule the
+    progress bridge already follows."""
+
+    def fake_download_track(init_urls, segment_urls, dest_path, **kwargs):
+        Path(dest_path).write_bytes(b"track-bytes")
+        return dest_path
+
+    def fake_mux(video_path, audio_path, out_path):
+        Path(out_path).write_bytes(b"muxed-bytes")
+        return out_path
+
+    async def broken_phase_cb(phase):
+        raise RuntimeError("Telegram flood control")
+
+    monkeypatch.setattr(svs, "download_track", fake_download_track)
+    monkeypatch.setattr(svs, "mux", fake_mux)
+
+    manifest = _manifest()
+    episode = svs.VideoEpisode(
+        episode_id="abc123",
+        title="Testowy odcinek",
+        show_name="Testowy podcast",
+        duration_ms=32000,
+        manifest=manifest,
+        profiles=sv.list_profiles(manifest),
+        subtitle_languages=[],
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        result = asyncio.run(
+            svs.download_episode_media(
+                episode=episode,
+                height=720,
+                output_dir=str(tmp_path),
+                executor=executor,
+                phase_cb=broken_phase_cb,
+            )
+        )
+
+    assert Path(result).read_bytes() == b"muxed-bytes"
+
+
 def test_download_episode_media_normalizes_manifest_shape_change(tmp_path):
     """find_audio_profile_id raises a bare SpotifyVideoError with a full
     sentence when the manifest carries no AAC profile -- the same "API

@@ -230,12 +230,31 @@ async def download_episode_media(
     output_dir: str,
     executor: Any,
     progress_cb=None,
+    phase_cb=None,
     cancellation=None,
 ) -> str:
     """Download an episode as muxed video, or as audio only when height is None.
 
     Returns the path to the finished file.
+
+    ``progress_cb`` reports segment counts for the track being downloaded;
+    ``phase_cb`` is an async callable announcing the phases that report no
+    per-segment progress of their own ("audio", "mux"). Without it the
+    caller's status message sits frozen on the last video segment for the
+    whole tail of the job -- another full track of segment fetches plus an
+    ffmpeg pass over a large file. Phase names are English; the caller owns
+    the wording the user sees.
     """
+
+    async def report_phase(phase: str) -> None:
+        if phase_cb is None:
+            return
+        try:
+            await phase_cb(phase)
+        except Exception:
+            # Same rule the progress bridge follows: a status edit must
+            # never be able to abort a download that is going fine.
+            logging.warning("Spotify phase report failed", exc_info=True)
 
     # download_track writes to output_dir before renaming into place; a
     # missing directory would otherwise surface as a raw, unwrapped OSError.
@@ -291,6 +310,7 @@ async def download_episode_media(
                 progress_cb=progress_cb, cancellation=cancellation,
             ),
         )
+        await report_phase("audio")
         await loop.run_in_executor(
             executor,
             lambda: download_track(
@@ -298,6 +318,7 @@ async def download_episode_media(
             ),
         )
         out_path = os.path.join(output_dir, f"{base_name}.mp4")
+        await report_phase("mux")
         try:
             await loop.run_in_executor(executor, lambda: mux(video_path, audio_path, out_path))
         except BaseException:
