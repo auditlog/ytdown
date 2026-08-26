@@ -1,6 +1,6 @@
 """Tests for callback parsing functions."""
 
-from bot.handlers.callback_parsing import parse_spotify_video_callback
+from bot.handlers.callback_parsing import parse_spotify_video_callback, SPOTIFY_VIDEO_HEIGHTS
 from bot.handlers.common_ui import build_spotify_episode_keyboard
 
 
@@ -51,7 +51,8 @@ def test_spotify_keyboard_hides_fallback_audio_when_unavailable():
     )
     labels = _labels(keyboard)
     assert "Audio (M4A) — Spotify" in labels
-    assert not any("iTunes" in label for label in labels)
+    assert "Audio (MP3)" not in labels
+    assert "Audio (M4A)" not in labels
 
 
 def test_spotify_keyboard_shows_fallback_audio_when_available():
@@ -89,7 +90,6 @@ def test_spotify_keyboard_height_callback_round_trip():
     This test covers Task 8's gap (only 720p was tested) and guards against
     accidental callback/parser drift. Height 320 is notably easy to typo as 360.
     """
-    from bot.handlers.callback_parsing import SPOTIFY_VIDEO_HEIGHTS
 
     for height in SPOTIFY_VIDEO_HEIGHTS:
         # Build keyboard with this height
