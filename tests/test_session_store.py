@@ -286,3 +286,13 @@ def test_partial_archive_workspaces_field_holds_state():
 
     assert partial_archive_workspaces[55] == {"tok-1": state}
     session_store.reset()
+
+
+def test_session_state_holds_spotify_video():
+    from bot.session_store import SessionStore
+
+    store = SessionStore()
+    store.set_field(42, "spotify_video", {"episode_id": "abc"})
+    assert store.get_field(42, "spotify_video") == {"episode_id": "abc"}
+    store.pop_field(42, "spotify_video", None)
+    assert store.get_field(42, "spotify_video") is None
