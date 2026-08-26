@@ -1,8 +1,16 @@
 """Unit tests for bot.spotify_video."""
 
+from pathlib import Path
+
 import pytest
 
 from bot import spotify_video as sv
+
+FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def _embed_html() -> str:
+    return (FIXTURES / "spotify_embed.html").read_text(encoding="utf-8")
 
 
 def test_load_spotify_cookie_reads_sp_dc(tmp_path):
@@ -28,3 +36,33 @@ def test_load_spotify_cookie_returns_none_without_sp_dc(tmp_path):
         encoding="utf-8",
     )
     assert sv.load_spotify_cookie(str(jar)) is None
+
+
+def test_parse_embed_html_extracts_all_fields():
+    data = sv.parse_embed_html(_embed_html())
+    assert data.access_token == "FAKE_ACCESS_TOKEN"
+    assert data.manifest_id == "cdc59c43c0e85cefb87ad38ee0439f11"
+    assert data.title == "Testowy odcinek"
+    assert data.show_name == "Testowy podcast"
+    assert data.duration_ms == 32000
+    assert data.has_video is True
+    assert data.requires_drm is False
+
+
+def test_parse_embed_html_returns_none_without_next_data():
+    assert sv.parse_embed_html("<html><body>nothing here</body></html>") is None
+
+
+def test_parse_embed_html_handles_audio_only_episode():
+    html = _embed_html().replace('"hasVideo":true', '"hasVideo":false').replace(
+        '"video":[{"manifestId":"cdc59c43c0e85cefb87ad38ee0439f11","requiresDRM":false}]',
+        '"video":[]',
+    )
+    data = sv.parse_embed_html(html)
+    assert data.has_video is False
+    assert data.manifest_id is None
+
+
+def test_parse_embed_html_flags_drm_protected_video():
+    html = _embed_html().replace('"requiresDRM":false', '"requiresDRM":true')
+    assert sv.parse_embed_html(html).requires_drm is True
