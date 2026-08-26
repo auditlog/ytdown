@@ -43,6 +43,14 @@ DOWNLOAD_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__f
 # Path to cookies file used by yt-dlp
 COOKIES_FILE = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cookies.txt")
 
+# Path to the Spotify cookie jar. Deliberately separate from COOKIES_FILE:
+# sp_dc authenticates the Spotify web player and has nothing to do with yt-dlp,
+# so mixing the two jars would be misleading and risky.
+SPOTIFY_COOKIES_FILE = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "spotify_cookies.txt",
+)
+
 # Remote components for yt-dlp YouTube JS challenge solving (signature + n-parameter)
 YTDLP_REMOTE_COMPONENTS = ['ejs:github']
 
