@@ -204,3 +204,33 @@ def test_parse_embed_html_returns_none_when_state_is_null():
         "</script>"
     )
     assert sv.parse_embed_html(html) is None
+
+
+def _manifest() -> dict:
+    return json.loads((FIXTURES / "spotify_manifest.json").read_text(encoding="utf-8"))
+
+
+def test_list_profiles_returns_only_h264_sorted_by_height():
+    profiles = sv.list_profiles(_manifest())
+    assert [p.height for p in profiles] == [1080, 720, 480]
+    assert all(p.codec.startswith("avc1") for p in profiles)
+
+
+def test_list_profiles_excludes_vp9_and_audio():
+    ids = {p.id for p in sv.list_profiles(_manifest())}
+    assert 17 not in ids, "VP9 must be excluded"
+    assert 15 not in ids and 20 not in ids, "audio profiles must be excluded"
+
+
+def test_find_audio_profile_id_prefers_aac():
+    assert sv.find_audio_profile_id(_manifest()) == 15
+
+
+def test_manifest_duration_ms():
+    assert sv.manifest_duration_ms(_manifest()) == 32000
+
+
+def test_estimate_size_mb_uses_measured_ratio():
+    profile = next(p for p in sv.list_profiles(_manifest()) if p.height == 720)
+    # 2605250 bps * 0.45 / 8 = 146545 B/s over 2406 s -> ~336 MiB
+    assert sv.estimate_size_mb(profile, 2406000) == pytest.approx(336, abs=3)
