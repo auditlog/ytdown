@@ -1,5 +1,6 @@
 """Unit tests for bot.spotify_video."""
 
+import json
 from pathlib import Path
 
 import pytest
@@ -163,10 +164,43 @@ def test_parse_embed_html_returns_none_when_data_is_null():
     This signals a fundamental change in Spotify's page shape, which should be
     handled as 'API changed' not 'episode has no video'.
     """
+    # Replace the whole "data" value (a self-contained, brace-balanced JSON
+    # object) with `null` rather than doing a partial string swap. A partial
+    # swap can drop a brace and produce invalid JSON, which would make the
+    # assertion pass for the wrong reason (via the JSONDecodeError path,
+    # already covered by test_parse_embed_html_returns_none_without_next_data)
+    # instead of actually exercising the null-"data" branch.
+    original_data_value = (
+        '"data":{"entity":{"type":"episode","title":"Testowy odcinek",'
+        '"subtitle":"Testowy podcast","duration":32000,"hasVideo":true,'
+        '"isPlayable":true},"defaultAudioFileObject":{"format":"MP4_128_CBCS",'
+        '"video":[{"manifestId":"cdc59c43c0e85cefb87ad38ee0439f11",'
+        '"requiresDRM":false}]}}'
+    )
+    html = _embed_html().replace(original_data_value, '"data":null')
+
+    # Verify the fixture is still well-formed JSON and that "data" genuinely
+    # became null, before handing it to parse_embed_html.
+    script_open = '<script id="__NEXT_DATA__" type="application/json">'
+    script_close = "</script>"
+    start = html.index(script_open) + len(script_open)
+    end = html.index(script_close, start)
+    payload = json.loads(html[start:end])
+    assert payload["props"]["pageProps"]["state"]["data"] is None
+
+    assert sv.parse_embed_html(html) is None
+
+
+def test_parse_embed_html_returns_none_when_state_is_null():
+    """Structural test: null 'state' value should return None, not raise.
+
+    Regression test for a crash where a well-formed payload with
+    props.pageProps.state itself null (e.g. {"state": null}) raised an
+    unhandled AttributeError from calling .get() directly on None.
+    """
     html = (
-        _embed_html().replace(
-            '"data":{"entity":{"type":"episode",',
-            '"data":null,"removed_entity":{"type":"episode",',
-        )
+        '<script id="__NEXT_DATA__" type="application/json">'
+        '{"props":{"pageProps":{"state":null}}}'
+        "</script>"
     )
     assert sv.parse_embed_html(html) is None

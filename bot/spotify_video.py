@@ -119,9 +119,14 @@ def parse_embed_html(html: str) -> EmbedData | None:
     except (ValueError, KeyError, TypeError):
         return None
 
-    # Check for structural integrity: state must have a "data" dict.
-    # This is a required element; if it's missing, null, or wrong type, the blob
-    # is unrecognizable and we return None to signal "API changed", not "no data".
+    # Check for structural integrity: state and state["data"] must both be
+    # dicts. These are required elements; if either is missing, null, or the
+    # wrong type, the blob is unrecognizable and we return None to signal
+    # "API changed", not "no data". A key being present but null (e.g. a
+    # well-formed `{"state": null}`) does not raise KeyError above, so this
+    # isinstance check is what actually catches that case.
+    if not isinstance(state, dict):
+        return None
     data = state.get("data")
     if not isinstance(data, dict):
         return None
