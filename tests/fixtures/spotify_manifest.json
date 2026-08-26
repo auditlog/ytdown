@@ -17,7 +17,7 @@
     }
   ],
   "start_time_millis": 0,
-  "end_time_millis": 32000,
+  "end_time_millis": 999999,
   "initialization_template": "v1/origins/ORIGIN/sources/SRC/encodings/ENC/profiles/{{profile_id}}/inits/{{file_type}}?token=FAKE_TOKEN&fauth=FAKE_FAUTH",
   "segment_template": "v1/origins/ORIGIN/sources/SRC/encodings/ENC/profiles/{{profile_id}}/{{segment_timestamp}}.{{file_type}}?token=FAKE_TOKEN&fauth=FAKE_FAUTH",
   "subtitle_template": "v1.1/sources/SRC/{{language_code}}.webvtt?__token__=FAKE&fauth=FAKE_FAUTH",

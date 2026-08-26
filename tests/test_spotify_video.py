@@ -234,3 +234,43 @@ def test_estimate_size_mb_uses_measured_ratio():
     profile = next(p for p in sv.list_profiles(_manifest()) if p.height == 720)
     # 2605250 bps * 0.45 / 8 = 146545 B/s over 2406 s -> ~336 MiB
     assert sv.estimate_size_mb(profile, 2406000) == pytest.approx(336, abs=3)
+
+
+def test_build_track_urls_generates_one_candidate_per_cdn():
+    init_urls, segment_urls = sv.build_track_urls(_manifest(), profile_id=1)
+    assert len(init_urls) == 2
+    assert init_urls[0].startswith("https://video-fa.scdn.co/segments/")
+    assert init_urls[1].startswith("https://video-cf.spotifycdn.com/segments/")
+
+
+def test_build_track_urls_substitutes_profile_and_file_type():
+    init_urls, _ = sv.build_track_urls(_manifest(), profile_id=1)
+    assert "/profiles/1/inits/mp4?" in init_urls[0]
+    assert "{{" not in init_urls[0]
+
+
+def test_build_track_urls_counts_segments_from_duration():
+    _, segment_urls = sv.build_track_urls(_manifest(), profile_id=1)
+    # 32000 ms / 4 s per segment
+    assert len(segment_urls) == 8
+
+
+def test_build_track_urls_uses_second_based_timestamps():
+    _, segment_urls = sv.build_track_urls(_manifest(), profile_id=1)
+    assert "/profiles/1/0.mp4?" in segment_urls[0][0]
+    assert "/profiles/1/4.mp4?" in segment_urls[1][0]
+    assert "/profiles/1/28.mp4?" in segment_urls[7][0]
+
+
+def test_build_track_urls_preserves_query_parameters():
+    _, segment_urls = sv.build_track_urls(_manifest(), profile_id=1)
+    assert "token=FAKE_TOKEN" in segment_urls[0][0]
+    assert "fauth=FAKE_FAUTH" in segment_urls[0][0]
+
+
+def test_build_track_urls_rounds_partial_final_segment_up():
+    manifest = _manifest()
+    manifest["contents"][0]["end_time_millis"] = 30000
+    _, segment_urls = sv.build_track_urls(manifest, profile_id=1)
+    # 30 s / 4 s = 7.5 -> 8 segments, the last one short
+    assert len(segment_urls) == 8

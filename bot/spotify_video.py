@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 from dataclasses import dataclass
@@ -293,3 +294,58 @@ def estimate_size_mb(profile: Profile, duration_ms: int) -> float:
 
     average_bytes_per_second = profile.max_bitrate * BITRATE_TO_AVERAGE_RATIO / 8
     return average_bytes_per_second * (duration_ms / 1000) / (1024 * 1024)
+
+
+def _expand_template(template: str, base_urls: list[str], **placeholders) -> list[str]:
+    """Fill a manifest URL template and prefix it with every CDN base URL."""
+
+    path = template
+    for name, value in placeholders.items():
+        path = path.replace("{{%s}}" % name, str(value))
+    return [base + path for base in base_urls]
+
+
+def build_track_urls(
+    manifest: dict, profile_id: int
+) -> tuple[list[str], list[list[str]]]:
+    """Build init and segment URL candidates for one profile.
+
+    Each returned segment is a list of equivalent URLs, one per CDN in
+    base_urls, so the downloader can fail over without rebuilding anything.
+    """
+
+    content = _manifest_content(manifest)
+    base_urls = manifest.get("base_urls") or []
+    if not base_urls:
+        raise SpotifyVideoError("Spotify manifest carries no base_urls")
+
+    segment_length = int(content.get("segment_length") or 0)
+    if segment_length <= 0:
+        raise SpotifyVideoError("Spotify manifest carries no segment_length")
+
+    file_type = "mp4"
+
+    init_urls = _expand_template(
+        manifest["initialization_template"],
+        base_urls,
+        profile_id=profile_id,
+        file_type=file_type,
+    )
+
+    # segment_timestamp is whole seconds counted from the episode start
+    # (0, 4, 8, ...), not milliseconds — verified against the live CDN.
+    duration_seconds = manifest_duration_ms(manifest) / 1000
+    segment_count = math.ceil(duration_seconds / segment_length)
+
+    segment_urls = [
+        _expand_template(
+            manifest["segment_template"],
+            base_urls,
+            profile_id=profile_id,
+            file_type=file_type,
+            segment_timestamp=index * segment_length,
+        )
+        for index in range(segment_count)
+    ]
+
+    return init_urls, segment_urls
