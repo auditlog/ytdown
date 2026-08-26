@@ -72,6 +72,22 @@ _NEXT_DATA_PATTERN = re.compile(
 )
 
 
+def _dig(node, *keys, default=None):
+    """Walk nested dicts, treating a present-but-null value as absent.
+
+    Safely extracts deeply nested values from dicts, handling both missing keys
+    and present-but-null values at any depth. Returns default if any level in
+    the path is not a dict, is None, or doesn't contain the key.
+    """
+    for key in keys:
+        if not isinstance(node, dict):
+            return default
+        node = node.get(key)
+        if node is None:
+            return default
+    return node
+
+
 @dataclass(frozen=True)
 class EmbedData:
     """Episode metadata and web-player token read from the embed page."""
@@ -100,17 +116,27 @@ def parse_embed_html(html: str) -> EmbedData | None:
     try:
         payload = json.loads(match.group(1))
         state = payload["props"]["pageProps"]["state"]
-        entity = state["data"]["entity"]
     except (ValueError, KeyError, TypeError):
         return None
 
-    access_token = (
-        (state.get("settings") or {}).get("session", {}).get("accessToken", "")
-    )
-    video_entries = (
-        ((state.get("data") or {}).get("defaultAudioFileObject") or {}).get("video") or []
-    )
-    first_video = video_entries[0] if video_entries else {}
+    # Use _dig to safely traverse nested dicts, handling null values at every level.
+    entity = _dig(state, "data", "entity", default={})
+    if not isinstance(entity, dict):
+        entity = {}
+
+    access_token = _dig(state, "settings", "session", "accessToken", default="")
+    video_entries = _dig(state, "data", "defaultAudioFileObject", "video", default=[])
+    if not isinstance(video_entries, list):
+        video_entries = []
+
+    # Handle potential null entries in the video array.
+    first_video = None
+    if video_entries:
+        candidate = video_entries[0]
+        if isinstance(candidate, dict):
+            first_video = candidate
+    if first_video is None:
+        first_video = {}
 
     return EmbedData(
         access_token=access_token,

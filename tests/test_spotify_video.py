@@ -54,9 +54,13 @@ def test_parse_embed_html_returns_none_without_next_data():
 
 
 def test_parse_embed_html_handles_audio_only_episode():
-    html = _embed_html().replace('"hasVideo":true', '"hasVideo":false').replace(
-        '"video":[{"manifestId":"cdc59c43c0e85cefb87ad38ee0439f11","requiresDRM":false}]',
-        '"video":[]',
+    html = (
+        _embed_html()
+        .replace('"hasVideo":true', '"hasVideo":false')
+        .replace(
+            '"video":[{"manifestId":"cdc59c43c0e85cefb87ad38ee0439f11","requiresDRM":false}]',
+            '"video":[]',
+        )
     )
     data = sv.parse_embed_html(html)
     assert data.has_video is False
@@ -69,9 +73,13 @@ def test_parse_embed_html_flags_drm_protected_video():
 
 
 def test_parse_embed_html_handles_null_settings():
-    """Regression test: null settings value should not raise AttributeError."""
-    html = _embed_html().replace('"settings":{"rtl":false,"session":{"accessToken":"FAKE_ACCESS_TOKEN","isAnonymous":false}}', '"settings":null')
-    # Should gracefully handle null settings and return partial data without raising AttributeError
+    """Regression test: null settings should not raise AttributeError."""
+    html = (
+        _embed_html().replace(
+            '"settings":{"rtl":false,"session":{"accessToken":"FAKE_ACCESS_TOKEN","isAnonymous":false}}',
+            '"settings":null',
+        )
+    )
     data = sv.parse_embed_html(html)
     assert data is not None
     assert data.access_token == ""  # Empty when settings is null
@@ -80,9 +88,55 @@ def test_parse_embed_html_handles_null_settings():
 
 def test_parse_embed_html_handles_null_default_audio_file_object():
     """Regression test: null defaultAudioFileObject should not raise AttributeError."""
-    html = _embed_html().replace('"defaultAudioFileObject":{"format":"MP4_128_CBCS","video":[{"manifestId":"cdc59c43c0e85cefb87ad38ee0439f11","requiresDRM":false}]}', '"defaultAudioFileObject":null')
-    # Should gracefully handle null defaultAudioFileObject and return partial data without raising AttributeError
+    html = (
+        _embed_html().replace(
+            '"defaultAudioFileObject":{"format":"MP4_128_CBCS","video":[{"manifestId":"cdc59c43c0e85cefb87ad38ee0439f11","requiresDRM":false}]}',
+            '"defaultAudioFileObject":null',
+        )
+    )
     data = sv.parse_embed_html(html)
     assert data is not None
     assert data.manifest_id is None  # No video data
+    assert data.title == "Testowy odcinek"  # Other fields still extracted
+
+
+def test_parse_embed_html_handles_null_entity():
+    """Regression test: null entity should not raise AttributeError."""
+    html = (
+        _embed_html().replace(
+            '"entity":{"type":"episode","title":"Testowy odcinek","subtitle":"Testowy podcast","duration":32000,"hasVideo":true,"isPlayable":true}',
+            '"entity":null',
+        )
+    )
+    data = sv.parse_embed_html(html)
+    assert data is not None
+    assert data.title == ""  # Empty when entity is null
+    assert data.manifest_id == "cdc59c43c0e85cefb87ad38ee0439f11"  # Video data still extracted
+
+
+def test_parse_embed_html_handles_nested_null_session():
+    """Regression test: null session nested inside non-null settings should not raise AttributeError."""
+    html = (
+        _embed_html().replace(
+            '"settings":{"rtl":false,"session":{"accessToken":"FAKE_ACCESS_TOKEN","isAnonymous":false}}',
+            '"settings":{"rtl":false,"session":null}',
+        )
+    )
+    data = sv.parse_embed_html(html)
+    assert data is not None
+    assert data.access_token == ""  # Empty when session is null
+    assert data.title == "Testowy odcinek"  # Other fields still extracted
+
+
+def test_parse_embed_html_handles_null_video_array_element():
+    """Regression test: null entry in video array should not raise AttributeError."""
+    html = (
+        _embed_html().replace(
+            '"video":[{"manifestId":"cdc59c43c0e85cefb87ad38ee0439f11","requiresDRM":false}]',
+            '"video":[null]',
+        )
+    )
+    data = sv.parse_embed_html(html)
+    assert data is not None
+    assert data.manifest_id is None  # No valid video data
     assert data.title == "Testowy odcinek"  # Other fields still extracted
