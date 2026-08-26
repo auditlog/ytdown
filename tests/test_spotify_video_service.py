@@ -34,7 +34,17 @@ def _embed(**overrides) -> sv.EmbedData:
 
 
 def test_resolve_video_episode_returns_none_for_non_episode_url(monkeypatch):
+    """A non-episode URL must be rejected by the parse, before any IO. The
+    fetch stub is what proves that: without it, a regression that dropped the
+    early return would issue a real request to open.spotify.com on its way to
+    failing."""
+
+    def must_not_fetch(*args, **kwargs):
+        pytest.fail("resolve_video_episode must not fetch for a non-episode URL")
+
     monkeypatch.setattr(svs, "load_spotify_cookie", lambda path=None: "sp_dc_value")
+    monkeypatch.setattr(svs, "fetch_embed_data", must_not_fetch)
+
     assert svs.resolve_video_episode("https://example.com/foo") is None
 
 
@@ -278,14 +288,14 @@ def test_resolve_video_episode_maps_other_http_errors_to_api_changed(monkeypatch
 def test_get_video_error_message_covers_every_reason():
     reasons = (
         "no_cookie", "expired_session", "api_changed", "drm_protected",
-        "ffmpeg_missing", "mux_timeout",
+        "ffmpeg_missing", "mux_timeout", "download_failed",
     )
     fallback = svs.get_video_error_message("__unmapped__")
     for reason in reasons:
         message = svs.get_video_error_message(reason)
         assert message and message != reason
         assert message != fallback
-    # Pins that the six codes produce six distinct messages, not one
+    # Pins that the codes produce that many distinct messages, not one
     # message reused for all of them -- an empty _ERROR_MESSAGES map would
     # satisfy every assertion above but collapse this set to size 1.
     assert len({svs.get_video_error_message(r) for r in reasons}) == len(reasons)
@@ -326,6 +336,30 @@ def test_get_video_error_message_does_not_collide_with_network_timeout():
 
     assert result != svs.get_video_error_message("mux_timeout")
     assert result == svs.get_video_error_message("__totally_unmapped__")
+
+
+def test_get_download_error_message_names_the_download_for_unmapped_failures():
+    """A failed segment fetch arrives as a descriptive English sentence, not
+    a reason code. At the download stage that always means the download
+    failed, which is more than the catch-all ever said."""
+
+    segment_error = (
+        "Segment download failed after 3 attempts; last error from "
+        "https://video-fa.scdn.co/segments/0.mp4?[redacted]: Read timed out."
+    )
+
+    message = svs.get_download_error_message(segment_error)
+
+    assert message == svs.get_video_error_message("download_failed")
+    assert message != svs.get_video_error_message("__unmapped__")
+    # No English internals, no signed URL, in what the user reads.
+    assert "Segment download failed" not in message
+    assert "http" not in message
+
+
+def test_get_download_error_message_keeps_mapped_codes_specific():
+    for reason in ("ffmpeg_missing", "mux_timeout", "drm_protected"):
+        assert svs.get_download_error_message(reason) == svs.get_video_error_message(reason)
 
 
 def test_download_episode_media_creates_missing_output_dir(monkeypatch, tmp_path):

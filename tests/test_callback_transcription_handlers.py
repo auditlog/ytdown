@@ -1,12 +1,14 @@
 """Transcription-, audio-, and Spotify-oriented tests for Telegram callbacks."""
 
 import asyncio
+import logging
 import os
 from unittest.mock import AsyncMock
 
 from bot import telegram_callbacks as tc
 from bot.downloader_validation import sanitize_filename
 from bot.handlers import spotify_callbacks as sc
+from bot.services.spotify_video_service import get_video_error_message
 from bot.spotify_video import SpotifyVideoCancelled, SpotifyVideoError
 from tests.telegram_callbacks_support import _attach_runtime, _make_context, _make_update
 
@@ -597,6 +599,64 @@ def test_download_spotify_video_reports_cancellation(monkeypatch):
     context.bot.send_video.assert_not_awaited()
 
 
+def test_download_spotify_video_reports_and_logs_segment_download_failure(monkeypatch, caplog):
+    """A failed segment fetch is the most common runtime failure of this
+    pipeline, and it raises a descriptive English sentence rather than one
+    of the mapped reason codes. The branch handling it logged nothing and
+    fell through to the catch-all "Nie udalo sie przygotowac wideo z tego
+    odcinka Spotify.", so the user learned nothing about what failed and the
+    operator learned nothing at all -- both halves of what design spec 10
+    rules out."""
+
+    segment_error = (
+        "Segment download failed after 3 attempts; last error from "
+        "https://video-fa.scdn.co/segments/v1/0.mp4?[redacted]: "
+        "HTTPSConnectionPool(host='video-fa.scdn.co', port=443): Read timed out."
+    )
+
+    async def fake_download(**kwargs):
+        raise SpotifyVideoError(segment_error)
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+
+    with caplog.at_level(logging.ERROR):
+        asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    # The user is told the download itself failed, not handed the catch-all.
+    assert text == get_video_error_message("download_failed")
+    assert text != get_video_error_message("__unmapped__")
+    # The operator gets the real cause.
+    assert "Segment download failed" in caplog.text
+    assert "video-fa.scdn.co" in caplog.text
+    context.bot.send_video.assert_not_awaited()
+
+
+def test_download_spotify_video_keeps_mapped_reason_codes_distinct(monkeypatch, caplog):
+    """The download_failed fallback must not swallow the reason codes that
+    already say something more specific -- ffmpeg_missing is raised from the
+    same try block."""
+
+    async def fake_download(**kwargs):
+        raise SpotifyVideoError("ffmpeg_missing")
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+
+    with caplog.at_level(logging.ERROR):
+        asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert text == get_video_error_message("ffmpeg_missing")
+
+
 def test_download_spotify_video_reports_generic_error(monkeypatch):
     async def fake_download(**kwargs):
         raise RuntimeError("boom")
@@ -892,7 +952,7 @@ def test_transcribe_spotify_video_clears_video_session_not_resolved(monkeypatch,
     assert context.user_data["spotify_resolved"]["source"] == "itunes"
 
 
-def test_transcribe_spotify_video_reports_api_changed_for_drifted_manifest():
+def test_transcribe_spotify_video_reports_api_changed_for_drifted_manifest(monkeypatch):
     """Session state can carry a manifest that no longer parses -- a stale
     manifest surviving from an earlier episode (this is exactly why
     inbound_media.py clears spotify_video on link transitions/failed
@@ -900,7 +960,16 @@ def test_transcribe_spotify_video_reports_api_changed_for_drifted_manifest():
     the same Polish "api_changed" message every other manifest failure
     produces, not an unhandled exception that leaves the status message
     frozen forever -- download_spotify_video already guards this identical
-    construction the same way, three functions up."""
+    construction the same way, in the function immediately above it."""
+
+    # Without this stub the test reaches download_episode_media only when a
+    # real GROQ_API_KEY happens to be configured, so it passed locally off a
+    # live api_key.md and would have gone red on a fresh checkout -- silently
+    # ceasing to exercise api_changed rather than failing for a real reason.
+    monkeypatch.setattr(
+        sc, "get_runtime_value",
+        lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default,
+    )
 
     session = _spotify_video_session()
     session["manifest"] = {}  # no "contents" key -- list_profiles/find_audio_profile_id raise here
@@ -969,8 +1038,8 @@ def test_transcribe_spotify_video_reports_progress_during_audio_fallback(monkeyp
     """The native-audio fallback (no subtitles) must report download
     progress the same way download_spotify_video does -- Task 11 spent
     three fix rounds eliminating exactly this frozen-message defect, and
-    the reporter/drain machinery it built sits two functions above this
-    call site, built for precisely this."""
+    the reporter/drain machinery it built sits three definitions above
+    this call site, built for precisely this."""
 
     audio_file = tmp_path / "episode.m4a"
     audio_file.write_bytes(b"fake-audio-bytes")

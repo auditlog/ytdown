@@ -424,6 +424,44 @@ def _fetch_bytes(url: str, timeout: int = 30) -> bytes:
     return response.content
 
 
+# Spotify signs every CDN URL with __token__/fauth (or token/fauth) query
+# parameters that carry an expiry. They are capability URLs: whoever reads one
+# can fetch the object until the signature expires, so they must never reach a
+# log file or a chat message. Host and path stay -- those are the diagnostic.
+_URL_QUERY_PATTERN = re.compile(r"""(https?://[^\s'"<>]*?)\?([^\s'"<>]*)""")
+
+# Punctuation that ends a sentence rather than the URL. A URL running up
+# against ": " swallows the colon into the query match, so it is put back
+# after the redaction marker -- otherwise the message loses the separator
+# between the URL and the error that followed it, and stops being readable
+# for the operator it exists to inform.
+_TRAILING_PUNCTUATION = ".,;:!?"
+
+# Deliberately bracket-delimited rather than angle-bracketed: the pattern above
+# stops at "<" and ">", so an angle-bracketed marker would survive a second
+# pass as literal text and redact the same URL twice. With this marker the
+# function is idempotent, which matters because a message can pass through
+# more than one redaction point on its way to a log.
+_REDACTED_MARKER = "[redacted]"
+
+
+def _redact_url_query(text: str) -> str:
+    """Strip query strings from every URL in text before it is logged or shown.
+
+    Applied where the failure message is composed rather than at each log
+    call: the chained requests error quotes the signed URL too, so redacting
+    only the URL this module holds would leave the secret in the message
+    anyway.
+    """
+
+    def _replace(match: "re.Match[str]") -> str:
+        query = match.group(2)
+        trailing = query[len(query.rstrip(_TRAILING_PUNCTUATION)):]
+        return f"{match.group(1)}?{_REDACTED_MARKER}{trailing}"
+
+    return _URL_QUERY_PATTERN.sub(_replace, text)
+
+
 def _fetch_with_failover(url_candidates: list[str]) -> bytes:
     """Fetch one segment, trying every CDN before backing off and retrying."""
 
@@ -450,8 +488,10 @@ def _fetch_with_failover(url_candidates: list[str]) -> bytes:
         if attempt < SEGMENT_ATTEMPTS - 1:
             time.sleep(2 ** attempt)
     raise SpotifyVideoError(
-        f"Segment download failed after {SEGMENT_ATTEMPTS} attempts; "
-        f"last error from {last_url}: {last_error}"
+        _redact_url_query(
+            f"Segment download failed after {SEGMENT_ATTEMPTS} attempts; "
+            f"last error from {last_url}: {last_error}"
+        )
     )
 
 
@@ -551,7 +591,10 @@ def fetch_subtitles(manifest: dict, language_code: str, dest_path: str) -> str |
     try:
         payload = _fetch_with_failover(candidates)
     except SpotifyVideoError as exc:
-        logging.warning("Spotify subtitle download failed: %s", exc)
+        # _fetch_with_failover already redacts the signed query string it
+        # composes into this message; redact again here so a future caller
+        # that raises its own message cannot reintroduce the leak.
+        logging.warning("Spotify subtitle download failed: %s", _redact_url_query(str(exc)))
         return None
 
     with open(dest_path, "wb") as file_obj:

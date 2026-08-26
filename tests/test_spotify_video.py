@@ -1,6 +1,7 @@
 """Unit tests for bot.spotify_video."""
 
 import json
+import logging
 import threading
 from pathlib import Path
 
@@ -659,8 +660,82 @@ def test_fetch_subtitles_writes_vtt(tmp_path, monkeypatch):
     assert dest.read_text(encoding="utf-8").startswith("WEBVTT")
 
 
-def test_fetch_subtitles_returns_none_for_unknown_language(tmp_path):
+def test_fetch_subtitles_returns_none_for_unknown_language(tmp_path, monkeypatch):
+    """The point is the guard clause, not the return value. Without this stub
+    the test passed even with the guard deleted: control fell through to
+    _fetch_with_failover, three real HTTPS requests failed against the
+    fixture's host over three real seconds of backoff, and fetch_subtitles
+    returned None anyway -- green, networked, and proving nothing."""
+
+    def must_not_fetch(*args, **kwargs):
+        pytest.fail("fetch_subtitles must not fetch for a language the manifest does not offer")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", must_not_fetch)
+
     assert sv.fetch_subtitles(_manifest(), "de-de", str(tmp_path / "s.vtt")) is None
+
+
+_SIGNED_SEGMENT_URL = (
+    "https://video-fa.scdn.co/segments/v1/origins/O/sources/S/profiles/1/0.mp4"
+    "?__token__=SUPERSECRETTOKEN&fauth=SUPERSECRETFAUTH"
+)
+
+
+def test_fetch_with_failover_error_message_redacts_signed_urls(monkeypatch):
+    """Spotify's CDN URLs are capability URLs: __token__ and fauth authorize
+    the fetch, so anyone who can read the failure message (it is logged, and
+    it reaches the user's chat through the download flow) can pull the object
+    until the signature expires. The host and path are the diagnostic and
+    must survive; the query string must not."""
+
+    def fake_fetch(url, timeout=30):
+        # A real requests failure quotes the URL it was given, so the secret
+        # arrives via the chained error as well as via the URL itself.
+        raise RuntimeError(f"403 Client Error: Forbidden for url: {url}")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
+    monkeypatch.setattr(sv.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        sv._fetch_with_failover([_SIGNED_SEGMENT_URL])
+
+    message = str(exc.value)
+    assert "SUPERSECRETTOKEN" not in message
+    assert "SUPERSECRETFAUTH" not in message
+    assert "video-fa.scdn.co" in message
+    # Redaction must not eat the separator and leave the message unreadable:
+    # this text is the operator's only diagnostic for a failed download.
+    assert "403 Client Error" in message
+
+
+def test_redact_url_query_is_idempotent():
+    """A message can pass more than one redaction point on its way to a log
+    (the segment fetcher composes it, the caller logs it). Redacting twice
+    must not stutter the marker or eat the separator after the URL."""
+
+    once = sv._redact_url_query(f"failed for {_SIGNED_SEGMENT_URL}: timeout")
+    assert once == sv._redact_url_query(once)
+    assert once.endswith(": timeout")
+    assert "SUPERSECRETTOKEN" not in once
+
+
+def test_fetch_subtitles_logs_failure_without_signed_url(monkeypatch, caplog, tmp_path):
+    """The subtitle failure path logs at WARNING; the fixture's subtitle
+    template carries the same signed query parameters a live one does."""
+
+    def fake_fetch(url, timeout=30):
+        raise RuntimeError(f"503 Server Error for url: {url}")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
+    monkeypatch.setattr(sv.time, "sleep", lambda seconds: None)
+
+    with caplog.at_level(logging.WARNING):
+        assert sv.fetch_subtitles(_manifest(), "pl-pl", str(tmp_path / "s.vtt")) is None
+
+    assert "__token__=FAKE" not in caplog.text
+    assert "fauth=FAKE_FAUTH" not in caplog.text
+    assert "subtitles.spotifycdn.com" in caplog.text
+    assert "503 Server Error" in caplog.text
 
 
 def test_mux_invokes_ffmpeg_with_stream_copy(tmp_path, monkeypatch):
@@ -724,6 +799,10 @@ def test_mux_raises_timeout_expired(tmp_path, monkeypatch):
 
 def test_download_track_preserves_original_error_when_cleanup_fails(tmp_path, monkeypatch):
     """Regression: os.remove failure must not mask the original SpotifyVideoError."""
+    # _fetch_with_failover backs off between its three attempts; without this
+    # the test burns 3 real seconds waiting for retries that are stubbed to
+    # fail instantly anyway.
+    monkeypatch.setattr(sv.time, "sleep", lambda seconds: None)
     remove_calls = []
 
     def fake_remove(path):

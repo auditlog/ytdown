@@ -73,6 +73,12 @@ _ERROR_MESSAGES = {
         "Brak programu ffmpeg na serwerze — nie mogę połączyć obrazu z dźwiękiem.\n\n"
         "Zgłoś to administratorowi bota."
     ),
+    "download_failed": (
+        "Nie udało się pobrać tego odcinka ze Spotify — pobieranie fragmentów "
+        "przerwało się.\n\n"
+        "Linki do plików Spotify wygasają po pewnym czasie. Wyślij link do "
+        "odcinka jeszcze raz, a jeśli to nie pomoże — wybierz niższą jakość."
+    ),
     "mux_timeout": (
         "Łączenie obrazu z dźwiękiem (ffmpeg) przekroczyło limit czasu.\n\n"
         "Odcinek może być zbyt długi lub serwer jest chwilowo przeciążony. "
@@ -96,6 +102,22 @@ def get_video_error_message(reason: str) -> str:
         reason,
         "Nie udało się przygotować wideo z tego odcinka Spotify.",
     )
+
+
+def get_download_error_message(reason: str) -> str:
+    """Map a failure raised during the *download* stage to a Polish message.
+
+    Resolution failures always carry a bare reason code. Download failures
+    often do not: a failed segment fetch -- the most common runtime failure
+    of this pipeline -- raises a descriptive English sentence naming the CDN
+    and the underlying error. That sentence is what the operator needs in
+    the log, and exactly what the user cannot act on; routing it through
+    get_video_error_message handed them the catch-all instead, which said
+    nothing about what had failed. Mapped codes (ffmpeg_missing,
+    mux_timeout, drm_protected, ...) keep their own, more specific message.
+    """
+
+    return _ERROR_MESSAGES.get(reason, _ERROR_MESSAGES["download_failed"])
 
 
 def resolve_video_episode(

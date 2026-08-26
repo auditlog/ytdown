@@ -27,7 +27,7 @@ from bot.services.spotify_service import download_resolved_audio
 from bot.services.spotify_video_service import (
     VideoEpisode,
     download_episode_media,
-    get_video_error_message,
+    get_download_error_message,
     transcript_from_subtitles,
 )
 from bot.services.transcription_service import (
@@ -406,7 +406,13 @@ async def download_spotify_video(
     except SpotifyVideoCancelled:
         await update_status("Pobieranie anulowane.")
     except SpotifyVideoError as exc:
-        await update_status(get_video_error_message(str(exc)))
+        # A failed segment fetch raises a descriptive English sentence, not a
+        # mapped reason code, and it is the failure this pipeline hits most
+        # often. Without this log the operator had nothing at all to go on;
+        # the message itself has its signed CDN query strings redacted where
+        # it is composed (bot/spotify_video.py::_redact_url_query).
+        logging.error("Spotify video download failed: %s", exc)
+        await update_status(get_download_error_message(str(exc)))
     except Exception as exc:
         logging.error("Error downloading Spotify video: %s", exc)
         await update_status(f"Błąd pobierania: {str(exc)[:200]}")
@@ -453,8 +459,8 @@ async def transcribe_spotify_video(
         # Session state can carry a manifest that no longer parses -- a
         # stale one surviving from an earlier episode, or genuine Spotify
         # API drift -- so building the episode happens inside this try,
-        # same as the identical construction in download_spotify_video
-        # three functions up: a manifest-shape failure here must surface
+        # same as the identical construction in download_spotify_video,
+        # the function immediately above: a manifest-shape failure here must surface
         # as the same "api_changed" Polish message every other manifest
         # failure produces, not an unhandled exception that leaves the
         # status message frozen forever.
@@ -598,7 +604,11 @@ async def transcribe_spotify_video(
     except SpotifyVideoCancelled:
         await update_status("Pobieranie anulowane.")
     except SpotifyVideoError as exc:
-        await update_status(get_video_error_message(str(exc)))
+        # Same reasoning as download_spotify_video's branch above: the Groq
+        # fallback downloads the native audio track through the very same
+        # segment fetcher, so it reaches this branch the same way.
+        logging.error("Spotify video transcription failed: %s", exc)
+        await update_status(get_download_error_message(str(exc)))
     except Exception as exc:
         logging.error("Error transcribing Spotify video episode: %s", exc)
         await update_status(f"Błąd pobierania: {str(exc)[:200]}")
