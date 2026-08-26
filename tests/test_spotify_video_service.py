@@ -55,6 +55,28 @@ def test_resolve_video_episode_raises_without_cookie(monkeypatch):
     assert str(exc.value) == "no_cookie"
 
 
+def test_resolve_video_episode_reports_no_cookie_for_unreadable_jar(tmp_path, monkeypatch):
+    """A jar written in a non-UTF-8 encoding used to raise UnicodeDecodeError
+    out of load_spotify_cookie, past every layer of error handling, freezing
+    the user's status message. An unusable jar is an absent jar: the user
+    needs the export instructions, which is what "no_cookie" says."""
+
+    jar = tmp_path / "spotify_cookies.txt"
+    jar.write_bytes(b".spotify.com\tTRUE\t/\tTRUE\t1819277774\tsp_dc\tAQ\xff\xfeDK\n")
+
+    def must_not_fetch(*args, **kwargs):
+        pytest.fail("resolve_video_episode must not fetch without a usable cookie")
+
+    monkeypatch.setattr(svs, "fetch_embed_data", must_not_fetch)
+
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        svs.resolve_video_episode(
+            "https://open.spotify.com/episode/25NlRLSIHjtfU47zm4FGm4",
+            cookies_file=str(jar),
+        )
+    assert str(exc.value) == "no_cookie"
+
+
 def test_resolve_video_episode_returns_none_for_audio_only(monkeypatch):
     monkeypatch.setattr(svs, "load_spotify_cookie", lambda path=None: "sp_dc_value")
     monkeypatch.setattr(svs, "fetch_embed_data", lambda eid, cookie: _embed(has_video=False))
