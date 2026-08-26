@@ -19,7 +19,11 @@ from bot.handlers import download_callbacks as _download_callbacks_module
 from bot.handlers import media_extras_callbacks as _media_extras_callbacks_module
 from bot.handlers import playlist_callbacks as _playlist_callbacks_module
 from bot.handlers import transcription_callbacks as _transcription_callbacks_module
-from bot.handlers.callback_parsing import parse_download_callback, parse_summary_option
+from bot.handlers.callback_parsing import (
+    parse_download_callback,
+    parse_spotify_video_callback,
+    parse_summary_option,
+)
 from bot.handlers.common_ui import (
     build_main_keyboard,
     escape_md as _shared_escape_md,
@@ -46,6 +50,7 @@ from bot.handlers.playlist_callbacks import (
     download_playlist as _extracted_download_playlist,
     handle_playlist_callback as _extracted_handle_playlist_callback,
 )
+from bot.handlers.spotify_callbacks import download_spotify_video
 from bot.handlers.transcript_prompt_handlers import handle_transcript_prompt_callback
 from bot.handlers.transcription_callbacks import (
     _handle_subtitle_callback as _extracted_handle_subtitle_callback,
@@ -146,6 +151,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if "castbox.fm" in url:
         url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
+
+    if data.startswith("spv_"):
+        video_data = parse_spotify_video_callback(data)
+        if not video_data:
+            await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+            return
+        session_data = _get_session_context_value(
+            context, chat_id, "spotify_video", legacy_key="spotify_video"
+        )
+        if not session_data:
+            await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
+            return
+        await download_spotify_video(update, context, session_data, height=video_data["height"])
+        return
 
     if data.startswith("dl_ig_"):
         await _handle_instagram_download(update, context, url, data)

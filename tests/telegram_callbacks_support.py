@@ -41,6 +41,8 @@ def _make_context():
     context.bot = Mock()
     context.bot.send_document = AsyncMock()
     context.bot.send_message = AsyncMock()
+    context.bot.send_video = AsyncMock()
+    context.bot.send_audio = AsyncMock()
     return context
 
 
