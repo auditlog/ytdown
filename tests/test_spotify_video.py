@@ -1,6 +1,7 @@
 """Unit tests for bot.spotify_video."""
 
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -277,13 +278,28 @@ def test_build_track_urls_rounds_partial_final_segment_up():
 
 
 def test_download_track_writes_init_then_segments_in_order(tmp_path, monkeypatch):
-    fetched = {
-        "https://cdn/init": b"INIT",
-        "https://cdn/0": b"AAA",
-        "https://cdn/1": b"BBB",
-        "https://cdn/2": b"CCC",
-    }
-    monkeypatch.setattr(sv, "_fetch_bytes", lambda url, timeout=30: fetched[url])
+    # Segment 0 is forced to finish strictly *after* segment 1 by blocking on
+    # an Event that segment 1's fetch sets. Both are submitted in the same
+    # batch (batch_size=2), so a write-in-completion-order implementation
+    # would write "BBB" before "AAA" here and fail the assertion below — a
+    # synchronous, instantaneous stub can never do that on its own, which is
+    # why this forces the reversal explicitly instead of hoping for it.
+    segment_1_done = threading.Event()
+
+    def fake_fetch(url, timeout=30):
+        if url == "https://cdn/init":
+            return b"INIT"
+        if url == "https://cdn/0":
+            assert segment_1_done.wait(timeout=5), "segment 1 never completed"
+            return b"AAA"
+        if url == "https://cdn/1":
+            segment_1_done.set()
+            return b"BBB"
+        if url == "https://cdn/2":
+            return b"CCC"
+        raise AssertionError(f"unexpected url {url}")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
 
     dest = tmp_path / "video.mp4"
     sv.download_track(
@@ -321,19 +337,76 @@ def test_download_track_reports_progress(tmp_path, monkeypatch):
         progress_cb=lambda done, total: seen.append((done, total)),
         batch_size=2,
     )
-    assert seen[-1] == (5, 5)
+    # Exact sequence, not just the final value: (5, 5) alone is what a
+    # non-batching, single-callback-at-the-end implementation would also
+    # produce, so it proves nothing about batching on its own.
+    assert seen == [(2, 5), (4, 5), (5, 5)]
 
 
 def test_download_track_raises_after_exhausting_retries(tmp_path, monkeypatch):
+    calls = []
+    sleeps = []
+
+    def fake_fetch(url, timeout=30):
+        calls.append(url)
+        raise sv.requests.RequestException("boom")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
+    monkeypatch.setattr(sv.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.download_track(
+            ["https://cdn/init"], [["https://cdn/0"]], str(tmp_path / "v.mp4")
+        )
+
+    # Fails on the init fetch, which goes through the same _fetch_with_failover
+    # as segments — this proves every attempt is tried and backoff happens
+    # between attempts (but not after the last one), not just that *some*
+    # exception eventually surfaces as SpotifyVideoError.
+    assert calls == ["https://cdn/init"] * sv.SEGMENT_ATTEMPTS
+    assert sleeps == [1, 2]
+
+
+def test_download_track_retries_segment_after_init_succeeds(tmp_path, monkeypatch):
+    candidates = ["https://primary/0", "https://backup/0"]
+    calls = []
+    sleeps = []
+
+    def fake_fetch(url, timeout=30):
+        if url == "https://cdn/init":
+            return b"INIT"
+        calls.append(url)
+        raise sv.requests.RequestException("boom")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
+    monkeypatch.setattr(sv.time, "sleep", lambda seconds: sleeps.append(seconds))
+
+    # Unlike the test above, the init fetch succeeds, so this exercises the
+    # segment path running inside the ThreadPoolExecutor rather than the
+    # direct call before it — proving the concurrent path retries and backs
+    # off exactly like the synchronous one.
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.download_track(
+            ["https://cdn/init"], [candidates], str(tmp_path / "v.mp4")
+        )
+
+    assert calls == candidates * sv.SEGMENT_ATTEMPTS
+    assert sleeps == [1, 2]
+
+
+def test_download_track_leaves_no_file_after_exhausting_retries(tmp_path, monkeypatch):
     monkeypatch.setattr(
         sv, "_fetch_bytes",
         lambda url, timeout=30: (_ for _ in ()).throw(sv.requests.RequestException("boom")),
     )
     monkeypatch.setattr(sv.time, "sleep", lambda seconds: None)
+    dest = tmp_path / "v.mp4"
+
     with pytest.raises(sv.SpotifyVideoError):
-        sv.download_track(
-            ["https://cdn/init"], [["https://cdn/0"]], str(tmp_path / "v.mp4")
-        )
+        sv.download_track(["https://cdn/init"], [["https://cdn/0"]], str(dest))
+
+    assert not dest.exists()
+    assert not (tmp_path / "v.mp4.part").exists()
 
 
 def test_download_track_honours_cancellation(tmp_path, monkeypatch):
@@ -351,4 +424,93 @@ def test_download_track_honours_cancellation(tmp_path, monkeypatch):
             [["https://cdn/0"]],
             str(tmp_path / "v.mp4"),
             cancellation=_Cancelled(),
+        )
+
+
+def test_download_track_cancellation_mid_batch_leaves_no_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "_fetch_bytes", lambda url, timeout=30: b"X")
+
+    class _CancelAfterFirstBatch:
+        """Lets the pre-download check and the first batch's check pass,
+        then cancels before the second batch starts."""
+
+        def __init__(self):
+            self._checks = 0
+            self.event = self
+
+        def is_set(self):
+            self._checks += 1
+            return self._checks > 2
+
+    dest = tmp_path / "v.mp4"
+    with pytest.raises(sv.SpotifyVideoCancelled):
+        sv.download_track(
+            ["https://cdn/init"],
+            [["https://cdn/%d" % i] for i in range(4)],
+            str(dest),
+            batch_size=2,
+            cancellation=_CancelAfterFirstBatch(),
+        )
+
+    assert not dest.exists()
+    assert not (tmp_path / "v.mp4.part").exists()
+
+
+def test_download_track_wraps_non_request_exceptions(tmp_path, monkeypatch):
+    def fake_fetch(url, timeout=30):
+        if url == "https://cdn/init":
+            return b"INIT"
+        raise ValueError("weird, non-network failure")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
+    monkeypatch.setattr(sv.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.download_track(
+            ["https://cdn/init"], [["https://cdn/0"]], str(tmp_path / "v.mp4")
+        )
+
+
+def test_download_track_propagates_cancellation_raised_during_fetch(tmp_path, monkeypatch):
+    calls = []
+
+    def fake_fetch(url, timeout=30):
+        if url == "https://cdn/init":
+            return b"INIT"
+        calls.append(url)
+        raise sv.SpotifyVideoCancelled("cancelled mid-fetch")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
+
+    with pytest.raises(sv.SpotifyVideoCancelled):
+        sv.download_track(
+            ["https://cdn/init"], [["https://cdn/0"]], str(tmp_path / "v.mp4")
+        )
+    # Not retried like an ordinary fetch failure would be.
+    assert len(calls) == 1
+
+
+def test_download_track_rejects_empty_segment_candidates_immediately(tmp_path, monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(sv.time, "sleep", lambda seconds: sleeps.append(seconds))
+    monkeypatch.setattr(sv, "_fetch_bytes", lambda url, timeout=30: b"INIT")
+
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.download_track(["https://cdn/init"], [[]], str(tmp_path / "v.mp4"))
+
+    assert sleeps == []
+
+
+def test_download_track_error_message_includes_failing_url(tmp_path, monkeypatch):
+    def fake_fetch(url, timeout=30):
+        if url == "https://cdn/init":
+            return b"INIT"
+        raise sv.requests.RequestException("boom")
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
+    monkeypatch.setattr(sv.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(sv.SpotifyVideoError, match="https://cdn/0"):
+        sv.download_track(
+            ["https://cdn/init"], [["https://cdn/0"]], str(tmp_path / "v.mp4")
         )

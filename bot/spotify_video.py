@@ -371,16 +371,32 @@ def _fetch_bytes(url: str, timeout: int = 30) -> bytes:
 def _fetch_with_failover(url_candidates: list[str]) -> bytes:
     """Fetch one segment, trying every CDN before backing off and retrying."""
 
+    if not url_candidates:
+        raise SpotifyVideoError("Segment download failed: no CDN candidates supplied")
+
     last_error: Exception | None = None
+    last_url: str | None = None
     for attempt in range(SEGMENT_ATTEMPTS):
         for url in url_candidates:
             try:
                 return _fetch_bytes(url)
-            except requests.RequestException as exc:
+            except SpotifyVideoCancelled:
+                # Not a fetch failure — let cancellation propagate immediately
+                # instead of being absorbed into the retry loop.
+                raise
+            except Exception as exc:
+                # Catch broadly, not just requests.RequestException: any
+                # failure here must surface as SpotifyVideoError so callers
+                # (see the Polish-message mapping in the download flow) can
+                # rely on a single error type from this pipeline stage.
                 last_error = exc
+                last_url = url
         if attempt < SEGMENT_ATTEMPTS - 1:
             time.sleep(2 ** attempt)
-    raise SpotifyVideoError(f"Segment download failed: {last_error}")
+    raise SpotifyVideoError(
+        f"Segment download failed after {SEGMENT_ATTEMPTS} attempts; "
+        f"last error from {last_url}: {last_error}"
+    )
 
 
 def _raise_if_cancelled(cancellation) -> None:
@@ -404,31 +420,49 @@ def download_track(
     batches so at most batch_size segments are held in memory at once —
     a full episode would otherwise need hundreds of megabytes of RAM or a
     thousand temporary files.
+
+    Writes to a ``.part`` sibling of dest_path and only renames it into place
+    (atomically, via os.replace) once the whole track has downloaded
+    successfully. A failed or cancelled download therefore never leaves a
+    truncated file sitting at dest_path.
     """
 
     total = len(segment_urls)
     _raise_if_cancelled(cancellation)
 
-    with open(dest_path, "wb") as out:
-        out.write(_fetch_with_failover(init_urls))
+    part_path = dest_path + ".part"
+    try:
+        with open(part_path, "wb") as out:
+            out.write(_fetch_with_failover(init_urls))
 
-        with ThreadPoolExecutor(max_workers=workers) as pool:
-            for start in range(0, total, batch_size):
-                _raise_if_cancelled(cancellation)
-                batch = segment_urls[start:start + batch_size]
+            pool = ThreadPoolExecutor(max_workers=workers)
+            try:
+                for start in range(0, total, batch_size):
+                    _raise_if_cancelled(cancellation)
+                    batch = segment_urls[start:start + batch_size]
 
-                futures = {
-                    pool.submit(_fetch_with_failover, candidates): offset
-                    for offset, candidates in enumerate(batch)
-                }
-                chunks: dict[int, bytes] = {}
-                for future in as_completed(futures):
-                    chunks[futures[future]] = future.result()
+                    futures = {
+                        pool.submit(_fetch_with_failover, candidates): offset
+                        for offset, candidates in enumerate(batch)
+                    }
+                    chunks: dict[int, bytes] = {}
+                    for future in as_completed(futures):
+                        chunks[futures[future]] = future.result()
 
-                for offset in range(len(batch)):
-                    out.write(chunks[offset])
+                    for offset in range(len(batch)):
+                        out.write(chunks[offset])
 
-                if progress_cb is not None:
-                    progress_cb(min(start + batch_size, total), total)
+                    if progress_cb is not None:
+                        progress_cb(min(start + batch_size, total), total)
+            finally:
+                # cancel_futures drops segment fetches queued but not yet
+                # started, instead of burning minutes retrying against a CDN
+                # already known to be failing once one segment gives up.
+                pool.shutdown(wait=True, cancel_futures=True)
+    except BaseException:
+        if os.path.exists(part_path):
+            os.remove(part_path)
+        raise
 
+    os.replace(part_path, dest_path)
     return dest_path
