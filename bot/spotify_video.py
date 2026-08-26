@@ -18,6 +18,8 @@ import logging
 import math
 import os
 import re
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 
 import requests
@@ -349,3 +351,84 @@ def build_track_urls(
     ]
 
     return init_urls, segment_urls
+
+
+SEGMENT_WORKERS = 8
+SEGMENT_BATCH_SIZE = 32
+SEGMENT_ATTEMPTS = 3
+
+
+def _fetch_bytes(url: str, timeout: int = 30) -> bytes:
+    """Fetch one URL and return its body. Separated out so tests can stub it."""
+
+    response = requests.get(
+        url, headers={"User-Agent": BROWSER_USER_AGENT}, timeout=timeout
+    )
+    response.raise_for_status()
+    return response.content
+
+
+def _fetch_with_failover(url_candidates: list[str]) -> bytes:
+    """Fetch one segment, trying every CDN before backing off and retrying."""
+
+    last_error: Exception | None = None
+    for attempt in range(SEGMENT_ATTEMPTS):
+        for url in url_candidates:
+            try:
+                return _fetch_bytes(url)
+            except requests.RequestException as exc:
+                last_error = exc
+        if attempt < SEGMENT_ATTEMPTS - 1:
+            time.sleep(2 ** attempt)
+    raise SpotifyVideoError(f"Segment download failed: {last_error}")
+
+
+def _raise_if_cancelled(cancellation) -> None:
+    if cancellation is not None and cancellation.event.is_set():
+        raise SpotifyVideoCancelled("Download cancelled by user")
+
+
+def download_track(
+    init_urls: list[str],
+    segment_urls: list[list[str]],
+    dest_path: str,
+    *,
+    progress_cb=None,
+    cancellation=None,
+    workers: int = SEGMENT_WORKERS,
+    batch_size: int = SEGMENT_BATCH_SIZE,
+) -> str:
+    """Download one media track (video or audio) into a single file.
+
+    Segments are fetched concurrently but written in order. Work is done in
+    batches so at most batch_size segments are held in memory at once —
+    a full episode would otherwise need hundreds of megabytes of RAM or a
+    thousand temporary files.
+    """
+
+    total = len(segment_urls)
+    _raise_if_cancelled(cancellation)
+
+    with open(dest_path, "wb") as out:
+        out.write(_fetch_with_failover(init_urls))
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for start in range(0, total, batch_size):
+                _raise_if_cancelled(cancellation)
+                batch = segment_urls[start:start + batch_size]
+
+                futures = {
+                    pool.submit(_fetch_with_failover, candidates): offset
+                    for offset, candidates in enumerate(batch)
+                }
+                chunks: dict[int, bytes] = {}
+                for future in as_completed(futures):
+                    chunks[futures[future]] = future.result()
+
+                for offset in range(len(batch)):
+                    out.write(chunks[offset])
+
+                if progress_cb is not None:
+                    progress_cb(min(start + batch_size, total), total)
+
+    return dest_path

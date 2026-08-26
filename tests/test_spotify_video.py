@@ -274,3 +274,81 @@ def test_build_track_urls_rounds_partial_final_segment_up():
     _, segment_urls = sv.build_track_urls(manifest, profile_id=1)
     # 30 s / 4 s = 7.5 -> 8 segments, the last one short
     assert len(segment_urls) == 8
+
+
+def test_download_track_writes_init_then_segments_in_order(tmp_path, monkeypatch):
+    fetched = {
+        "https://cdn/init": b"INIT",
+        "https://cdn/0": b"AAA",
+        "https://cdn/1": b"BBB",
+        "https://cdn/2": b"CCC",
+    }
+    monkeypatch.setattr(sv, "_fetch_bytes", lambda url, timeout=30: fetched[url])
+
+    dest = tmp_path / "video.mp4"
+    sv.download_track(
+        ["https://cdn/init"],
+        [["https://cdn/0"], ["https://cdn/1"], ["https://cdn/2"]],
+        str(dest),
+        batch_size=2,
+    )
+    assert dest.read_bytes() == b"INITAAABBBCCC"
+
+
+def test_download_track_falls_over_to_second_cdn(tmp_path, monkeypatch):
+    def fake_fetch(url, timeout=30):
+        if "primary" in url:
+            raise sv.requests.RequestException("primary down")
+        return b"OK"
+
+    monkeypatch.setattr(sv, "_fetch_bytes", fake_fetch)
+    dest = tmp_path / "video.mp4"
+    sv.download_track(
+        ["https://primary/init", "https://backup/init"],
+        [["https://primary/0", "https://backup/0"]],
+        str(dest),
+    )
+    assert dest.read_bytes() == b"OKOK"
+
+
+def test_download_track_reports_progress(tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "_fetch_bytes", lambda url, timeout=30: b"X")
+    seen = []
+    sv.download_track(
+        ["https://cdn/init"],
+        [["https://cdn/%d" % i] for i in range(5)],
+        str(tmp_path / "v.mp4"),
+        progress_cb=lambda done, total: seen.append((done, total)),
+        batch_size=2,
+    )
+    assert seen[-1] == (5, 5)
+
+
+def test_download_track_raises_after_exhausting_retries(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        sv, "_fetch_bytes",
+        lambda url, timeout=30: (_ for _ in ()).throw(sv.requests.RequestException("boom")),
+    )
+    monkeypatch.setattr(sv.time, "sleep", lambda seconds: None)
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.download_track(
+            ["https://cdn/init"], [["https://cdn/0"]], str(tmp_path / "v.mp4")
+        )
+
+
+def test_download_track_honours_cancellation(tmp_path, monkeypatch):
+    monkeypatch.setattr(sv, "_fetch_bytes", lambda url, timeout=30: b"X")
+
+    class _Cancelled:
+        class event:
+            @staticmethod
+            def is_set():
+                return True
+
+    with pytest.raises(sv.SpotifyVideoCancelled):
+        sv.download_track(
+            ["https://cdn/init"],
+            [["https://cdn/0"]],
+            str(tmp_path / "v.mp4"),
+            cancellation=_Cancelled(),
+        )
