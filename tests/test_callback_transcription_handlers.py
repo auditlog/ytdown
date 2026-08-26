@@ -735,6 +735,11 @@ def test_download_spotify_video_progress_edit_failure_does_not_abort_download(mo
     final_text = update.callback_query.edit_message_text.await_args_list[-1].args[0]
     assert final_text == "Gotowe: Test Episode"
     assert len(captured_futures) == 1
+    # Check .done() before .exception(): with no timeout, .exception()
+    # blocks until the future resolves, so if the wrap_future-based wait
+    # this fix depends on ever regresses (the future never completes),
+    # this test would hang forever instead of failing loudly.
+    assert captured_futures[0].done()
     # The scheduled progress-edit coroutine must have caught its own
     # exception -- nothing should be left for asyncio's "Task exception
     # was never retrieved" handler to complain about.
@@ -912,3 +917,151 @@ def test_download_spotify_video_height_zero_uses_video_label_and_send(monkeypatc
     context.bot.send_audio.assert_not_awaited()
     first_status = update.callback_query.edit_message_text.await_args_list[0].args[0]
     assert first_status == "Pobieranie wideo ze Spotify..."
+
+
+# --- fix round 3 (Task 11 review) -------------------------------------------
+
+
+def test_download_spotify_video_waits_for_all_pending_progress_edits_not_just_the_last(
+    monkeypatch, tmp_path
+):
+    """A progress edit that takes longer than the throttle window can still
+    be in flight when the *next* progress_cb call schedules another one.
+    Tracking only the most recently scheduled future would await the
+    second (faster) edit but never the first (slower) one, so the first
+    could still land after the final message. Every scheduled edit must
+    be waited on, not just the last."""
+
+    produced = tmp_path / "episode.mp4"
+    produced.write_bytes(b"X" * 1024)
+
+    log = []
+
+    async def fake_edit_message_text(text, reply_markup=None, parse_mode=None):
+        log.append(f"start:{text}")
+        if text == "Pobieranie wideo: 10/100":
+            # The first edit (A) is slower than the second (B) below --
+            # without tracking every pending future, only B gets awaited.
+            for _ in range(80):
+                await asyncio.sleep(0)
+        elif text == "Pobieranie wideo: 20/100":
+            for _ in range(20):
+                await asyncio.sleep(0)
+        log.append(f"finish:{text}")
+
+    async def fake_download(*, progress_cb, **kwargs):
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            # Two progress reports close together, before the executor
+            # call returns.
+            progress_cb(10, 100)
+            progress_cb(20, 100)
+
+        await loop.run_in_executor(None, worker)
+        return str(produced)
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+    update.callback_query.edit_message_text = AsyncMock(side_effect=fake_edit_message_text)
+
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    assert "finish:Pobieranie wideo: 10/100" in log
+    finish_a_idx = log.index("finish:Pobieranie wideo: 10/100")
+    next_message_start_idx = next(
+        i for i, entry in enumerate(log) if entry.startswith("start:Pobieranie zakończone")
+    )
+    assert finish_a_idx < next_message_start_idx
+
+
+def test_download_spotify_video_waits_for_pending_progress_edit_before_error_message(
+    monkeypatch, tmp_path
+):
+    """The wait for pending progress edits lives in a `finally` specifically
+    so it also covers the error path, not just the success path -- that
+    placement has no test coverage otherwise, and the error path is
+    exactly the case that motivated this fix in the first place (a failed
+    download must not have its error message clobbered by a stale
+    progress line either)."""
+
+    log = []
+
+    async def fake_edit_message_text(text, reply_markup=None, parse_mode=None):
+        log.append(f"start:{text}")
+        if text.startswith("Pobieranie wideo:"):
+            for _ in range(50):
+                await asyncio.sleep(0)
+        log.append(f"finish:{text}")
+
+    async def fake_download(*, progress_cb, **kwargs):
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            progress_cb(100, 100)
+
+        await loop.run_in_executor(None, worker)
+        raise SpotifyVideoError("api_changed")
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+    update.callback_query.edit_message_text = AsyncMock(side_effect=fake_edit_message_text)
+
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    assert "finish:Pobieranie wideo: 100/100" in log
+    finish_progress_idx = log.index("finish:Pobieranie wideo: 100/100")
+    error_start_idx = next(
+        i for i, entry in enumerate(log) if entry.startswith("start:Spotify zmieniło swoje API")
+    )
+    assert finish_progress_idx < error_start_idx
+
+
+def test_download_spotify_video_waits_for_pending_progress_edit_before_cancel_message(
+    monkeypatch, tmp_path
+):
+    """Same guarantee as the error-path test above, for the cancellation
+    path."""
+
+    log = []
+
+    async def fake_edit_message_text(text, reply_markup=None, parse_mode=None):
+        log.append(f"start:{text}")
+        if text.startswith("Pobieranie wideo:"):
+            for _ in range(50):
+                await asyncio.sleep(0)
+        log.append(f"finish:{text}")
+
+    async def fake_download(*, progress_cb, **kwargs):
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            progress_cb(100, 100)
+
+        await loop.run_in_executor(None, worker)
+        raise SpotifyVideoCancelled("stopped")
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+    update.callback_query.edit_message_text = AsyncMock(side_effect=fake_edit_message_text)
+
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    assert "finish:Pobieranie wideo: 100/100" in log
+    finish_progress_idx = log.index("finish:Pobieranie wideo: 100/100")
+    cancel_start_idx = next(
+        i for i, entry in enumerate(log) if entry.startswith("start:Pobieranie anulowane.")
+    )
+    assert finish_progress_idx < cancel_start_idx

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
 import logging
 import os
 import time
@@ -197,17 +198,28 @@ async def download_spotify_video(
     # touching the bot API directly from the worker thread.
     loop = asyncio.get_event_loop()
     reporter = _ThrottledProgressReporter(label, min_interval=_PROGRESS_EDIT_MIN_INTERVAL_SEC)
-    # Tracks the most recently scheduled progress edit so it can be waited
-    # on (not suppressed -- see below) before the next status message goes
-    # out. A plain flag checked inside the scheduled coroutine does not
-    # work for this: run_coroutine_threadsafe defers creating its Task
+    # Tracks every scheduled-but-not-yet-confirmed-finished progress edit,
+    # not just the most recent one: an edit that takes longer than the
+    # throttle window can still be in flight when the *next* progress_cb
+    # call schedules another one, and every one of them (not just whichever
+    # happens to be last) must be waited on before the first post-download
+    # status edit -- see the `finally` below. Waiting is what guarantees
+    # ordering; a plain flag checked inside the scheduled coroutine does
+    # not work for this (run_coroutine_threadsafe defers creating its Task
     # through a call_soon_threadsafe hop, and FIFO callback ordering
     # guarantees that deferred Task's first step runs before this
     # coroutine can resume and flip any such flag -- confirmed with a
-    # standalone repro of the real cross-thread (run_in_executor) call
-    # shape, not just reasoned about, since it is exactly backwards from
-    # what a same-thread-only repro suggests.
-    last_progress_future: "asyncio.Future | None" = None
+    # standalone repro of the real cross-thread, run_in_executor call
+    # shape). Nor does an asyncio.Lock shared between the two sides: an
+    # uncontended Lock.acquire() returns immediately without ever
+    # yielding to the loop, so a not-yet-started _push_progress task would
+    # never get a chance to register as a waiter before the "drain"
+    # acquisition already succeeded -- the same failure mode, relocated.
+    # Directly awaiting each concrete concurrent.futures.Future that
+    # run_coroutine_threadsafe hands back (via asyncio.wrap_future) has
+    # none of these gaps, because that Future object exists synchronously
+    # the moment it's returned, regardless of whether its Task has started.
+    pending_progress_futures: list["concurrent.futures.Future"] = []
 
     async def _push_progress(text):
         try:
@@ -229,11 +241,12 @@ async def download_spotify_video(
             logging.warning("Spotify progress edit failed", exc_info=True)
 
     def progress_cb(done, total):
-        nonlocal last_progress_future
         try:
             text = reporter.record_and_check(done, total)
             if text is not None:
-                last_progress_future = asyncio.run_coroutine_threadsafe(_push_progress(text), loop)
+                pending_progress_futures.append(
+                    asyncio.run_coroutine_threadsafe(_push_progress(text), loop)
+                )
         except Exception:
             # progress_cb runs synchronously on download_track's worker
             # thread; an uncaught raise here propagates into its caller and
@@ -270,25 +283,30 @@ async def download_spotify_video(
                 progress_cb=progress_cb,
             )
         finally:
-            # A progress edit can still be queued -- or genuinely mid-flight
-            # against Telegram's API -- at this point. Wait for it to
-            # actually finish here, before any further status edit is
-            # issued (whether control proceeds to the success path below or
-            # to one of the except blocks further down; this finally runs
-            # before control reaches those too). Two concurrent
-            # edit_message_text calls on the same message have no ordering
-            # guarantee between their underlying HTTP requests -- awaiting
-            # this is what guarantees the status message that follows is
-            # always the one the user sees last.
-            if last_progress_future is not None:
+            # Every progress edit scheduled from the worker thread -- not
+            # just the most recent one -- can still be queued or genuinely
+            # mid-flight against Telegram's API at this point. Wait for
+            # all of them to actually finish here, before any further
+            # status edit is issued (whether control proceeds to the
+            # success path below or to one of the except blocks further
+            # down; this finally runs before control reaches those too).
+            # Two concurrent edit_message_text calls on the same message
+            # have no ordering guarantee between their underlying HTTP
+            # requests -- awaiting every one of these is what guarantees
+            # the status message that follows is always the one the user
+            # sees last, regardless of how many progress edits are still
+            # outstanding.
+            if pending_progress_futures:
                 try:
-                    await asyncio.wrap_future(last_progress_future, loop=loop)
+                    await asyncio.gather(
+                        *(asyncio.wrap_future(f, loop=loop) for f in pending_progress_futures)
+                    )
                 except Exception:
                     # _push_progress already contains its own failures, so
                     # this branch should be unreachable in practice; kept
-                    # only so a wrap/chain failure can't take the download
-                    # down with it either.
-                    logging.warning("Waiting for pending Spotify progress edit failed", exc_info=True)
+                    # only so a wrap/chain/gather failure can't take the
+                    # download down with it either.
+                    logging.warning("Waiting for pending Spotify progress edits failed", exc_info=True)
 
         file_size_mb = os.path.getsize(downloaded_path) / (1024 * 1024)
         await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie...")
