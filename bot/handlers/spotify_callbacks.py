@@ -86,6 +86,127 @@ class _ThrottledProgressReporter:
         return text
 
 
+class _SpotifyProgressBridge:
+    """Bridges a download's worker-thread progress_cb calls to throttled,
+    correctly-ordered Telegram status edits.
+
+    download_track/download_episode_media invoke ``progress_cb``
+    synchronously from a worker thread (they run inside an executor),
+    while editing a Telegram message is async and must happen on the
+    event loop thread. ``callback`` -- passed as the pipeline's
+    ``progress_cb`` -- bridges back to the loop captured at construction
+    time via ``run_coroutine_threadsafe`` rather than awaiting or touching
+    the bot API directly from the worker thread. The loop is captured
+    here, before any caller dispatches work to the executor.
+
+    Call ``await bridge.drain()`` in a ``finally`` before issuing any
+    further status edit (whether control proceeds to a success path or an
+    except block) -- see `drain` for why that ordering matters. One
+    instance is scoped to a single download; construct a fresh one per
+    call, same as `_ThrottledProgressReporter`.
+    """
+
+    def __init__(self, label: str, *, update_status, min_interval: float):
+        self._reporter = _ThrottledProgressReporter(label, min_interval=min_interval)
+        self._update_status = update_status
+        self._loop = asyncio.get_event_loop()
+        # Tracks every scheduled-but-not-yet-confirmed-finished progress
+        # edit, not just the most recent one: an edit that takes longer
+        # than the throttle window can still be in flight when the *next*
+        # progress_cb call schedules another one, and every one of them
+        # (not just whichever happens to be last) must be waited on before
+        # the caller's first post-download status edit -- see `drain`.
+        # Waiting is what guarantees ordering; a plain flag checked inside
+        # the scheduled coroutine does not work for this
+        # (run_coroutine_threadsafe defers creating its Task through a
+        # call_soon_threadsafe hop, and FIFO callback ordering guarantees
+        # that deferred Task's first step runs before this coroutine can
+        # resume and flip any such flag -- confirmed with a standalone
+        # repro of the real cross-thread, run_in_executor call shape). A
+        # shared asyncio.Lock would work too, for the same FIFO reason: by
+        # the time this coroutine resumes to acquire it, every progress
+        # task scheduled so far has either already acquired it or queued
+        # as a waiter ahead of us, so the acquire here is never truly
+        # uncontended in this call shape. Concrete futures were chosen
+        # instead because they say directly what is actually needed --
+        # wait for exactly the N edits that were dispatched -- without
+        # inventing an acquire/release protocol around each one to get
+        # there. Directly awaiting each concrete concurrent.futures.Future
+        # that run_coroutine_threadsafe hands back (via asyncio.wrap_future)
+        # has none of the plain-flag's gaps, because that Future object
+        # exists synchronously the moment it's returned, regardless of
+        # whether its Task has started.
+        self._pending: list["concurrent.futures.Future"] = []
+
+    async def _push(self, text: str) -> None:
+        try:
+            await self._update_status(text)
+        except Exception:
+            # A status edit must never disturb the download. This is most
+            # commonly RetryAfter (Telegram flood control) or Forbidden
+            # (the user blocked the bot) -- neither is a NetworkError or
+            # TimedOut, so safe_edit_message doesn't swallow them. Warning
+            # level, not debug: an operator needs to see flood control or
+            # a block even though the download keeps going, and contained
+            # here is the *only* place this failure is ever visible --
+            # asyncio.futures._chain_future's _call_set_state copies this
+            # coroutine's exception onto the concurrent.futures.Future
+            # that nobody awaits or retrieves, which silently clears the
+            # Task's own "exception was never retrieved" warning in the
+            # process. Left uncaught, this failure would not be logged
+            # anywhere at all, not even as that warning.
+            logging.warning("Spotify progress edit failed", exc_info=True)
+
+    def callback(self, done: int, total: int) -> None:
+        """The ``progress_cb`` to pass into the download pipeline."""
+        try:
+            text = self._reporter.record_and_check(done, total)
+            if text is not None:
+                self._pending.append(
+                    asyncio.run_coroutine_threadsafe(self._push(text), self._loop)
+                )
+        except Exception:
+            # callback runs synchronously on download_track's worker
+            # thread; an uncaught raise here propagates into its caller
+            # and (in the real pipeline) triggers the .part-file cleanup
+            # that discards a partially downloaded episode. A broken
+            # progress report must never be able to do that.
+            logging.warning("Spotify progress bridge failed", exc_info=True)
+
+    async def drain(self) -> None:
+        """Wait for every progress edit dispatched so far to finish.
+
+        Every progress edit scheduled from the worker thread -- not just
+        the most recent one -- can still be queued or genuinely mid-flight
+        against Telegram's API when this is called. Two concurrent
+        edit_message_text calls on the same message have no ordering
+        guarantee between their underlying HTTP requests -- awaiting every
+        one of these is what guarantees the status message the caller
+        issues next is always the one the user sees last, regardless of
+        how many progress edits are still outstanding.
+        """
+        if not self._pending:
+            return
+        try:
+            # return_exceptions=True: without it, gather cancels every
+            # other still-pending future the moment any one of them
+            # raises, so this drain would stop short of actually waiting
+            # for all of them -- exactly the ordering guarantee this
+            # method exists to provide. It also stops a bare
+            # CancelledError from a cancelled future from escaping past
+            # the except below and replacing the caller's own exception.
+            await asyncio.gather(
+                *(asyncio.wrap_future(f, loop=self._loop) for f in self._pending),
+                return_exceptions=True,
+            )
+        except Exception:
+            # _push already contains its own failures, so this branch
+            # should be unreachable in practice; kept only so a
+            # wrap/chain/gather failure can't take the download down with
+            # it either.
+            logging.warning("Waiting for pending Spotify progress edits failed", exc_info=True)
+
+
 async def download_spotify_resolved(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -192,74 +313,9 @@ async def download_spotify_video(
     label = "audio" if height is None else "wideo"
     await update_status(f"Pobieranie {label} ze Spotify...")
 
-    # download_track invokes progress_cb from a worker thread (it runs
-    # inside _executor), while editing a Telegram message is async and must
-    # happen on the event loop thread. The running loop is captured here,
-    # before dispatching any work to the executor, and progress_cb bridges
-    # back to it via run_coroutine_threadsafe rather than awaiting or
-    # touching the bot API directly from the worker thread.
-    loop = asyncio.get_event_loop()
-    reporter = _ThrottledProgressReporter(label, min_interval=_PROGRESS_EDIT_MIN_INTERVAL_SEC)
-    # Tracks every scheduled-but-not-yet-confirmed-finished progress edit,
-    # not just the most recent one: an edit that takes longer than the
-    # throttle window can still be in flight when the *next* progress_cb
-    # call schedules another one, and every one of them (not just whichever
-    # happens to be last) must be waited on before the first post-download
-    # status edit -- see the `finally` below. Waiting is what guarantees
-    # ordering; a plain flag checked inside the scheduled coroutine does
-    # not work for this (run_coroutine_threadsafe defers creating its Task
-    # through a call_soon_threadsafe hop, and FIFO callback ordering
-    # guarantees that deferred Task's first step runs before this
-    # coroutine can resume and flip any such flag -- confirmed with a
-    # standalone repro of the real cross-thread, run_in_executor call
-    # shape). A shared asyncio.Lock would work too, for the same FIFO
-    # reason: by the time this coroutine resumes to acquire it, every
-    # progress task scheduled so far has either already acquired it or
-    # queued as a waiter ahead of us, so the acquire here is never truly
-    # uncontended in this call shape. Concrete futures were chosen instead
-    # because they say directly what is actually needed -- wait for
-    # exactly the N edits that were dispatched -- without inventing an
-    # acquire/release protocol around each one to get there. Directly
-    # awaiting each concrete concurrent.futures.Future that
-    # run_coroutine_threadsafe hands back (via asyncio.wrap_future) has
-    # none of the plain-flag's gaps, because that Future object exists
-    # synchronously the moment it's returned, regardless of whether its
-    # Task has started.
-    pending_progress_futures: list["concurrent.futures.Future"] = []
-
-    async def _push_progress(text):
-        try:
-            await update_status(text)
-        except Exception:
-            # A status edit must never disturb the download. This is most
-            # commonly RetryAfter (Telegram flood control) or Forbidden
-            # (the user blocked the bot) -- neither is a NetworkError or
-            # TimedOut, so safe_edit_message doesn't swallow them. Warning
-            # level, not debug: an operator needs to see flood control or
-            # a block even though the download keeps going, and contained
-            # here is the *only* place this failure is ever visible --
-            # asyncio.futures._chain_future's _call_set_state copies this
-            # coroutine's exception onto the concurrent.futures.Future
-            # that nobody awaits or retrieves, which silently clears the
-            # Task's own "exception was never retrieved" warning in the
-            # process. Left uncaught, this failure would not be logged
-            # anywhere at all, not even as that warning.
-            logging.warning("Spotify progress edit failed", exc_info=True)
-
-    def progress_cb(done, total):
-        try:
-            text = reporter.record_and_check(done, total)
-            if text is not None:
-                pending_progress_futures.append(
-                    asyncio.run_coroutine_threadsafe(_push_progress(text), loop)
-                )
-        except Exception:
-            # progress_cb runs synchronously on download_track's worker
-            # thread; an uncaught raise here propagates into its caller and
-            # (in the real pipeline) triggers the .part-file cleanup that
-            # discards a partially downloaded episode. A broken progress
-            # report must never be able to do that.
-            logging.warning("Spotify progress bridge failed", exc_info=True)
+    bridge = _SpotifyProgressBridge(
+        label, update_status=update_status, min_interval=_PROGRESS_EDIT_MIN_INTERVAL_SEC
+    )
 
     downloaded_path = None
     try:
@@ -286,42 +342,15 @@ async def download_spotify_video(
                 height=height,
                 output_dir=chat_download_path,
                 executor=_executor,
-                progress_cb=progress_cb,
+                progress_cb=bridge.callback,
             )
         finally:
-            # Every progress edit scheduled from the worker thread -- not
-            # just the most recent one -- can still be queued or genuinely
-            # mid-flight against Telegram's API at this point. Wait for
-            # all of them to actually finish here, before any further
-            # status edit is issued (whether control proceeds to the
-            # success path below or to one of the except blocks further
-            # down; this finally runs before control reaches those too).
-            # Two concurrent edit_message_text calls on the same message
-            # have no ordering guarantee between their underlying HTTP
-            # requests -- awaiting every one of these is what guarantees
-            # the status message that follows is always the one the user
-            # sees last, regardless of how many progress edits are still
-            # outstanding.
-            if pending_progress_futures:
-                try:
-                    # return_exceptions=True: without it, gather cancels
-                    # every other still-pending future the moment any one
-                    # of them raises, so this drain would stop short of
-                    # actually waiting for all of them -- exactly the
-                    # ordering guarantee this block exists to provide. It
-                    # also stops a bare CancelledError from a cancelled
-                    # future from escaping past the except below and
-                    # replacing the download's own exception.
-                    await asyncio.gather(
-                        *(asyncio.wrap_future(f, loop=loop) for f in pending_progress_futures),
-                        return_exceptions=True,
-                    )
-                except Exception:
-                    # _push_progress already contains its own failures, so
-                    # this branch should be unreachable in practice; kept
-                    # only so a wrap/chain/gather failure can't take the
-                    # download down with it either.
-                    logging.warning("Waiting for pending Spotify progress edits failed", exc_info=True)
+            # Wait for every progress edit dispatched so far, before any
+            # further status edit is issued -- whether control proceeds to
+            # the success path below or to one of the except blocks
+            # further down; this finally runs before control reaches
+            # those too. See _SpotifyProgressBridge.drain for why.
+            await bridge.drain()
 
         file_size_mb = os.path.getsize(downloaded_path) / (1024 * 1024)
         await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie...")
@@ -417,22 +446,46 @@ async def transcribe_spotify_video(
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
-    manifest = session_data["manifest"]
-    episode = VideoEpisode(
-        episode_id=session_data["episode_id"],
-        title=title,
-        show_name=session_data.get("show_name", ""),
-        duration_ms=int(session_data.get("duration_ms") or 0),
-        manifest=manifest,
-        profiles=list_profiles(manifest),
-        subtitle_languages=session_data.get("subtitle_languages", []),
-    )
-    sanitized_title = sanitize_filename(title)
-
     downloaded_file_path = None
     transcript_path = None
 
     try:
+        # Session state can carry a manifest that no longer parses -- a
+        # stale one surviving from an earlier episode, or genuine Spotify
+        # API drift -- so building the episode happens inside this try,
+        # same as the identical construction in download_spotify_video
+        # three functions up: a manifest-shape failure here must surface
+        # as the same "api_changed" Polish message every other manifest
+        # failure produces, not an unhandled exception that leaves the
+        # status message frozen forever.
+        #
+        # profiles is left empty here (unlike download_spotify_video):
+        # neither branch below reads it -- the subtitle path only touches
+        # subtitle_languages/manifest, and download_episode_media(height=
+        # None) resolves the audio profile from the manifest itself via
+        # find_audio_profile_id. Calling list_profiles(manifest) here
+        # would just be a second, redundant manifest-shape check; skipping
+        # it lets any drift surface through download_episode_media's own
+        # already-tested "api_changed" normalization instead.
+        manifest = session_data["manifest"]
+        episode = VideoEpisode(
+            episode_id=session_data["episode_id"],
+            title=title,
+            show_name=session_data.get("show_name", ""),
+            duration_ms=int(session_data.get("duration_ms") or 0),
+            manifest=manifest,
+            profiles=[],
+            subtitle_languages=session_data.get("subtitle_languages", []),
+        )
+        # Mirrors download_episode_media's own base_name formula exactly
+        # (bot/services/spotify_video_service.py) -- title can legitimately
+        # be an empty string (Spotify's embed entity can carry one), and if
+        # this diverged from that formula, cleanup_transcription_artifacts's
+        # transcript_prefix would stop matching the real per-part chunk
+        # files on the audio+Groq fallback path, leaking them until the
+        # 24h sweep.
+        sanitized_title = sanitize_filename(title or "spotify_episode")
+
         if episode.subtitle_languages:
             await update_status("Pobieranie napisów ze Spotify...")
             transcript_path = await asyncio.get_event_loop().run_in_executor(
@@ -455,12 +508,26 @@ async def transcribe_spotify_video(
                 return
 
             await update_status("Pobieranie audio ze Spotify...")
-            downloaded_file_path = await download_episode_media(
-                episode=episode,
-                height=None,
-                output_dir=chat_download_path,
-                executor=_executor,
+            # Reuses the same reporter/drain machinery download_spotify_video
+            # uses -- see _SpotifyProgressBridge -- so this fallback reports
+            # live progress instead of leaving the status message frozen on
+            # "Pobieranie audio..." for the whole download.
+            bridge = _SpotifyProgressBridge(
+                "audio", update_status=update_status, min_interval=_PROGRESS_EDIT_MIN_INTERVAL_SEC
             )
+            try:
+                downloaded_file_path = await download_episode_media(
+                    episode=episode,
+                    height=None,
+                    output_dir=chat_download_path,
+                    executor=_executor,
+                    progress_cb=bridge.callback,
+                )
+            finally:
+                # Wait for every progress edit dispatched so far, before
+                # any further status edit is issued -- see
+                # _SpotifyProgressBridge.drain for why.
+                await bridge.drain()
             file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
             await update_status(
                 f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\n"

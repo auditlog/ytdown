@@ -423,11 +423,13 @@ def test_transcript_from_subtitles_produces_markdown(monkeypatch, tmp_path):
     assert leftover_vtt == []
 
 
-def test_transcript_from_subtitles_returns_none_without_subtitles(tmp_path):
+def test_transcript_from_subtitles_returns_none_without_subtitles(monkeypatch, tmp_path):
     def must_not_be_reached(manifest, language_code, dest_path):
         # An episode advertising no subtitle languages must never attempt a
         # fetch at all -- proves the guard clause, not just the outcome.
         raise AssertionError("fetch_subtitles must not be reached without subtitle_languages")
+
+    monkeypatch.setattr(svs, "fetch_subtitles", must_not_be_reached)
 
     episode = svs.VideoEpisode(
         episode_id="abc", title="Odcinek", show_name="Podcast",

@@ -5,6 +5,7 @@ import os
 from unittest.mock import AsyncMock
 
 from bot import telegram_callbacks as tc
+from bot.downloader_validation import sanitize_filename
 from bot.handlers import spotify_callbacks as sc
 from bot.spotify_video import SpotifyVideoCancelled, SpotifyVideoError
 from tests.telegram_callbacks_support import _attach_runtime, _make_context, _make_update
@@ -767,7 +768,12 @@ def test_transcribe_spotify_video_falls_back_to_audio_when_no_subtitles(monkeypa
     transcript_file = tmp_path / "episode_transcript.md"
     transcript_file.write_text("# Test Episode\n\nZ Groq.\n", encoding="utf-8")
 
-    async def must_not_use_subtitles(*a, **kw):
+    def must_not_use_subtitles(*a, **kw):
+        # transcript_from_subtitles is a plain sync function, dispatched
+        # through run_in_executor -- an async stub here would return an
+        # unawaited coroutine instead of raising, letting a mutated guard
+        # slip through with a confusing downstream TypeError instead of
+        # this assertion.
         raise AssertionError("transcript_from_subtitles must not run without subtitle_languages")
 
     async def fake_download_episode_media(*, episode, height, output_dir, executor, **kw):
@@ -884,6 +890,191 @@ def test_transcribe_spotify_video_clears_video_session_not_resolved(monkeypatch,
 
     assert "spotify_video" not in context.user_data
     assert context.user_data["spotify_resolved"]["source"] == "itunes"
+
+
+def test_transcribe_spotify_video_reports_api_changed_for_drifted_manifest():
+    """Session state can carry a manifest that no longer parses -- a stale
+    manifest surviving from an earlier episode (this is exactly why
+    inbound_media.py clears spotify_video on link transitions/failed
+    resolution) or genuine Spotify API drift. Resolving it must surface
+    the same Polish "api_changed" message every other manifest failure
+    produces, not an unhandled exception that leaves the status message
+    frozen forever -- download_spotify_video already guards this identical
+    construction the same way, three functions up."""
+
+    session = _spotify_video_session()
+    session["manifest"] = {}  # no "contents" key -- list_profiles/find_audio_profile_id raise here
+    session["subtitle_languages"] = []
+
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert "zmieniło swoje API" in text
+
+
+def test_transcribe_spotify_video_sanitizes_empty_title_like_download_episode_media(monkeypatch, tmp_path):
+    """title == "" is reachable (Spotify's embed entity can carry an empty
+    title, per bot/spotify_video.py). transcribe_spotify_video's own
+    sanitized_title must be computed with the exact same formula
+    download_episode_media uses for its base_name
+    (sanitize_filename(title or "spotify_episode")) -- otherwise they
+    diverge ("download" vs "spotify_episode") and
+    cleanup_transcription_artifacts's transcript_prefix stops matching the
+    real per-part chunk files, leaking them until the 24h sweep."""
+
+    expected_base = sanitize_filename("" or "spotify_episode")
+    assert expected_base == "spotify_episode"
+
+    audio_file = tmp_path / f"{expected_base}.m4a"
+    audio_file.write_bytes(b"fake-audio-bytes")
+    transcript_file = tmp_path / f"{expected_base}_transcript.md"
+    transcript_file.write_text("# X\n\nTekst.\n", encoding="utf-8")
+
+    async def fake_download_episode_media(*, episode, height, output_dir, executor, **kw):
+        # Mirrors the real formula in bot/services/spotify_video_service.py.
+        assert sanitize_filename(episode.title or "spotify_episode") == expected_base
+        return str(audio_file)
+
+    async def fake_run_transcription(*, source_path, output_dir, executor, status_callback):
+        return str(transcript_file)
+
+    captured_cleanup = {}
+
+    def fake_cleanup(*, source_media_path, output_dir, transcript_prefix):
+        captured_cleanup["transcript_prefix"] = transcript_prefix
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **kw: None)
+    monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
+    monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
+    monkeypatch.setattr(sc, "cleanup_transcription_artifacts", fake_cleanup)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+
+    session = _spotify_video_session()
+    session["title"] = ""
+    session["subtitle_languages"] = []
+
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    assert captured_cleanup["transcript_prefix"] == expected_base
+
+
+def test_transcribe_spotify_video_reports_progress_during_audio_fallback(monkeypatch, tmp_path):
+    """The native-audio fallback (no subtitles) must report download
+    progress the same way download_spotify_video does -- Task 11 spent
+    three fix rounds eliminating exactly this frozen-message defect, and
+    the reporter/drain machinery it built sits two functions above this
+    call site, built for precisely this."""
+
+    audio_file = tmp_path / "episode.m4a"
+    audio_file.write_bytes(b"fake-audio-bytes")
+    transcript_file = tmp_path / "episode_transcript.md"
+    transcript_file.write_text("# Test Episode\n\nZ Groq.\n", encoding="utf-8")
+
+    async def fake_download_episode_media(*, episode, height, output_dir, executor, progress_cb=None, **kw):
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            if progress_cb is not None:
+                progress_cb(50, 100)
+                progress_cb(100, 100)
+
+        await loop.run_in_executor(None, worker)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return str(audio_file)
+
+    async def fake_run_transcription(*, source_path, output_dir, executor, status_callback):
+        return str(transcript_file)
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **kw: None)
+    monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
+    monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
+
+    session = _spotify_video_session()
+    session["subtitle_languages"] = []
+
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    edited_texts = [call.args[0] for call in update.callback_query.edit_message_text.await_args_list]
+    assert "Pobieranie audio: 50/100" in edited_texts
+    assert "Pobieranie audio: 100/100" in edited_texts
+
+
+def test_transcribe_spotify_video_waits_for_pending_progress_edit_before_next_message(
+    monkeypatch, tmp_path
+):
+    """Same ordering guarantee Task 11 established for download_spotify_video
+    (see its identically-named test) must hold here too: a progress edit
+    still in flight when download_episode_media returns must finish before
+    the handler's own next status edit begins -- two concurrent
+    edit_message_text calls on the same message have no ordering
+    guarantee between their underlying HTTP requests."""
+
+    audio_file = tmp_path / "episode.m4a"
+    audio_file.write_bytes(b"fake-audio-bytes")
+    transcript_file = tmp_path / "episode_transcript.md"
+    transcript_file.write_text("# Test Episode\n\nZ Groq.\n", encoding="utf-8")
+
+    log = []
+
+    async def fake_edit_message_text(text, reply_markup=None, parse_mode=None):
+        log.append(f"start:{text}")
+        if text.startswith("Pobieranie audio:"):
+            # Simulate a slow Telegram round-trip for the progress edit
+            # specifically, so it is still in flight when the handler's
+            # own post-download code becomes ready to send its next edit.
+            for _ in range(50):
+                await asyncio.sleep(0)
+        log.append(f"finish:{text}")
+
+    async def fake_download_episode_media(*, episode, height, output_dir, executor, progress_cb=None, **kw):
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            if progress_cb is not None:
+                progress_cb(100, 100)
+
+        await loop.run_in_executor(None, worker)
+        return str(audio_file)
+
+    async def fake_run_transcription(*, source_path, output_dir, executor, status_callback):
+        return str(transcript_file)
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **kw: None)
+    monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
+    monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
+
+    session = _spotify_video_session()
+    session["subtitle_languages"] = []
+
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+    update.callback_query.edit_message_text = AsyncMock(side_effect=fake_edit_message_text)
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    assert "finish:Pobieranie audio: 100/100" in log
+    finish_progress_idx = log.index("finish:Pobieranie audio: 100/100")
+    next_message_start_idx = next(
+        i for i, entry in enumerate(log) if entry.startswith("start:Pobieranie zakończone")
+    )
+    assert finish_progress_idx < next_message_start_idx
 
 
 # --- progress throttling (Task 11) -----------------------------------------
