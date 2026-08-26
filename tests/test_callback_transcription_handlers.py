@@ -2,6 +2,7 @@
 
 import asyncio
 import os
+from unittest.mock import AsyncMock
 
 from bot import telegram_callbacks as tc
 from bot.handlers import spotify_callbacks as sc
@@ -677,3 +678,215 @@ def test_download_spotify_video_reports_progress_from_worker_thread(monkeypatch,
     edited_texts = [call.args[0] for call in update.callback_query.edit_message_text.await_args_list]
     assert "Pobieranie wideo: 50/100" in edited_texts
     assert "Pobieranie wideo: 100/100" in edited_texts
+
+
+# --- fix round 1 (Task 11 review) ------------------------------------------
+
+
+def test_download_spotify_video_progress_edit_failure_does_not_abort_download(monkeypatch, tmp_path):
+    """A progress edit that raises (e.g. RetryAfter/Forbidden, which
+    safe_edit_message does not swallow) must be caught inside the scheduled
+    coroutine itself. Un-caught, the exception is stored on the
+    fire-and-forget future/task and nobody ever retrieves it -- which does
+    not fail this download, but does leak an "exception was never
+    retrieved" warning at GC time with no correlation to the download that
+    caused it. Checking the captured future's .exception() directly is
+    the only way to observe that without depending on GC/logging timing."""
+
+    produced = tmp_path / "episode.mp4"
+    produced.write_bytes(b"X" * 1024)
+
+    captured_futures = []
+    real_run_coroutine_threadsafe = asyncio.run_coroutine_threadsafe
+
+    def spying_run_coroutine_threadsafe(coro, loop):
+        future = real_run_coroutine_threadsafe(coro, loop)
+        captured_futures.append(future)
+        return future
+
+    async def fake_edit_message_text(text, reply_markup=None, parse_mode=None):
+        if text.startswith("Pobieranie wideo: ") and "/" in text:
+            raise RuntimeError("flood control")
+
+    async def fake_download(*, progress_cb, **kwargs):
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            progress_cb(50, 100)
+
+        await loop.run_in_executor(None, worker)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return str(produced)
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
+    monkeypatch.setattr(sc.asyncio, "run_coroutine_threadsafe", spying_run_coroutine_threadsafe)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+    update.callback_query.edit_message_text = AsyncMock(side_effect=fake_edit_message_text)
+
+    # Must not raise -- the flood-control-style failure must be contained.
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    context.bot.send_video.assert_awaited_once()
+    final_text = update.callback_query.edit_message_text.await_args_list[-1].args[0]
+    assert final_text == "Gotowe: Test Episode"
+    assert len(captured_futures) == 1
+    # The scheduled progress-edit coroutine must have caught its own
+    # exception -- nothing should be left for asyncio's "Task exception
+    # was never retrieved" handler to complain about.
+    assert captured_futures[0].exception() is None
+
+
+def test_download_spotify_video_progress_bridge_error_does_not_abort_download(monkeypatch, tmp_path):
+    """A synchronous failure inside progress_cb's own body (e.g. the
+    reporter or the scheduling call itself raising) must be contained
+    there -- otherwise it propagates into download_track's caller and, in
+    the real pipeline, triggers the .part-file cleanup that discards a
+    partially downloaded episode."""
+
+    produced = tmp_path / "episode.mp4"
+    produced.write_bytes(b"X" * 1024)
+
+    async def fake_download(*, progress_cb, **kwargs):
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            progress_cb(50, 100)
+
+        await loop.run_in_executor(None, worker)
+        await asyncio.sleep(0)
+        return str(produced)
+
+    def broken_record_and_check(self, done, total):
+        raise RuntimeError("reporter exploded")
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc._ThrottledProgressReporter, "record_and_check", broken_record_and_check)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+
+    # Must not raise -- the download must still complete and be sent.
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    context.bot.send_video.assert_awaited_once()
+    final_text = update.callback_query.edit_message_text.await_args_list[-1].args[0]
+    assert final_text == "Gotowe: Test Episode"
+
+
+def test_download_spotify_video_stale_progress_edit_never_reaches_telegram_after_download_completes(
+    monkeypatch, tmp_path
+):
+    """The last progress_cb call and download_episode_media's return can
+    race (most visibly on the audio-only path, where nothing else happens
+    between them). A progress edit still pending at that point must never
+    reach Telegram once the download attempt has concluded, so it can't
+    land after -- and clobber -- the final status message.
+
+    Keeping the loop running for a few extra ticks after
+    download_spotify_video returns (rather than checking immediately, or
+    relying on asyncio.run()'s own teardown) is what makes this
+    meaningful: a scheduled-but-unfinished coroutine that merely "never
+    got a turn before shutdown" would look identical from the outside to
+    one that was genuinely suppressed, and production's event loop
+    (Application.run_polling) never tears down between callbacks either.
+    """
+
+    produced = tmp_path / "episode.mp4"
+    produced.write_bytes(b"X" * 1024)
+
+    async def fake_download(*, progress_cb, **kwargs):
+        # No await between the last progress report and returning: the
+        # scheduled progress-edit coroutine never gets a turn before
+        # download_spotify_video reaches its post-download code.
+        progress_cb(100, 100)
+        return str(produced)
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+
+    async def _run():
+        await sc.download_spotify_video(update, context, _spotify_video_session(), height=720)
+        for _ in range(5):
+            await asyncio.sleep(0)
+
+    asyncio.run(_run())
+
+    edited_texts = [call.args[0] for call in update.callback_query.edit_message_text.await_args_list]
+    assert "Pobieranie wideo: 100/100" not in edited_texts
+    assert edited_texts[-1] == "Gotowe: Test Episode"
+
+
+def test_download_spotify_video_progress_throttle_uses_real_interval(monkeypatch, tmp_path):
+    """Regression guard for the real (non-monkeypatched) throttle interval:
+    if the wiring ever passed 0 instead of _PROGRESS_EDIT_MIN_INTERVAL_SEC,
+    this test would start seeing two progress edits instead of one, since
+    two calls made back-to-back are microseconds apart on the real clock."""
+
+    produced = tmp_path / "episode.mp4"
+    produced.write_bytes(b"X" * 1024)
+
+    async def fake_download(*, progress_cb, **kwargs):
+        loop = asyncio.get_event_loop()
+
+        def worker():
+            progress_cb(10, 100)
+            progress_cb(20, 100)
+
+        await loop.run_in_executor(None, worker)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        return str(produced)
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    # _PROGRESS_EDIT_MIN_INTERVAL_SEC deliberately left at its real value.
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=720))
+
+    progress_edits = [
+        call.args[0]
+        for call in update.callback_query.edit_message_text.await_args_list
+        if call.args[0].startswith("Pobieranie wideo: ")
+    ]
+    assert progress_edits == ["Pobieranie wideo: 10/100"]
+
+
+def test_download_spotify_video_height_zero_uses_video_label_and_send(monkeypatch, tmp_path):
+    """height=0 is unreachable through the real parser (SPOTIFY_VIDEO_HEIGHTS
+    excludes it), but the label predicate must stay consistent with the
+    send-path predicate (both must use "is None", not truthiness) so a
+    future widening of accepted heights can't silently mislabel a video
+    download as audio."""
+
+    produced = tmp_path / "episode.mp4"
+    produced.write_bytes(b"X" * 1024)
+
+    async def fake_download(**kwargs):
+        assert kwargs["height"] == 0
+        return str(produced)
+
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+
+    update = _make_update("spv_video_720p", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.download_spotify_video(update, context, _spotify_video_session(), height=0))
+
+    context.bot.send_video.assert_awaited_once()
+    context.bot.send_audio.assert_not_awaited()
+    first_status = update.callback_query.edit_message_text.await_args_list[0].args[0]
+    assert first_status == "Pobieranie wideo ze Spotify..."

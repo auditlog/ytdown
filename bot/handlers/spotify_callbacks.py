@@ -186,7 +186,7 @@ async def download_spotify_video(
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
-    label = "wideo" if height else "audio"
+    label = "audio" if height is None else "wideo"
     await update_status(f"Pobieranie {label} ze Spotify...")
 
     # download_track invokes progress_cb from a worker thread (it runs
@@ -197,11 +197,47 @@ async def download_spotify_video(
     # touching the bot API directly from the worker thread.
     loop = asyncio.get_event_loop()
     reporter = _ThrottledProgressReporter(label, min_interval=_PROGRESS_EDIT_MIN_INTERVAL_SEC)
+    # Guards a scheduled-but-not-yet-run progress edit from landing after --
+    # and clobbering -- the status message that follows the download
+    # attempt (most visible on the audio-only path, where nothing else
+    # happens between the last progress_cb call and download_episode_media
+    # returning). This can't be done by cancelling the concurrent.futures.Future
+    # that run_coroutine_threadsafe returns: cancelling it before its inner
+    # Task exists routes through an extra call_soon_threadsafe hop (see
+    # asyncio.futures._chain_future), which lets the Task's first step --
+    # and hence the edit -- run anyway before that deferred cancellation
+    # ever takes effect. A plain flag checked at the very top of the
+    # scheduled coroutine has no such gap: it is flipped synchronously,
+    # strictly before that coroutine's first step can possibly run.
+    progress_active = {"value": True}
+
+    async def _push_progress(text):
+        if not progress_active["value"]:
+            return
+        try:
+            await update_status(text)
+        except Exception:
+            # A status edit must never disturb the download. This is most
+            # commonly RetryAfter/Forbidden -- neither is a NetworkError or
+            # TimedOut, so safe_edit_message doesn't swallow them -- and
+            # since this coroutine's result/exception is never retrieved by
+            # anyone (it's fire-and-forget), an uncaught raise here would
+            # otherwise only surface as an "exception was never retrieved"
+            # warning at garbage-collection time, correlated to nothing.
+            logging.debug("Spotify progress edit failed", exc_info=True)
 
     def progress_cb(done, total):
-        text = reporter.record_and_check(done, total)
-        if text is not None:
-            asyncio.run_coroutine_threadsafe(update_status(text), loop)
+        try:
+            text = reporter.record_and_check(done, total)
+            if text is not None:
+                asyncio.run_coroutine_threadsafe(_push_progress(text), loop)
+        except Exception:
+            # progress_cb runs synchronously on download_track's worker
+            # thread; an uncaught raise here propagates into its caller and
+            # (in the real pipeline) triggers the .part-file cleanup that
+            # discards a partially downloaded episode. A broken progress
+            # report must never be able to do that.
+            logging.debug("Spotify progress bridge failed", exc_info=True)
 
     downloaded_path = None
     try:
@@ -222,13 +258,20 @@ async def download_spotify_video(
             subtitle_languages=session_data.get("subtitle_languages", []),
         )
 
-        downloaded_path = await download_episode_media(
-            episode=episode,
-            height=height,
-            output_dir=chat_download_path,
-            executor=_executor,
-            progress_cb=progress_cb,
-        )
+        try:
+            downloaded_path = await download_episode_media(
+                episode=episode,
+                height=height,
+                output_dir=chat_download_path,
+                executor=_executor,
+                progress_cb=progress_cb,
+            )
+        finally:
+            # No progress edit scheduled from here on may ever reach the
+            # Telegram API, whether control proceeds to the success path
+            # below or to one of the except blocks further down (this
+            # finally runs before control reaches those too).
+            progress_active["value"] = False
 
         file_size_mb = os.path.getsize(downloaded_path) / (1024 * 1024)
         await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie...")
