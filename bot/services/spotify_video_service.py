@@ -16,6 +16,7 @@ from bot.downloader_validation import sanitize_filename
 from bot.services.transcription_service import save_transcript_markdown
 from bot.spotify import parse_spotify_episode_url
 from bot.spotify_video import (
+    SPOTIFY_VIDEO_HEIGHTS,
     Profile,
     SpotifyVideoError,
     build_track_urls,
@@ -177,7 +178,17 @@ def resolve_video_episode(
 
 
 def build_quality_options(episode: VideoEpisode) -> list[dict[str, Any]]:
-    """Describe the selectable video qualities with estimated sizes."""
+    """Describe the selectable video qualities with estimated sizes.
+
+    Only the heights the bot actually exposes are returned. A real manifest
+    also carries 426x240 and 320x180 H.264 profiles (design spec 3.4) that
+    the test fixture's original three profiles never exercised; offering them
+    produced buttons parse_spotify_video_callback rejects outright, so the
+    user got "Nieobsługiwany format" from a button the bot itself drew.
+    Filtering here -- against the single SPOTIFY_VIDEO_HEIGHTS tuple that
+    parser validates against -- is what keeps the keyboard and the parser
+    from disagreeing.
+    """
 
     return [
         {
@@ -186,6 +197,7 @@ def build_quality_options(episode: VideoEpisode) -> list[dict[str, Any]]:
             "size_mb": estimate_size_mb(profile, episode.duration_ms),
         }
         for profile in episode.profiles
+        if profile.height in SPOTIFY_VIDEO_HEIGHTS
     ]
 
 

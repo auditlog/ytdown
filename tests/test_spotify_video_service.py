@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from bot import spotify_video as sv
+from bot.spotify_video import SPOTIFY_VIDEO_HEIGHTS
 from bot.services import spotify_video_service as svs
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -76,7 +77,10 @@ def test_resolve_video_episode_builds_episode(monkeypatch):
         "https://open.spotify.com/episode/25NlRLSIHjtfU47zm4FGm4"
     )
     assert episode.title == "Testowy odcinek"
-    assert [p.height for p in episode.profiles] == [1080, 720, 480]
+    # list_profiles reports every H.264 rendition the manifest carries,
+    # including the 240p one the keyboard deliberately does not expose --
+    # the exclusion belongs to build_quality_options, not here.
+    assert [p.height for p in episode.profiles] == [1080, 720, 480, 240]
     assert episode.subtitle_languages == ["pl-pl"]
 
 
@@ -384,6 +388,35 @@ def test_build_quality_options_describes_profiles_with_estimated_sizes():
     # fixture, so its estimated size must not come out smaller.
     sizes = [opt["size_mb"] for opt in options]
     assert sizes == sorted(sizes, reverse=True)
+
+
+def test_build_quality_options_excludes_heights_the_parser_rejects():
+    """The real manifest carries 426x240 and 320x180 H.264 profiles (design
+    spec 3.4). Neither is exposed (spec 6.1), and parse_spotify_video_callback
+    rejects any height outside SPOTIFY_VIDEO_HEIGHTS -- so offering a button
+    for them would hand the user a button that answers "Nieobsluzony format".
+    A button that cannot work is never shown."""
+
+    manifest = _manifest()
+    profiles = sv.list_profiles(manifest)
+    # The fixture must actually carry the excluded profile, or this test
+    # passes for the wrong reason.
+    assert 240 in [p.height for p in profiles]
+
+    episode = svs.VideoEpisode(
+        episode_id="abc123",
+        title="Testowy odcinek",
+        show_name="Testowy podcast",
+        duration_ms=sv.manifest_duration_ms(manifest),
+        manifest=manifest,
+        profiles=profiles,
+        subtitle_languages=sv.subtitle_languages(manifest),
+    )
+
+    heights = [opt["height"] for opt in svs.build_quality_options(episode)]
+
+    assert 240 not in heights
+    assert set(heights) <= set(SPOTIFY_VIDEO_HEIGHTS)
 
 
 # --- transcript_from_subtitles (Task 12) ------------------------------------

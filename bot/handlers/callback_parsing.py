@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+# Video heights the UI offers; anything else is a stale or forged callback.
+# Imported rather than restated so the keyboard and this validator can
+# never disagree about which buttons exist -- see bot/spotify_video.py.
+from bot.spotify_video import SPOTIFY_VIDEO_HEIGHTS  # noqa: F401  (re-exported)
+
 
 def parse_download_callback(data):
     """Parses download-related callback data.
@@ -70,10 +75,6 @@ def parse_summary_option(option_data):
         return None
 
     return summary_option
-
-
-# Video heights the UI offers; anything else is a stale or forged callback.
-SPOTIFY_VIDEO_HEIGHTS = (1080, 720, 480, 320)
 
 
 def parse_spotify_video_callback(data):

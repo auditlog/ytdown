@@ -213,7 +213,10 @@ def _manifest() -> dict:
 
 def test_list_profiles_returns_only_h264_sorted_by_height():
     profiles = sv.list_profiles(_manifest())
-    assert [p.height for p in profiles] == [1080, 720, 480]
+    # Every H.264 rendition, including 240p -- which profile the *keyboard*
+    # offers is build_quality_options' decision (see
+    # tests/test_spotify_video_service.py), not this function's.
+    assert [p.height for p in profiles] == [1080, 720, 480, 240]
     assert all(p.codec.startswith("avc1") for p in profiles)
 
 

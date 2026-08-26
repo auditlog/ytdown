@@ -202,6 +202,16 @@ BITRATE_TO_AVERAGE_RATIO = 0.45
 _H264_CODEC_PREFIX = "avc1"
 _AAC_CODEC_PREFIX = "mp4a"
 
+# The video heights the bot exposes as buttons, highest first. Real manifests
+# also carry 426x240 and 320x180 H.264 profiles; both are useless for a video
+# podcast and only lengthen the keyboard, so they are deliberately not offered
+# (design spec 6.1). Owned here rather than in the UI or the parser because
+# both of those need it and this is the module they already sit above: the
+# service builds the keyboard options from it and
+# bot/handlers/callback_parsing.py validates incoming callbacks against it.
+# One tuple, two importers -- a second literal copy would drift.
+SPOTIFY_VIDEO_HEIGHTS = (1080, 720, 480, 320)
+
 
 @dataclass(frozen=True)
 class Profile:

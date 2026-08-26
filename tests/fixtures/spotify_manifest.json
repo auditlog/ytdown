@@ -11,6 +11,7 @@
         {"id": 2, "file_type": "mp4", "max_bitrate": 1419290, "mime_type": "video/mp4", "video_codec": "avc1.4d401f", "video_height": 480, "video_width": 854},
         {"id": 1, "file_type": "mp4", "max_bitrate": 2605250, "mime_type": "video/mp4", "video_codec": "avc1.4d4020", "video_height": 720, "video_width": 1280},
         {"id": 0, "file_type": "mp4", "max_bitrate": 4810372, "mime_type": "video/mp4", "video_codec": "avc1.4d402a", "video_height": 1080, "video_width": 1920},
+        {"id": 4, "file_type": "mp4", "max_bitrate": 479580, "mime_type": "video/mp4", "video_codec": "avc1.4d401e", "video_height": 240, "video_width": 426},
         {"id": 17, "file_type": "mp4", "max_bitrate": 2678294, "mime_type": "video/mp4", "video_codec": "vp9", "video_height": 720, "video_width": 1280}
       ],
       "encryption_infos": []
