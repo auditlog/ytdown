@@ -140,6 +140,19 @@ def resolve_video_episode(
 
     try:
         manifest = fetch_video_manifest(embed.manifest_id, embed.access_token)
+        # list_profiles / manifest_duration_ms / subtitle_languages all read
+        # from the same manifest and can raise the same class of error (see
+        # the SpotifyVideoError branch below), so they are built inside this
+        # try as well rather than after it.
+        video_episode = VideoEpisode(
+            episode_id=episode_id,
+            title=embed.title,
+            show_name=embed.show_name,
+            duration_ms=embed.duration_ms or manifest_duration_ms(manifest),
+            manifest=manifest,
+            profiles=list_profiles(manifest),
+            subtitle_languages=subtitle_languages(manifest),
+        )
     except requests.HTTPError as exc:
         status = exc.response.status_code if exc.response is not None else 0
         raise SpotifyVideoError(
@@ -149,21 +162,16 @@ def resolve_video_episode(
         raise SpotifyVideoError("api_changed") from exc
     except SpotifyVideoError as exc:
         # fetch_video_manifest raises SpotifyVideoError directly (not
-        # requests.HTTPError) when the v6 manifest endpoint 404s, i.e. the
-        # API shape changed. Normalize to the bare reason code for the same
-        # reason as the fetch_embed_data case above.
-        logging.error("Spotify manifest endpoint shape changed: %s", exc)
+        # requests.HTTPError) when the v6 manifest endpoint 404s. list_profiles,
+        # manifest_duration_ms and subtitle_languages all route through
+        # _manifest_content, which raises the same way when the manifest is
+        # missing a "contents" entry. Every one of these means the same
+        # thing -- Spotify changed the manifest shape -- so all are
+        # normalized to the bare reason code here.
+        logging.error("Spotify manifest shape changed: %s", exc)
         raise SpotifyVideoError("api_changed") from exc
 
-    return VideoEpisode(
-        episode_id=episode_id,
-        title=embed.title,
-        show_name=embed.show_name,
-        duration_ms=embed.duration_ms or manifest_duration_ms(manifest),
-        manifest=manifest,
-        profiles=list_profiles(manifest),
-        subtitle_languages=subtitle_languages(manifest),
-    )
+    return video_episode
 
 
 def build_quality_options(episode: VideoEpisode) -> list[dict[str, Any]]:
@@ -199,10 +207,23 @@ async def download_episode_media(
 
     loop = asyncio.get_event_loop()
     base_name = sanitize_filename(episode.title or "spotify_episode")
-    audio_profile_id = find_audio_profile_id(episode.manifest)
-
     audio_path = os.path.join(output_dir, f"{base_name}.audio.mp4")
-    audio_init, audio_segments = build_track_urls(episode.manifest, audio_profile_id)
+
+    try:
+        audio_profile_id = find_audio_profile_id(episode.manifest)
+        audio_init, audio_segments = build_track_urls(episode.manifest, audio_profile_id)
+    except SpotifyVideoError as exc:
+        # find_audio_profile_id / build_track_urls raise a bare
+        # SpotifyVideoError with a full sentence when the manifest is
+        # missing an expected field (no AAC profile, no base_urls, no
+        # segment_length) -- i.e. Spotify changed the manifest shape, the
+        # same "api_changed" scenario handled in resolve_video_episode.
+        # download_track and mux below are deliberately left outside this
+        # try: their own SpotifyVideoErrors (ffmpeg_missing, timeouts,
+        # segment-fetch failures) are a different category and must pass
+        # through unchanged.
+        logging.error("Spotify manifest shape changed during download: %s", exc)
+        raise SpotifyVideoError("api_changed") from exc
 
     if height is None:
         final_audio = os.path.join(output_dir, f"{base_name}.m4a")
@@ -220,7 +241,11 @@ async def download_episode_media(
         raise SpotifyVideoError("api_changed")
 
     video_path = os.path.join(output_dir, f"{base_name}.video.mp4")
-    video_init, video_segments = build_track_urls(episode.manifest, profile.id)
+    try:
+        video_init, video_segments = build_track_urls(episode.manifest, profile.id)
+    except SpotifyVideoError as exc:
+        logging.error("Spotify manifest shape changed during download: %s", exc)
+        raise SpotifyVideoError("api_changed") from exc
 
     try:
         await loop.run_in_executor(
@@ -237,7 +262,20 @@ async def download_episode_media(
             ),
         )
         out_path = os.path.join(output_dir, f"{base_name}.mp4")
-        await loop.run_in_executor(executor, lambda: mux(video_path, audio_path, out_path))
+        try:
+            await loop.run_in_executor(executor, lambda: mux(video_path, audio_path, out_path))
+        except BaseException:
+            # ffmpeg runs with -y and writes out_path incrementally, so a
+            # timeout or crash mid-mux can leave a truncated file behind.
+            # Same discipline as download_track's own failure path: remove
+            # the half-written artefact, and never let a failed removal
+            # mask the original SpotifyVideoError.
+            if os.path.exists(out_path):
+                try:
+                    os.remove(out_path)
+                except OSError:
+                    pass
+            raise
         return out_path
     finally:
         for temp_path in (video_path, audio_path):
