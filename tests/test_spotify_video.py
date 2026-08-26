@@ -66,3 +66,23 @@ def test_parse_embed_html_handles_audio_only_episode():
 def test_parse_embed_html_flags_drm_protected_video():
     html = _embed_html().replace('"requiresDRM":false', '"requiresDRM":true')
     assert sv.parse_embed_html(html).requires_drm is True
+
+
+def test_parse_embed_html_handles_null_settings():
+    """Regression test: null settings value should not raise AttributeError."""
+    html = _embed_html().replace('"settings":{"rtl":false,"session":{"accessToken":"FAKE_ACCESS_TOKEN","isAnonymous":false}}', '"settings":null')
+    # Should gracefully handle null settings and return partial data without raising AttributeError
+    data = sv.parse_embed_html(html)
+    assert data is not None
+    assert data.access_token == ""  # Empty when settings is null
+    assert data.title == "Testowy odcinek"  # Other fields still extracted
+
+
+def test_parse_embed_html_handles_null_default_audio_file_object():
+    """Regression test: null defaultAudioFileObject should not raise AttributeError."""
+    html = _embed_html().replace('"defaultAudioFileObject":{"format":"MP4_128_CBCS","video":[{"manifestId":"cdc59c43c0e85cefb87ad38ee0439f11","requiresDRM":false}]}', '"defaultAudioFileObject":null')
+    # Should gracefully handle null defaultAudioFileObject and return partial data without raising AttributeError
+    data = sv.parse_embed_html(html)
+    assert data is not None
+    assert data.manifest_id is None  # No video data
+    assert data.title == "Testowy odcinek"  # Other fields still extracted

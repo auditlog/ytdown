@@ -105,10 +105,10 @@ def parse_embed_html(html: str) -> EmbedData | None:
         return None
 
     access_token = (
-        state.get("settings", {}).get("session", {}).get("accessToken", "")
+        (state.get("settings") or {}).get("session", {}).get("accessToken", "")
     )
     video_entries = (
-        state["data"].get("defaultAudioFileObject", {}).get("video") or []
+        ((state.get("data") or {}).get("defaultAudioFileObject") or {}).get("video") or []
     )
     first_video = video_entries[0] if video_entries else {}
 
