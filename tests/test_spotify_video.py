@@ -140,3 +140,33 @@ def test_parse_embed_html_handles_null_video_array_element():
     assert data is not None
     assert data.manifest_id is None  # No valid video data
     assert data.title == "Testowy odcinek"  # Other fields still extracted
+
+
+def test_parse_embed_html_returns_none_when_data_key_missing():
+    """Structural test: missing 'data' key should return None, not partial data.
+
+    This signals a fundamental change in Spotify's page shape, which should be
+    handled as 'API changed' not 'episode has no video'.
+    """
+    html = (
+        _embed_html().replace(
+            '"data":{"entity":',
+            '"removed_data":{"entity":',
+        )
+    )
+    assert sv.parse_embed_html(html) is None
+
+
+def test_parse_embed_html_returns_none_when_data_is_null():
+    """Structural test: null 'data' value should return None, not partial data.
+
+    This signals a fundamental change in Spotify's page shape, which should be
+    handled as 'API changed' not 'episode has no video'.
+    """
+    html = (
+        _embed_html().replace(
+            '"data":{"entity":{"type":"episode",',
+            '"data":null,"removed_entity":{"type":"episode",',
+        )
+    )
+    assert sv.parse_embed_html(html) is None

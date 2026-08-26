@@ -119,13 +119,20 @@ def parse_embed_html(html: str) -> EmbedData | None:
     except (ValueError, KeyError, TypeError):
         return None
 
+    # Check for structural integrity: state must have a "data" dict.
+    # This is a required element; if it's missing, null, or wrong type, the blob
+    # is unrecognizable and we return None to signal "API changed", not "no data".
+    data = state.get("data")
+    if not isinstance(data, dict):
+        return None
+
     # Use _dig to safely traverse nested dicts, handling null values at every level.
-    entity = _dig(state, "data", "entity", default={})
+    entity = _dig(data, "entity", default={})
     if not isinstance(entity, dict):
         entity = {}
 
     access_token = _dig(state, "settings", "session", "accessToken", default="")
-    video_entries = _dig(state, "data", "defaultAudioFileObject", "video", default=[])
+    video_entries = _dig(data, "defaultAudioFileObject", "video", default=[])
     if not isinstance(video_entries, list):
         video_entries = []
 
