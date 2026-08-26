@@ -18,6 +18,7 @@ import logging
 import math
 import os
 import re
+import subprocess
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -461,8 +462,67 @@ def download_track(
                 pool.shutdown(wait=True, cancel_futures=True)
     except BaseException:
         if os.path.exists(part_path):
-            os.remove(part_path)
+            try:
+                os.remove(part_path)
+            except OSError:
+                pass
         raise
 
     os.replace(part_path, dest_path)
     return dest_path
+
+
+MUX_TIMEOUT_SECONDS = 600
+
+
+def subtitle_languages(manifest: dict) -> list[str]:
+    """Return subtitle language codes the manifest offers."""
+
+    return list(manifest.get("subtitle_language_codes") or [])
+
+
+def fetch_subtitles(manifest: dict, language_code: str, dest_path: str) -> str | None:
+    """Download one WebVTT subtitle track. Returns None when unavailable."""
+
+    if language_code not in subtitle_languages(manifest):
+        return None
+
+    base_urls = manifest.get("subtitle_base_urls") or []
+    template = manifest.get("subtitle_template")
+    if not base_urls or not template:
+        return None
+
+    candidates = _expand_template(template, base_urls, language_code=language_code)
+    try:
+        payload = _fetch_with_failover(candidates)
+    except SpotifyVideoError as exc:
+        logging.warning("Spotify subtitle download failed: %s", exc)
+        return None
+
+    with open(dest_path, "wb") as file_obj:
+        file_obj.write(payload)
+    return dest_path
+
+
+def mux(video_path: str, audio_path: str, out_path: str) -> str:
+    """Combine the video and audio tracks without re-encoding."""
+
+    try:
+        result = subprocess.run(
+            [
+                "ffmpeg", "-v", "error",
+                "-i", video_path,
+                "-i", audio_path,
+                "-c", "copy",
+                "-y", out_path,
+            ],
+            capture_output=True,
+            timeout=MUX_TIMEOUT_SECONDS,
+        )
+    except FileNotFoundError as exc:
+        raise SpotifyVideoError("ffmpeg_missing") from exc
+
+    if result.returncode != 0:
+        detail = (result.stderr or b"").decode("utf-8", "replace")[:200]
+        raise SpotifyVideoError(f"ffmpeg mux failed: {detail}")
+    return out_path

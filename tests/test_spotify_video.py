@@ -514,3 +514,69 @@ def test_download_track_error_message_includes_failing_url(tmp_path, monkeypatch
         sv.download_track(
             ["https://cdn/init"], [["https://cdn/0"]], str(tmp_path / "v.mp4")
         )
+
+
+def test_subtitle_languages_reads_manifest():
+    assert sv.subtitle_languages(_manifest()) == ["pl-pl"]
+
+
+def test_subtitle_languages_empty_when_absent():
+    manifest = _manifest()
+    del manifest["subtitle_language_codes"]
+    assert sv.subtitle_languages(manifest) == []
+
+
+def test_fetch_subtitles_writes_vtt(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        sv, "_fetch_bytes",
+        lambda url, timeout=30: b"WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nCzesc\n",
+    )
+    dest = tmp_path / "subs.vtt"
+    result = sv.fetch_subtitles(_manifest(), "pl-pl", str(dest))
+    assert result == str(dest)
+    assert dest.read_text(encoding="utf-8").startswith("WEBVTT")
+
+
+def test_fetch_subtitles_returns_none_for_unknown_language(tmp_path):
+    assert sv.fetch_subtitles(_manifest(), "de-de", str(tmp_path / "s.vtt")) is None
+
+
+def test_mux_invokes_ffmpeg_with_stream_copy(tmp_path, monkeypatch):
+    calls = {}
+
+    class _Result:
+        returncode = 0
+        stderr = b""
+
+    def fake_run(cmd, **kwargs):
+        calls["cmd"] = cmd
+        (tmp_path / "out.mp4").write_bytes(b"MUXED")
+        return _Result()
+
+    monkeypatch.setattr(sv.subprocess, "run", fake_run)
+    out = sv.mux(str(tmp_path / "v.mp4"), str(tmp_path / "a.mp4"), str(tmp_path / "out.mp4"))
+    assert out == str(tmp_path / "out.mp4")
+    # Verify -c copy is present, ensuring stream copy (no re-encoding).
+    # Check that "copy" appears after "-c" in the command list.
+    c_index = calls["cmd"].index("-c")
+    assert calls["cmd"][c_index + 1] == "copy"
+
+
+def test_mux_raises_ffmpeg_missing(tmp_path, monkeypatch):
+    def raise_missing(cmd, **kwargs):
+        raise FileNotFoundError("ffmpeg")
+
+    monkeypatch.setattr(sv.subprocess, "run", raise_missing)
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        sv.mux(str(tmp_path / "v.mp4"), str(tmp_path / "a.mp4"), str(tmp_path / "o.mp4"))
+    assert str(exc.value) == "ffmpeg_missing"
+
+
+def test_mux_raises_when_ffmpeg_fails(tmp_path, monkeypatch):
+    class _Result:
+        returncode = 1
+        stderr = b"boom"
+
+    monkeypatch.setattr(sv.subprocess, "run", lambda cmd, **kwargs: _Result())
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.mux(str(tmp_path / "v.mp4"), str(tmp_path / "a.mp4"), str(tmp_path / "o.mp4"))
