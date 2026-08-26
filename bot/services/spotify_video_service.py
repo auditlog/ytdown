@@ -11,7 +11,9 @@ from typing import Any
 import requests
 
 from bot.config import SPOTIFY_COOKIES_FILE
+from bot.downloader_subtitles import parse_subtitle_file
 from bot.downloader_validation import sanitize_filename
+from bot.services.transcription_service import save_transcript_markdown
 from bot.spotify import parse_spotify_episode_url
 from bot.spotify_video import (
     Profile,
@@ -20,6 +22,7 @@ from bot.spotify_video import (
     download_track,
     estimate_size_mb,
     fetch_embed_data,
+    fetch_subtitles,
     fetch_video_manifest,
     find_audio_profile_id,
     list_profiles,
@@ -283,3 +286,45 @@ async def download_episode_media(
                     os.remove(temp_path)
                 except OSError:
                     pass
+
+
+def transcript_from_subtitles(
+    *, episode: VideoEpisode, output_dir: str, sanitized_title: str
+) -> str | None:
+    """Turn Spotify's own WebVTT subtitles into a transcript artifact.
+
+    Returns the markdown path, or None when the episode ships no subtitles
+    at all, or Spotify fails to serve the one it advertised -- callers then
+    fall back to downloading the native audio track and running it through
+    Groq. Using subtitles when they exist skips that download entirely:
+    instant, free, and not bound by audio length limits.
+    """
+
+    if not episode.subtitle_languages:
+        return None
+
+    language_code = episode.subtitle_languages[0]
+    vtt_path = os.path.join(output_dir, f"{sanitized_title}.{language_code}.vtt")
+
+    try:
+        if fetch_subtitles(episode.manifest, language_code, vtt_path) is None:
+            return None
+        transcript_text = parse_subtitle_file(vtt_path)
+    finally:
+        # The .vtt is scratch -- only the finished markdown transcript
+        # should remain in output_dir once this returns.
+        if os.path.exists(vtt_path):
+            try:
+                os.remove(vtt_path)
+            except OSError:
+                pass
+
+    if not transcript_text.strip():
+        return None
+
+    return save_transcript_markdown(
+        title=episode.title,
+        transcript_text=transcript_text,
+        sanitized_title=sanitized_title,
+        output_dir=output_dir,
+    )

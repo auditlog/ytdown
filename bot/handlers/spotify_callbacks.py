@@ -13,6 +13,7 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 from bot.config import DOWNLOAD_PATH, get_runtime_value
+from bot.downloader_validation import sanitize_filename
 from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_message
 from bot.handlers.transcript_prompt_handlers import offer_custom_transcript_prompt
 from bot.mtproto import (
@@ -27,6 +28,7 @@ from bot.services.spotify_video_service import (
     VideoEpisode,
     download_episode_media,
     get_video_error_message,
+    transcript_from_subtitles,
 )
 from bot.services.transcription_service import (
     cleanup_transcription_artifacts,
@@ -210,15 +212,19 @@ async def download_spotify_video(
     # guarantees that deferred Task's first step runs before this
     # coroutine can resume and flip any such flag -- confirmed with a
     # standalone repro of the real cross-thread, run_in_executor call
-    # shape). Nor does an asyncio.Lock shared between the two sides: an
-    # uncontended Lock.acquire() returns immediately without ever
-    # yielding to the loop, so a not-yet-started _push_progress task would
-    # never get a chance to register as a waiter before the "drain"
-    # acquisition already succeeded -- the same failure mode, relocated.
-    # Directly awaiting each concrete concurrent.futures.Future that
+    # shape). A shared asyncio.Lock would work too, for the same FIFO
+    # reason: by the time this coroutine resumes to acquire it, every
+    # progress task scheduled so far has either already acquired it or
+    # queued as a waiter ahead of us, so the acquire here is never truly
+    # uncontended in this call shape. Concrete futures were chosen instead
+    # because they say directly what is actually needed -- wait for
+    # exactly the N edits that were dispatched -- without inventing an
+    # acquire/release protocol around each one to get there. Directly
+    # awaiting each concrete concurrent.futures.Future that
     # run_coroutine_threadsafe hands back (via asyncio.wrap_future) has
-    # none of these gaps, because that Future object exists synchronously
-    # the moment it's returned, regardless of whether its Task has started.
+    # none of the plain-flag's gaps, because that Future object exists
+    # synchronously the moment it's returned, regardless of whether its
+    # Task has started.
     pending_progress_futures: list["concurrent.futures.Future"] = []
 
     async def _push_progress(text):
@@ -298,8 +304,17 @@ async def download_spotify_video(
             # outstanding.
             if pending_progress_futures:
                 try:
+                    # return_exceptions=True: without it, gather cancels
+                    # every other still-pending future the moment any one
+                    # of them raises, so this drain would stop short of
+                    # actually waiting for all of them -- exactly the
+                    # ordering guarantee this block exists to provide. It
+                    # also stops a bare CancelledError from a cancelled
+                    # future from escaping past the except below and
+                    # replacing the download's own exception.
                     await asyncio.gather(
-                        *(asyncio.wrap_future(f, loop=loop) for f in pending_progress_futures)
+                        *(asyncio.wrap_future(f, loop=loop) for f in pending_progress_futures),
+                        return_exceptions=True,
                     )
                 except Exception:
                     # _push_progress already contains its own failures, so
@@ -370,6 +385,160 @@ async def download_spotify_video(
         if downloaded_path and os.path.exists(downloaded_path):
             try:
                 os.remove(downloaded_path)
+            except OSError:
+                pass
+
+
+async def transcribe_spotify_video(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    session_data: dict,
+    *,
+    summary: bool = False,
+    summary_type: int | None = None,
+):
+    """Transcribe a Spotify episode resolved to a native video manifest.
+
+    Prefers Spotify's own WebVTT subtitles when the episode ships them --
+    that skips downloading any audio at all. Falls back to downloading the
+    native AAC audio track and running it through Groq, the same pipeline
+    the legacy (``spotify_resolved``) audio transcription path uses, when
+    the episode has no subtitles or Spotify fails to serve the one it
+    advertised.
+    """
+
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    title = session_data.get("title", "Spotify episode")
+
+    async def update_status(text):
+        await safe_edit_message(query, text)
+
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    manifest = session_data["manifest"]
+    episode = VideoEpisode(
+        episode_id=session_data["episode_id"],
+        title=title,
+        show_name=session_data.get("show_name", ""),
+        duration_ms=int(session_data.get("duration_ms") or 0),
+        manifest=manifest,
+        profiles=list_profiles(manifest),
+        subtitle_languages=session_data.get("subtitle_languages", []),
+    )
+    sanitized_title = sanitize_filename(title)
+
+    downloaded_file_path = None
+    transcript_path = None
+
+    try:
+        if episode.subtitle_languages:
+            await update_status("Pobieranie napisów ze Spotify...")
+            transcript_path = await asyncio.get_event_loop().run_in_executor(
+                _executor,
+                lambda: transcript_from_subtitles(
+                    episode=episode,
+                    output_dir=chat_download_path,
+                    sanitized_title=sanitized_title,
+                ),
+            )
+
+        if transcript_path is None:
+            # No subtitles on this episode, or Spotify failed to serve the
+            # one it advertised -- fall back to downloading the native AAC
+            # audio track and transcribing it with Groq.
+            if not get_runtime_value("GROQ_API_KEY", ""):
+                await update_status(
+                    "Funkcja niedostępna — brak klucza API do transkrypcji.\nSkontaktuj się z administratorem."
+                )
+                return
+
+            await update_status("Pobieranie audio ze Spotify...")
+            downloaded_file_path = await download_episode_media(
+                episode=episode,
+                height=None,
+                output_dir=chat_download_path,
+                executor=_executor,
+            )
+            file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
+            await update_status(
+                f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\n"
+                "Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut."
+            )
+            transcript_path = await run_transcription_with_progress(
+                source_path=downloaded_file_path,
+                output_dir=chat_download_path,
+                executor=_executor,
+                status_callback=update_status,
+            )
+            if not transcript_path or not os.path.exists(transcript_path):
+                await update_status("Wystąpił błąd podczas transkrypcji.")
+                return
+
+        transcript_result = load_transcript_result(transcript_path)
+        transcript_text = transcript_result.display_text
+
+        if summary and summary_type:
+            await _maybe_generate_summary(
+                context, chat_id, title, transcript_text, sanitized_title,
+                chat_download_path, update_status, summary_type=summary_type,
+            )
+
+        await update_status("Wysyłanie pliku z transkrypcją...")
+        with open(transcript_path, "rb") as file_obj:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=file_obj,
+                filename=os.path.basename(transcript_path),
+                caption=f"Transkrypcja: {title}"[:200],
+                read_timeout=60,
+                write_timeout=60,
+            )
+
+        record_size_mb = (
+            os.path.getsize(downloaded_file_path) / (1024 * 1024)
+            if downloaded_file_path
+            else os.path.getsize(transcript_path) / (1024 * 1024)
+        )
+        record_download_for(
+            context,
+            chat_id,
+            title,
+            _get_session_value(context, chat_id, "current_url", user_urls) or "",
+            "spotify_transcribe",
+            record_size_mb,
+        )
+        _clear_session_context_value(context, chat_id, "spotify_video", legacy_key="spotify_video")
+
+        if downloaded_file_path:
+            cleanup_transcription_artifacts(
+                source_media_path=downloaded_file_path,
+                output_dir=chat_download_path,
+                transcript_prefix=sanitized_title,
+            )
+            downloaded_file_path = None
+
+        await offer_custom_transcript_prompt(
+            context,
+            chat_id=chat_id,
+            requester_id=update.effective_user.id,
+            transcript_path=transcript_path,
+            title=title,
+        )
+        await update_status(f"Gotowe: {title}")
+
+    except SpotifyVideoCancelled:
+        await update_status("Pobieranie anulowane.")
+    except SpotifyVideoError as exc:
+        await update_status(get_video_error_message(str(exc)))
+    except Exception as exc:
+        logging.error("Error transcribing Spotify video episode: %s", exc)
+        await update_status(f"Błąd pobierania: {str(exc)[:200]}")
+    finally:
+        if downloaded_file_path and os.path.exists(downloaded_file_path):
+            try:
+                os.remove(downloaded_file_path)
             except OSError:
                 pass
 

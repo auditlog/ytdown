@@ -386,6 +386,101 @@ def test_build_quality_options_describes_profiles_with_estimated_sizes():
     assert sizes == sorted(sizes, reverse=True)
 
 
+# --- transcript_from_subtitles (Task 12) ------------------------------------
+
+
+def test_transcript_from_subtitles_produces_markdown(monkeypatch, tmp_path):
+    episode = svs.VideoEpisode(
+        episode_id="abc",
+        title="Odcinek",
+        show_name="Podcast",
+        duration_ms=32000,
+        manifest=_manifest(),
+        profiles=[],
+        subtitle_languages=["pl-pl"],
+    )
+
+    def fake_fetch(manifest, language_code, dest_path):
+        Path(dest_path).write_text(
+            "WEBVTT\n\n00:00:00.350 --> 00:00:03.950\nPierwsza linia\n\n"
+            "00:00:03.950 --> 00:00:08.710\nDruga linia\n",
+            encoding="utf-8",
+        )
+        return dest_path
+
+    monkeypatch.setattr(svs, "fetch_subtitles", fake_fetch)
+
+    path = svs.transcript_from_subtitles(
+        episode=episode, output_dir=str(tmp_path), sanitized_title="odcinek"
+    )
+    content = Path(path).read_text(encoding="utf-8")
+    assert "Pierwsza linia" in content
+    assert "Druga linia" in content
+    assert "-->" not in content, "timestamps must be stripped"
+    # The intermediate .vtt scratch file must not survive delivery -- only
+    # the finished markdown transcript should remain in output_dir.
+    leftover_vtt = list(tmp_path.glob("*.vtt"))
+    assert leftover_vtt == []
+
+
+def test_transcript_from_subtitles_returns_none_without_subtitles(tmp_path):
+    def must_not_be_reached(manifest, language_code, dest_path):
+        # An episode advertising no subtitle languages must never attempt a
+        # fetch at all -- proves the guard clause, not just the outcome.
+        raise AssertionError("fetch_subtitles must not be reached without subtitle_languages")
+
+    episode = svs.VideoEpisode(
+        episode_id="abc", title="Odcinek", show_name="Podcast",
+        duration_ms=32000, manifest={}, profiles=[], subtitle_languages=[],
+    )
+    assert svs.transcript_from_subtitles(
+        episode=episode, output_dir=str(tmp_path), sanitized_title="odcinek"
+    ) is None
+
+
+def test_transcript_from_subtitles_returns_none_when_fetch_unavailable(monkeypatch, tmp_path):
+    """subtitle_languages can be non-empty while Spotify still fails to serve
+    the actual track (stale manifest, expired CDN URL, transient failure).
+    fetch_subtitles already returns None rather than raising for this --
+    transcript_from_subtitles must propagate that as None too, so its
+    caller can fall back to the Groq audio pipeline instead of crashing."""
+
+    episode = svs.VideoEpisode(
+        episode_id="abc", title="Odcinek", show_name="Podcast",
+        duration_ms=32000, manifest=_manifest(), profiles=[],
+        subtitle_languages=["pl-pl"],
+    )
+
+    monkeypatch.setattr(svs, "fetch_subtitles", lambda manifest, language_code, dest_path: None)
+
+    result = svs.transcript_from_subtitles(
+        episode=episode, output_dir=str(tmp_path), sanitized_title="odcinek"
+    )
+    assert result is None
+    # No markdown artifact must be left behind when there is no transcript.
+    assert list(tmp_path.glob("*.md")) == []
+
+
+def test_transcript_from_subtitles_uses_first_subtitle_language(monkeypatch, tmp_path):
+    captured = {}
+
+    def fake_fetch(manifest, language_code, dest_path):
+        captured["language_code"] = language_code
+        Path(dest_path).write_text("WEBVTT\n\n00:00:00.000 --> 00:00:01.000\nHello\n", encoding="utf-8")
+        return dest_path
+
+    monkeypatch.setattr(svs, "fetch_subtitles", fake_fetch)
+
+    episode = svs.VideoEpisode(
+        episode_id="abc", title="Odcinek", show_name="Podcast",
+        duration_ms=32000, manifest=_manifest(), profiles=[],
+        subtitle_languages=["pl-pl", "en"],
+    )
+    svs.transcript_from_subtitles(episode=episode, output_dir=str(tmp_path), sanitized_title="odcinek")
+
+    assert captured["language_code"] == "pl-pl"
+
+
 def test_download_episode_media_unknown_height_raises(tmp_path):
     manifest = _manifest()
     episode = svs.VideoEpisode(

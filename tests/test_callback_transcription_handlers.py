@@ -297,6 +297,117 @@ def test_handle_callback_spotify_expired_session():
     )
 
 
+# --- Spotify transcription routing (Task 12) --------------------------------
+#
+# transcribe / summary_option_* must prefer a native spotify_video session
+# (subtitles or, failing that, native audio + Groq) over the legacy
+# spotify_resolved fallback, and only fall through to the expired-session
+# message when neither survived. Each of the four cases below asserts not
+# just which handler ran, but that the others did NOT -- a routing bug that
+# calls the wrong handler in addition to the right one would otherwise slip
+# through unnoticed.
+
+
+def test_handle_callback_transcribe_routes_to_video_session_over_resolved(monkeypatch):
+    """A spotify_video session must win even when a stale spotify_resolved
+    fallback is also still sitting in the session -- proves priority, not
+    just presence."""
+
+    tc.user_urls[123] = "https://open.spotify.com/episode/abc123"
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+    context.user_data["platform"] = "spotify"
+    context.user_data["spotify_video"] = _spotify_video_session()
+    context.user_data["spotify_resolved"] = {"source": "itunes", "title": "Stale"}
+
+    called = {}
+
+    async def fake_transcribe_video(update_arg, context_arg, session_data, *, summary, summary_type):
+        called["session_data"] = session_data
+        called["summary"] = summary
+        called["summary_type"] = summary_type
+
+    async def must_not_be_reached(*a, **kw):
+        raise AssertionError("legacy download_spotify_resolved must not run when spotify_video is present")
+
+    monkeypatch.setattr(tc, "transcribe_spotify_video", fake_transcribe_video)
+    monkeypatch.setattr(tc, "download_spotify_resolved", must_not_be_reached)
+    asyncio.run(tc.handle_callback(update, context))
+
+    assert called["session_data"]["episode_id"] == "abc123"
+    assert called["summary"] is False
+    assert called["summary_type"] is None
+
+
+def test_handle_callback_summary_option_routes_to_video_session(monkeypatch):
+    tc.user_urls[123] = "https://open.spotify.com/episode/abc123"
+    update = _make_update("summary_option_3", chat_id=123)
+    context = _make_context()
+    context.user_data["platform"] = "spotify"
+    context.user_data["spotify_video"] = _spotify_video_session()
+
+    called = {}
+
+    async def fake_transcribe_video(update_arg, context_arg, session_data, *, summary, summary_type):
+        called["summary"] = summary
+        called["summary_type"] = summary_type
+
+    async def must_not_be_reached(*a, **kw):
+        raise AssertionError("legacy download_spotify_resolved must not run when spotify_video is present")
+
+    monkeypatch.setattr(tc, "transcribe_spotify_video", fake_transcribe_video)
+    monkeypatch.setattr(tc, "download_spotify_resolved", must_not_be_reached)
+    asyncio.run(tc.handle_callback(update, context))
+
+    assert called["summary"] is True
+    assert called["summary_type"] == 3
+
+
+def test_handle_callback_transcribe_falls_back_to_resolved_without_video_session(monkeypatch):
+    """No spotify_video session at all -- must still use the legacy
+    spotify_resolved path, and must not touch the new video handler."""
+
+    tc.user_urls[123] = "https://open.spotify.com/episode/abc123"
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+    context.user_data["platform"] = "spotify"
+    context.user_data["spotify_resolved"] = {"source": "itunes", "title": "Test Episode"}
+
+    called = {}
+
+    async def fake_download_spotify(update_arg, context_arg, resolved, fmt, transcribe=False, **kw):
+        called["resolved"] = resolved
+        called["transcribe"] = transcribe
+
+    async def must_not_be_reached(*a, **kw):
+        raise AssertionError("transcribe_spotify_video must not run without a spotify_video session")
+
+    monkeypatch.setattr(tc, "download_spotify_resolved", fake_download_spotify)
+    monkeypatch.setattr(tc, "transcribe_spotify_video", must_not_be_reached)
+    asyncio.run(tc.handle_callback(update, context))
+
+    assert called["transcribe"] is True
+    assert called["resolved"]["source"] == "itunes"
+
+
+def test_handle_callback_transcribe_expired_without_video_or_resolved(monkeypatch):
+    tc.user_urls[123] = "https://open.spotify.com/episode/abc123"
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+    context.user_data["platform"] = "spotify"
+
+    async def must_not_be_reached(*a, **kw):
+        raise AssertionError("neither handler should run once both sessions are gone")
+
+    monkeypatch.setattr(tc, "download_spotify_resolved", must_not_be_reached)
+    monkeypatch.setattr(tc, "transcribe_spotify_video", must_not_be_reached)
+    asyncio.run(tc.handle_callback(update, context))
+
+    update.callback_query.edit_message_text.assert_awaited_with(
+        "Sesja Spotify wygasła. Wyślij link ponownie."
+    )
+
+
 # --- spv_ routing (Task 11) ------------------------------------------------
 
 
@@ -606,6 +717,173 @@ def test_download_spotify_video_reports_mtproto_send_failure(monkeypatch, tmp_pa
 
     text = update.callback_query.edit_message_text.await_args.args[0]
     assert text == "Wysyłanie pliku przez MTProto nie powiodło się."
+
+
+# --- transcribe_spotify_video (Task 12) -------------------------------------
+
+
+def test_transcribe_spotify_video_uses_subtitles_without_downloading_audio(monkeypatch, tmp_path):
+    """When the episode ships subtitles, no audio may be downloaded and Groq
+    must never run -- the whole point of this path is skipping both."""
+
+    transcript_file = tmp_path / "transcript.md"
+    transcript_file.write_text("# Test Episode\n\nPierwsza linia.\n", encoding="utf-8")
+
+    def fake_transcript_from_subtitles(*, episode, output_dir, sanitized_title):
+        return str(transcript_file)
+
+    async def must_not_download(*a, **kw):
+        raise AssertionError("download_episode_media must not run when subtitles are used")
+
+    async def must_not_transcribe(*a, **kw):
+        raise AssertionError("run_transcription_with_progress (Groq) must not run when subtitles are used")
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", fake_transcript_from_subtitles)
+    monkeypatch.setattr(sc, "download_episode_media", must_not_download)
+    monkeypatch.setattr(sc, "run_transcription_with_progress", must_not_transcribe)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+
+    session = _spotify_video_session()
+    session["subtitle_languages"] = ["pl-pl"]
+
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    context.bot.send_document.assert_awaited_once()
+    sent_kwargs = context.bot.send_document.await_args.kwargs
+    assert sent_kwargs["filename"] == "transcript.md"
+    final_text = update.callback_query.edit_message_text.await_args_list[-1].args[0]
+    assert final_text == "Gotowe: Test Episode"
+
+
+def test_transcribe_spotify_video_falls_back_to_audio_when_no_subtitles(monkeypatch, tmp_path):
+    """No subtitle languages at all -- transcript_from_subtitles must not
+    even be attempted, and the native audio + Groq pipeline must run."""
+
+    audio_file = tmp_path / "episode.m4a"
+    audio_file.write_bytes(b"fake-audio-bytes")
+    transcript_file = tmp_path / "episode_transcript.md"
+    transcript_file.write_text("# Test Episode\n\nZ Groq.\n", encoding="utf-8")
+
+    async def must_not_use_subtitles(*a, **kw):
+        raise AssertionError("transcript_from_subtitles must not run without subtitle_languages")
+
+    async def fake_download_episode_media(*, episode, height, output_dir, executor, **kw):
+        assert height is None
+        return str(audio_file)
+
+    calls = {}
+
+    async def fake_run_transcription(*, source_path, output_dir, executor, status_callback):
+        calls["source_path"] = source_path
+        return str(transcript_file)
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", must_not_use_subtitles)
+    monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
+    monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+
+    session = _spotify_video_session()
+    session["subtitle_languages"] = []
+
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    assert calls["source_path"] == str(audio_file)
+    context.bot.send_document.assert_awaited_once()
+    assert not audio_file.exists(), "downloaded audio must be cleaned up after delivery"
+
+
+def test_transcribe_spotify_video_falls_back_when_subtitle_fetch_fails(monkeypatch, tmp_path):
+    """subtitle_languages claims a track exists, but fetching it fails
+    (returns None, per its documented contract) -- must fall back to the
+    audio + Groq pipeline rather than erroring out."""
+
+    audio_file = tmp_path / "episode.m4a"
+    audio_file.write_bytes(b"fake-audio-bytes")
+    transcript_file = tmp_path / "episode_transcript.md"
+    transcript_file.write_text("# Test Episode\n\nZ Groq.\n", encoding="utf-8")
+
+    download_called = {}
+
+    def fake_transcript_from_subtitles(*, episode, output_dir, sanitized_title):
+        return None
+
+    async def fake_download_episode_media(*, episode, height, output_dir, executor, **kw):
+        download_called["invoked"] = True
+        assert height is None
+        return str(audio_file)
+
+    async def fake_run_transcription(*, source_path, output_dir, executor, status_callback):
+        return str(transcript_file)
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", fake_transcript_from_subtitles)
+    monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
+    monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+
+    session = _spotify_video_session()
+    session["subtitle_languages"] = ["pl-pl"]
+
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    assert download_called.get("invoked") is True
+    context.bot.send_document.assert_awaited_once()
+
+
+def test_transcribe_spotify_video_reports_missing_groq_key_without_downloading(monkeypatch):
+    async def must_not_download(*a, **kw):
+        raise AssertionError("must not download audio before confirming a Groq key is configured")
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **kw: None)
+    monkeypatch.setattr(sc, "download_episode_media", must_not_download)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "" if key == "GROQ_API_KEY" else default)
+
+    session = _spotify_video_session()
+    session["subtitle_languages"] = []
+
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert "brak klucza api" in text.lower()
+    context.bot.send_document.assert_not_awaited()
+
+
+def test_transcribe_spotify_video_clears_video_session_not_resolved(monkeypatch, tmp_path):
+    """Success on the video path must clear spotify_video (this session's
+    own field) and must leave spotify_resolved -- a stale, unrelated
+    fallback that was never touched -- alone."""
+
+    transcript_file = tmp_path / "transcript.md"
+    transcript_file.write_text("# Test Episode\n\nTekst.\n", encoding="utf-8")
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **kw: str(transcript_file))
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+
+    session = _spotify_video_session()
+    session["subtitle_languages"] = ["pl-pl"]
+
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+    context.user_data["spotify_video"] = session
+    context.user_data["spotify_resolved"] = {"source": "itunes", "title": "Untouched"}
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    assert "spotify_video" not in context.user_data
+    assert context.user_data["spotify_resolved"]["source"] == "itunes"
 
 
 # --- progress throttling (Task 11) -----------------------------------------
