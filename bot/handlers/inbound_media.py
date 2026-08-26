@@ -348,15 +348,12 @@ async def extracted_process_spotify_episode(update: Update, context: ContextType
     resolved = await resolve_episode(url)
     fallback_available = resolved is not None and resolved.get("source") in ("itunes", "youtube")
 
-    if video_episode is None and not fallback_available:
-        error_message = (
-            get_video_error_message(video_error)
-            if video_error
-            else get_resolution_error_message(resolved) or "Nie udało się przygotować tego odcinka."
-        )
-        await progress_message.edit_text(error_message)
-        return
-
+    # Resolve spotify_video/spotify_resolved to match THIS attempt's outcome
+    # unconditionally, before any early return. A chat's session can already
+    # hold a previous episode's data (including a manifest with signed CDN
+    # URLs); if a later attempt fails on both paths, that stale episode must
+    # not survive untouched -- it would otherwise get handed to Task 12's
+    # transcript flow as if it belonged to the current URL.
     if video_episode is not None:
         _set_session_context_value(
             context,
@@ -379,6 +376,17 @@ async def extracted_process_spotify_episode(update: Update, context: ContextType
         _set_session_context_value(
             context, chat_id, "spotify_resolved", resolved, legacy_key="spotify_resolved"
         )
+    else:
+        _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+
+    if video_episode is None and not fallback_available:
+        error_message = (
+            get_video_error_message(video_error)
+            if video_error
+            else get_resolution_error_message(resolved) or "Nie udało się przygotować tego odcinka."
+        )
+        await progress_message.edit_text(error_message)
+        return
 
     quality_options = build_quality_options(video_episode) if video_episode else []
 
@@ -434,6 +442,7 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
     platform = detect_platform(url) or "youtube"
     _set_session_context_value(context, chat_id, "platform", platform, legacy_key="platform")
     _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+    _clear_session_context_value(context, chat_id, "spotify_video", legacy_key="spotify_video")
     _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
     _clear_session_context_value(context, chat_id, "subtitle_pending", legacy_key="subtitle_pending")
 

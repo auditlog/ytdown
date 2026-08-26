@@ -23,6 +23,7 @@ TRANSIENT_FLOW_FIELDS = (
     "playlist_data",
     "platform",
     "spotify_resolved",
+    "spotify_video",
     "instagram_carousel",
     "audio_file_path",
     "audio_file_title",
@@ -34,6 +35,7 @@ TRANSIENT_FLOW_FIELDS = (
 TRANSIENT_FLOW_LEGACY_KEYS = (
     "platform",
     "spotify_resolved",
+    "spotify_video",
     "ig_carousel",
     "audio_file_path",
     "audio_file_title",
