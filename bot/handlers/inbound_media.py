@@ -344,8 +344,29 @@ async def extracted_process_spotify_episode(update: Update, context: ContextType
         )
     except SpotifyVideoError as exc:
         video_error = str(exc)
+    except Exception:
+        # Spotify drift does not always reach us as a SpotifyVideoError, and
+        # anything that escapes this handler leaves the user's "Spotify:
+        # sprawdzanie odcinka..." message frozen forever with no error at
+        # all -- the failure mode design spec 10 rules out, on the breakage
+        # spec 12 calls most likely. At the *resolution* stage "api_changed"
+        # is the honest description of any unexpected failure, which is why
+        # the catch is broadened only here: the download and send paths have
+        # their own distinguishable failures (ffmpeg_missing, a failed
+        # segment fetch) that must keep their own identity.
+        logging.exception("Unexpected failure resolving Spotify video episode")
+        video_error = "api_changed"
 
-    resolved = await resolve_episode(url)
+    try:
+        resolved = await resolve_episode(url)
+    except Exception:
+        # The legacy iTunes/YouTube resolver sat outside the guard entirely,
+        # so anything it raised froze the status message the same way. Its
+        # failure is not Spotify video API drift, so it stays reported as an
+        # unavailable fallback rather than borrowing the "api_changed" text.
+        logging.exception("Unexpected failure resolving Spotify audio fallback")
+        resolved = None
+
     fallback_available = resolved is not None and resolved.get("source") in ("itunes", "youtube")
 
     # Resolve spotify_video/spotify_resolved to match THIS attempt's outcome

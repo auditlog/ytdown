@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pytest
+import requests
 
 from bot import spotify_video as sv
 from bot.spotify_video import SPOTIFY_VIDEO_HEIGHTS
@@ -136,6 +137,138 @@ def test_resolve_video_episode_normalizes_missing_manifest_contents(monkeypatch)
     monkeypatch.setattr(svs, "load_spotify_cookie", lambda path=None: "sp_dc_value")
     monkeypatch.setattr(svs, "fetch_embed_data", lambda eid, cookie: _embed())
     monkeypatch.setattr(svs, "fetch_video_manifest", lambda mid, token: {"base_urls": []})
+
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        svs.resolve_video_episode("https://open.spotify.com/episode/25NlRLSIHjtfU47zm4FGm4")
+    assert str(exc.value) == "api_changed"
+
+
+def test_resolve_video_episode_normalizes_profile_without_id(monkeypatch):
+    """A profile entry missing "id" used to raise a bare KeyError out of
+    list_profiles, straight past this function's SpotifyVideoError handling
+    and out of the handler entirely. Manifest drift must always arrive as
+    the "api_changed" reason code, whatever shape Spotify's drift takes."""
+
+    manifest = _manifest()
+    manifest["contents"][0]["profiles"] = [
+        {"file_type": "mp4", "max_bitrate": 1, "video_codec": "avc1.4d401f",
+         "video_height": 480, "video_width": 854},
+    ]
+
+    monkeypatch.setattr(svs, "load_spotify_cookie", lambda path=None: "sp_dc_value")
+    monkeypatch.setattr(svs, "fetch_embed_data", lambda eid, cookie: _embed())
+    monkeypatch.setattr(svs, "fetch_video_manifest", lambda mid, token: manifest)
+
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        svs.resolve_video_episode("https://open.spotify.com/episode/25NlRLSIHjtfU47zm4FGm4")
+    assert str(exc.value) == "api_changed"
+
+
+def test_resolve_video_episode_normalizes_non_numeric_duration(monkeypatch):
+    """parse_embed_html raises SpotifyVideoError (it used to raise a raw
+    ValueError) when Spotify hands back a duration that is not a number.
+    fetch_embed_data propagates it unchanged, so resolve_video_episode has
+    to normalize it like every other embed-shape change."""
+
+    monkeypatch.setattr(svs, "load_spotify_cookie", lambda path=None: "sp_dc_value")
+
+    def raise_bad_duration(eid, cookie):
+        raise sv.SpotifyVideoError(
+            "Spotify data field entity.duration is not a number: '40 min'"
+        )
+
+    monkeypatch.setattr(svs, "fetch_embed_data", raise_bad_duration)
+
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        svs.resolve_video_episode("https://open.spotify.com/episode/25NlRLSIHjtfU47zm4FGm4")
+    assert str(exc.value) == "api_changed"
+
+
+def test_download_episode_media_normalizes_missing_initialization_template(tmp_path):
+    """build_track_urls read manifest["initialization_template"] as a bare
+    subscript, so a manifest without it raised KeyError past every layer of
+    error mapping. Same drift, same "api_changed" reason code."""
+
+    manifest = _manifest()
+    del manifest["initialization_template"]
+
+    episode = svs.VideoEpisode(
+        episode_id="abc123",
+        title="Testowy odcinek",
+        show_name="Testowy podcast",
+        duration_ms=32000,
+        manifest=manifest,
+        profiles=sv.list_profiles(manifest),
+        subtitle_languages=[],
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with pytest.raises(sv.SpotifyVideoError) as exc:
+            asyncio.run(
+                svs.download_episode_media(
+                    episode=episode,
+                    height=720,
+                    output_dir=str(tmp_path),
+                    executor=executor,
+                )
+            )
+
+    assert str(exc.value) == "api_changed"
+
+
+def test_resolve_video_episode_reports_expired_session_for_empty_token(monkeypatch):
+    """An sp_dc cookie that has expired still renders the embed page, but the
+    token it carries comes back empty. That is the failure users hit most
+    often, and it must reach them as the "export the cookies again" message
+    rather than as a manifest fetch that fails for a mysterious reason."""
+
+    monkeypatch.setattr(svs, "load_spotify_cookie", lambda path=None: "sp_dc_value")
+    monkeypatch.setattr(svs, "fetch_embed_data", lambda eid, cookie: _embed(access_token=""))
+
+    def must_not_be_reached(mid, token):
+        raise AssertionError("fetch_video_manifest must not be called without a token")
+
+    monkeypatch.setattr(svs, "fetch_video_manifest", must_not_be_reached)
+
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        svs.resolve_video_episode("https://open.spotify.com/episode/25NlRLSIHjtfU47zm4FGm4")
+    assert str(exc.value) == "expired_session"
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_resolve_video_episode_maps_rejected_token_to_expired_session(monkeypatch, status):
+    """Spotify answers a stale token with 401 or 403 (design spec 10). Both
+    mean the same thing to the user: re-export the cookies."""
+
+    monkeypatch.setattr(svs, "load_spotify_cookie", lambda path=None: "sp_dc_value")
+    monkeypatch.setattr(svs, "fetch_embed_data", lambda eid, cookie: _embed())
+
+    def raise_http_error(mid, token):
+        response = requests.Response()
+        response.status_code = status
+        raise requests.HTTPError(f"{status} Client Error", response=response)
+
+    monkeypatch.setattr(svs, "fetch_video_manifest", raise_http_error)
+
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        svs.resolve_video_episode("https://open.spotify.com/episode/25NlRLSIHjtfU47zm4FGm4")
+    assert str(exc.value) == "expired_session"
+
+
+def test_resolve_video_episode_maps_other_http_errors_to_api_changed(monkeypatch):
+    """Only 401/403 mean "your session expired". A 500 is not the user's
+    cookie jar, and telling them to re-export it would send them chasing a
+    problem they cannot fix."""
+
+    monkeypatch.setattr(svs, "load_spotify_cookie", lambda path=None: "sp_dc_value")
+    monkeypatch.setattr(svs, "fetch_embed_data", lambda eid, cookie: _embed())
+
+    def raise_http_error(mid, token):
+        response = requests.Response()
+        response.status_code = 500
+        raise requests.HTTPError("500 Server Error", response=response)
+
+    monkeypatch.setattr(svs, "fetch_video_manifest", raise_http_error)
 
     with pytest.raises(sv.SpotifyVideoError) as exc:
         svs.resolve_video_episode("https://open.spotify.com/episode/25NlRLSIHjtfU47zm4FGm4")

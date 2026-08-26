@@ -40,6 +40,31 @@ def test_load_spotify_cookie_returns_none_without_sp_dc(tmp_path):
     assert sv.load_spotify_cookie(str(jar)) is None
 
 
+def test_load_spotify_cookie_returns_none_for_non_utf8_jar(tmp_path):
+    """A jar saved in a non-UTF-8 encoding raises UnicodeDecodeError from the
+    read, not OSError. Left uncaught it escapes load_spotify_cookie and every
+    caller above it, freezing the user's status message; the file is simply
+    unusable, which is exactly what returning None already means."""
+
+    jar = tmp_path / "spotify_cookies.txt"
+    jar.write_bytes(
+        b".spotify.com\tTRUE\t/\tTRUE\t1819277774\tsp_dc\tAQ\xff\xfeDK\n"
+    )
+    assert sv.load_spotify_cookie(str(jar)) is None
+
+
+def test_parse_embed_html_raises_for_non_numeric_duration():
+    """Spotify handing back a non-numeric duration is API drift, not an
+    unreadable page: int() raises ValueError, which used to escape
+    parse_embed_html raw. It must surface as SpotifyVideoError so the
+    service normalizes it to the "api_changed" message like every other
+    shape change."""
+
+    html = _embed_html().replace('"duration":32000', '"duration":"40 min"')
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.parse_embed_html(html)
+
+
 def test_parse_embed_html_extracts_all_fields():
     data = sv.parse_embed_html(_embed_html())
     assert data.access_token == "FAKE_ACCESS_TOKEN"
@@ -211,6 +236,58 @@ def _manifest() -> dict:
     return json.loads((FIXTURES / "spotify_manifest.json").read_text(encoding="utf-8"))
 
 
+class _FakeResponse:
+    """Minimal stand-in for requests.Response for the manifest fetch tests."""
+
+    def __init__(self, status_code=200, payload=None):
+        self.status_code = status_code
+        self._payload = payload if payload is not None else {}
+
+    def json(self):
+        return self._payload
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise AssertionError(
+                "raise_for_status must not be reached for a status the "
+                "function handles explicitly"
+            )
+
+
+def test_fetch_video_manifest_raises_for_404(monkeypatch):
+    """The undocumented v6 endpoint disappearing is the single most likely
+    future break in this integration (design spec 3.2 / 12), and spec 10
+    requires it to read as an explicit API change rather than as a network
+    problem. Until now nothing tested that branch at all."""
+
+    captured = {}
+
+    def fake_get(url, **kwargs):
+        captured["url"] = url
+        captured["headers"] = kwargs.get("headers", {})
+        return _FakeResponse(status_code=404)
+
+    monkeypatch.setattr(sv.requests, "get", fake_get)
+
+    with pytest.raises(sv.SpotifyVideoError) as exc:
+        sv.fetch_video_manifest("cdc59c43", "FAKE_TOKEN")
+
+    assert "404" in str(exc.value)
+    # v7 and v8 both answer 404; only v6 exists (spec 3.2).
+    assert "/manifests/v6/json/sources/cdc59c43/" in captured["url"]
+    assert captured["headers"]["Authorization"] == "Bearer FAKE_TOKEN"
+
+
+def test_fetch_video_manifest_returns_parsed_json(monkeypatch):
+    monkeypatch.setattr(
+        sv.requests, "get",
+        lambda url, **kwargs: _FakeResponse(payload={"base_urls": ["https://cdn/"]}),
+    )
+    assert sv.fetch_video_manifest("cdc59c43", "FAKE_TOKEN") == {
+        "base_urls": ["https://cdn/"]
+    }
+
+
 def test_list_profiles_returns_only_h264_sorted_by_height():
     profiles = sv.list_profiles(_manifest())
     # Every H.264 rendition, including 240p -- which profile the *keyboard*
@@ -224,6 +301,29 @@ def test_list_profiles_excludes_vp9_and_audio():
     ids = {p.id for p in sv.list_profiles(_manifest())}
     assert 17 not in ids, "VP9 must be excluded"
     assert 15 not in ids and 20 not in ids, "audio profiles must be excluded"
+
+
+def test_list_profiles_raises_for_profile_without_id():
+    """A profile entry missing "id" raised a bare KeyError, which escaped the
+    whole handler and left the status message frozen. Manifest drift must
+    always leave this module as SpotifyVideoError."""
+
+    manifest = _manifest()
+    manifest["contents"][0]["profiles"] = [
+        {"file_type": "mp4", "max_bitrate": 1, "video_codec": "avc1.4d401f",
+         "video_height": 480, "video_width": 854},
+    ]
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.list_profiles(manifest)
+
+
+def test_find_audio_profile_id_raises_for_profile_without_id():
+    manifest = _manifest()
+    manifest["contents"][0]["profiles"] = [
+        {"audio_codec": "mp4a.40.2", "file_type": "mp4", "max_bitrate": 1},
+    ]
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.find_audio_profile_id(manifest)
 
 
 def test_find_audio_profile_id_prefers_aac():
@@ -278,6 +378,25 @@ def test_build_track_urls_rounds_partial_final_segment_up():
     _, segment_urls = sv.build_track_urls(manifest, profile_id=1)
     # 30 s / 4 s = 7.5 -> 8 segments, the last one short
     assert len(segment_urls) == 8
+
+
+def test_build_track_urls_raises_without_initialization_template():
+    """manifest["initialization_template"] was a bare subscript: a manifest
+    without it raised KeyError straight through the handler. It is the same
+    "Spotify changed the manifest" story as a missing base_urls, and must
+    read as one."""
+
+    manifest = _manifest()
+    del manifest["initialization_template"]
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.build_track_urls(manifest, profile_id=1)
+
+
+def test_build_track_urls_raises_without_segment_template():
+    manifest = _manifest()
+    del manifest["segment_template"]
+    with pytest.raises(sv.SpotifyVideoError):
+        sv.build_track_urls(manifest, profile_id=1)
 
 
 def test_download_track_writes_init_then_segments_in_order(tmp_path, monkeypatch):

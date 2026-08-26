@@ -514,3 +514,105 @@ def test_process_spotify_episode_fallback_only_clears_stale_video_session(monkey
 
     assert runtime.session_store.get_field(chat_id, "spotify_video") is None
     assert runtime.session_store.get_field(chat_id, "spotify_resolved") == resolved
+
+
+@pytest.mark.integration
+def test_process_spotify_episode_reports_api_changed_for_raw_manifest_drift(monkeypatch):
+    """Manifest drift does not always arrive as a SpotifyVideoError: a profile
+    without "id", a manifest without "initialization_template" and a
+    non-numeric duration each used to escape as a raw KeyError/ValueError.
+    The handler caught only SpotifyVideoError, so such a failure escaped it
+    entirely -- the user's "Spotify: sprawdzanie odcinka..." message stayed
+    frozen forever with no error at all, and the session kept whatever the
+    previous link had put there. Any unexpected failure of *resolution* is
+    honestly described as "api_changed", so that is what it must render."""
+
+    from bot.handlers import inbound_media as im
+    from bot.services import spotify_video_service as svs
+
+    chat_id = 509
+    stale_video = {
+        "episode_id": "first-episode",
+        "title": "Pierwszy odcinek",
+        "show_name": "Podcast",
+        "duration_ms": 10000,
+        "manifest": {"base_urls": ["https://signed.example/first"]},
+        "subtitle_languages": [],
+    }
+
+    def fake_resolve_video_episode(url):
+        raise KeyError("id")
+
+    monkeypatch.setattr(im, "resolve_video_episode", fake_resolve_video_episode)
+
+    async def fake_resolve_episode(url):
+        return None
+
+    monkeypatch.setattr(im, "resolve_episode", fake_resolve_episode)
+
+    update = _make_message_update(chat_id=chat_id)
+    context = _make_callback_context()
+    runtime = _attach_callback_runtime(context)
+    runtime.session_store.set_field(chat_id, "spotify_video", stale_video)
+
+    asyncio.run(
+        im.extracted_process_spotify_episode(
+            update, context, "https://open.spotify.com/episode/abc"
+        )
+    )
+
+    text, _kwargs = _progress_edit(update)
+    assert text == svs.get_video_error_message("api_changed")
+    # The previous episode's manifest must not survive a failed attempt.
+    assert runtime.session_store.get_field(chat_id, "spotify_video") is None
+
+
+@pytest.mark.integration
+def test_process_spotify_episode_survives_unexpected_fallback_failure(monkeypatch):
+    """resolve_episode() sat outside the guarded region entirely, so anything
+    it raised escaped the handler and froze the status message the same way.
+    The native video path resolved fine here, so the user must still get the
+    video keyboard rather than nothing at all."""
+
+    from bot.handlers import inbound_media as im
+    from bot.services import spotify_video_service as svs
+
+    chat_id = 510
+    episode = svs.VideoEpisode(
+        episode_id="abc",
+        title="Testowy odcinek",
+        show_name="Testowy podcast",
+        duration_ms=32000,
+        manifest={"base_urls": []},
+        profiles=[],
+        subtitle_languages=[],
+    )
+    monkeypatch.setattr(im, "resolve_video_episode", lambda url: episode)
+    monkeypatch.setattr(
+        im,
+        "build_quality_options",
+        lambda ep: [{"height": 720, "profile_id": 1, "size_mb": 336.0}],
+    )
+
+    async def fake_resolve_episode(url):
+        raise RuntimeError("Spotify Web API client blew up")
+
+    monkeypatch.setattr(im, "resolve_episode", fake_resolve_episode)
+
+    update = _make_message_update(chat_id=chat_id)
+    context = _make_callback_context()
+    runtime = _attach_callback_runtime(context)
+
+    asyncio.run(
+        im.extracted_process_spotify_episode(
+            update, context, "https://open.spotify.com/episode/abc"
+        )
+    )
+
+    _text, kwargs = _progress_edit(update)
+    callback_data = _callback_data(kwargs["reply_markup"])
+    assert "spv_video_720p" in callback_data
+    # The legacy path never produced anything, so its buttons stay hidden.
+    assert "dl_audio_mp3" not in callback_data
+    assert runtime.session_store.get_field(chat_id, "spotify_video") is not None
+    assert runtime.session_store.get_field(chat_id, "spotify_resolved") is None

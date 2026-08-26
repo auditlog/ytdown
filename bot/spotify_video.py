@@ -55,7 +55,12 @@ def load_spotify_cookie(cookies_file: str = SPOTIFY_COOKIES_FILE) -> str | None:
                 # Netscape format: domain, flag, path, secure, expiry, name, value
                 if len(fields) >= 7 and fields[5] == "sp_dc":
                     return fields[6] or None
-    except OSError as exc:
+    except (OSError, UnicodeDecodeError) as exc:
+        # UnicodeDecodeError (a ValueError, not an OSError) is what a jar
+        # saved in another encoding raises on read. Either way the file is
+        # unusable, which is exactly what returning None already means --
+        # left uncaught it escaped every caller above and froze the user's
+        # status message instead of showing the cookie-export instructions.
         logging.error("Cannot read Spotify cookie jar %s: %s", cookies_file, exc)
 
     return None
@@ -74,6 +79,36 @@ _NEXT_DATA_PATTERN = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
     re.DOTALL,
 )
+
+
+def _require_int(value, field: str) -> int:
+    """Coerce a Spotify-supplied field to int, or fail as SpotifyVideoError.
+
+    Every accessor in this module must leave Spotify's own drift as a
+    SpotifyVideoError: a raw KeyError or ValueError escaping from here
+    propagates past the callers' error mapping and freezes the user's status
+    message with no error at all (design spec 10 rules that out explicitly).
+    """
+
+    try:
+        return int(value)
+    except (TypeError, ValueError) as exc:
+        raise SpotifyVideoError(
+            f"Spotify data field {field} is not a number: {value!r}"
+        ) from exc
+
+
+def _require_template(manifest: dict, key: str) -> str:
+    """Read a URL template from the manifest, or fail as SpotifyVideoError.
+
+    See _require_int for why a bare ``manifest[key]`` subscript is not
+    acceptable here.
+    """
+
+    template = manifest.get(key)
+    if not isinstance(template, str) or not template:
+        raise SpotifyVideoError(f"Spotify manifest carries no {key}")
+    return template
 
 
 def _dig(node, *keys, default=None):
@@ -108,9 +143,14 @@ class EmbedData:
 def parse_embed_html(html: str) -> EmbedData | None:
     """Parse the embed page's __NEXT_DATA__ blob into an EmbedData.
 
-    Returns None when the blob is absent or malformed, which in practice means
-    Spotify changed the page shape — callers surface that explicitly rather
-    than treating it as "episode not found".
+    Returns None when the blob is absent or unrecognizable, which in practice
+    means Spotify changed the page shape — callers surface that explicitly
+    rather than treating it as "episode not found".
+
+    Raises SpotifyVideoError when the blob is recognizable but a field holds
+    something unusable (a non-numeric duration, say). That is the same "API
+    changed" story, just discovered one level deeper, and it must not leave
+    this function as a raw ValueError — see _require_int.
     """
 
     match = _NEXT_DATA_PATTERN.search(html)
@@ -159,7 +199,7 @@ def parse_embed_html(html: str) -> EmbedData | None:
         manifest_id=first_video.get("manifestId"),
         title=entity.get("title", ""),
         show_name=entity.get("subtitle", ""),
-        duration_ms=int(entity.get("duration") or 0),
+        duration_ms=_require_int(entity.get("duration") or 0, "entity.duration"),
         has_video=bool(entity.get("hasVideo")),
         requires_drm=bool(first_video.get("requiresDRM")),
     )
@@ -266,11 +306,11 @@ def list_profiles(manifest: dict) -> list[Profile]:
             continue
         profiles.append(
             Profile(
-                id=int(raw["id"]),
-                width=int(raw.get("video_width") or 0),
-                height=int(raw.get("video_height") or 0),
+                id=_require_int(raw.get("id"), "profiles[].id"),
+                width=_require_int(raw.get("video_width") or 0, "profiles[].video_width"),
+                height=_require_int(raw.get("video_height") or 0, "profiles[].video_height"),
                 codec=codec,
-                max_bitrate=int(raw.get("max_bitrate") or 0),
+                max_bitrate=_require_int(raw.get("max_bitrate") or 0, "profiles[].max_bitrate"),
                 mime_type=raw.get("mime_type", "video/mp4"),
             )
         )
@@ -286,7 +326,7 @@ def find_audio_profile_id(manifest: dict) -> int:
 
     for raw in _manifest_content(manifest).get("profiles", []):
         if raw.get("audio_codec", "").startswith(_AAC_CODEC_PREFIX):
-            return int(raw["id"])
+            return _require_int(raw.get("id"), "profiles[].id")
     raise SpotifyVideoError("Spotify manifest carries no AAC audio profile")
 
 
@@ -294,8 +334,10 @@ def manifest_duration_ms(manifest: dict) -> int:
     """Return the episode duration covered by the manifest, in milliseconds."""
 
     content = _manifest_content(manifest)
-    return int(content.get("end_time_millis", 0)) - int(
-        content.get("start_time_millis", 0)
+    return _require_int(
+        content.get("end_time_millis", 0), "contents[].end_time_millis"
+    ) - _require_int(
+        content.get("start_time_millis", 0), "contents[].start_time_millis"
     )
 
 
@@ -332,14 +374,16 @@ def build_track_urls(
     if not base_urls:
         raise SpotifyVideoError("Spotify manifest carries no base_urls")
 
-    segment_length = int(content.get("segment_length") or 0)
+    segment_length = _require_int(
+        content.get("segment_length") or 0, "contents[].segment_length"
+    )
     if segment_length <= 0:
         raise SpotifyVideoError("Spotify manifest carries no segment_length")
 
     file_type = "mp4"
 
     init_urls = _expand_template(
-        manifest["initialization_template"],
+        _require_template(manifest, "initialization_template"),
         base_urls,
         profile_id=profile_id,
         file_type=file_type,
@@ -350,9 +394,10 @@ def build_track_urls(
     duration_seconds = manifest_duration_ms(manifest) / 1000
     segment_count = math.ceil(duration_seconds / segment_length)
 
+    segment_template = _require_template(manifest, "segment_template")
     segment_urls = [
         _expand_template(
-            manifest["segment_template"],
+            segment_template,
             base_urls,
             profile_id=profile_id,
             file_type=file_type,
