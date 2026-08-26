@@ -12,6 +12,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_message
+from bot.handlers.transcript_prompt_handlers import offer_custom_transcript_prompt
 from bot.security_policy import get_media_label
 from bot.session_context import (
     clear_uploaded_audio_state as _clear_uploaded_audio_state,
@@ -152,6 +153,13 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                 )
             record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
             _clear_uploaded_audio_state(context, chat_id)
+            await offer_custom_transcript_prompt(
+                context,
+                chat_id=chat_id,
+                requester_id=update.effective_user.id,
+                transcript_path=transcript_path,
+                title=title,
+            )
             return
 
         await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
@@ -198,6 +206,13 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         )
         _clear_uploaded_audio_state(context, chat_id)
         await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+        await offer_custom_transcript_prompt(
+            context,
+            chat_id=chat_id,
+            requester_id=update.effective_user.id,
+            transcript_path=transcript_path,
+            title=title,
+        )
         return
 
     await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
@@ -238,6 +253,13 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
     _clear_uploaded_audio_state(context, chat_id)
     await update_status("Transkrypcja została wysłana!")
+    await offer_custom_transcript_prompt(
+        context,
+        chat_id=chat_id,
+        requester_id=update.effective_user.id,
+        transcript_path=transcript_path,
+        title=title,
+    )
 
 
 async def show_audio_summary_options(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -557,6 +579,13 @@ async def handle_subtitle_download(
             selected_format=f"sub_{lang}",
         )
         await update_status("Napisy i podsumowanie zostały wysłane!")
+        await offer_custom_transcript_prompt(
+            context,
+            chat_id=chat_id,
+            requester_id=update.effective_user.id,
+            transcript_path=transcript_path,
+            title=title,
+        )
         return
 
     await update_status("Napisy pobrane.\n\nWysyłanie transkrypcji...")
@@ -599,3 +628,10 @@ async def handle_subtitle_download(
         selected_format=f"sub_{lang}",
     )
     await update_status("Napisy zostały wysłane!")
+    await offer_custom_transcript_prompt(
+        context,
+        chat_id=chat_id,
+        requester_id=update.effective_user.id,
+        transcript_path=transcript_path,
+        title=title,
+    )

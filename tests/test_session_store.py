@@ -31,6 +31,33 @@ def test_session_store_updates_and_clears_fields():
     assert store.get_field(123, "time_range") is None
 
 
+def test_transcript_prompt_fields_keep_session_alive_until_cleared():
+    from datetime import UTC, datetime
+
+    from bot.session_store import PendingTranscriptPrompt, TranscriptContext
+
+    store = SessionStore()
+    transcript = TranscriptContext(
+        transcript_path="/tmp/transcript.md",
+        title="Example",
+        requester_id=123,
+        created_at=datetime.now(UTC),
+    )
+    pending = PendingTranscriptPrompt(transcript_token="token", requester_id=123)
+
+    store.update_session(
+        123,
+        transcript_contexts={"token": transcript},
+        pending_transcript_prompt=pending,
+    )
+
+    assert store.get_field(123, "transcript_contexts") == {"token": transcript}
+    assert store.get_field(123, "pending_transcript_prompt") == pending
+
+    store.clear_fields(123, "transcript_contexts", "pending_transcript_prompt")
+    assert store.get_field(123, "transcript_contexts") is None
+
+
 def test_session_store_can_clear_multiple_fields_at_once():
     store = SessionStore()
 

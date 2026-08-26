@@ -79,6 +79,35 @@ def test_generate_summary_artifact_creates_markdown_file(monkeypatch, tmp_path):
     assert "summary body" in Path(result.summary_path).read_text(encoding="utf-8")
 
 
+def test_generate_custom_analysis_artifact_creates_markdown_file(monkeypatch, tmp_path):
+    monkeypatch.setattr(
+        ts,
+        "generate_custom_analysis",
+        lambda text, prompt, api_key=None: f"result for {prompt}",
+    )
+    monkeypatch.setattr(ts, "get_claude_api_key", lambda: "test-key")
+
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    result = asyncio.run(
+        ts.generate_custom_analysis_artifact(
+            transcript_text="hello",
+            prompt="list decisions",
+            title="Sample",
+            sanitized_title="Sample",
+            output_dir=str(tmp_path),
+            executor=ThreadPoolExecutor(max_workers=1),
+            artifact_id="abc123",
+        )
+    )
+
+    assert result is not None
+    assert result.analysis_text == "result for list decisions"
+    assert Path(result.analysis_path).name == "Sample_custom_analysis_abc123.md"
+    assert "result for list decisions" in Path(result.analysis_path).read_text(encoding="utf-8")
+
+
 def test_cleanup_transcription_artifacts_removes_source_and_chunks(tmp_path):
     source = tmp_path / "source.mp3"
     chunk = tmp_path / "Sample_part1_transcript.txt"

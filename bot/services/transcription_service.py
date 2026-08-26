@@ -13,7 +13,11 @@ if TYPE_CHECKING:
 
 from bot.transcription_limits import is_text_too_long_for_summary
 from bot.transcription_pipeline import transcribe_mp3_file
-from bot.transcription_providers import generate_summary, get_claude_api_key
+from bot.transcription_providers import (
+    generate_custom_analysis,
+    generate_summary,
+    get_claude_api_key,
+)
 
 
 @dataclass
@@ -32,6 +36,14 @@ class SummaryResult:
     summary_text: str
     summary_path: str
     summary_type_name: str
+
+
+@dataclass
+class CustomAnalysisResult:
+    """User-directed transcript analysis and its persisted Markdown artifact."""
+
+    analysis_text: str
+    analysis_path: str
 
 
 SUMMARY_TYPE_NAMES = {
@@ -139,6 +151,48 @@ async def generate_summary_artifact(
         summary_text=summary_text,
         summary_path=summary_path,
         summary_type_name=summary_type_name,
+    )
+
+
+async def generate_custom_analysis_artifact(
+    *,
+    transcript_text: str,
+    prompt: str,
+    title: str,
+    sanitized_title: str,
+    output_dir: str,
+    executor: Any,
+    artifact_id: str | None = None,
+    api_key: str | None = None,
+) -> CustomAnalysisResult | None:
+    """Apply a custom instruction and persist the complete result as Markdown."""
+
+    loop = asyncio.get_event_loop()
+    claude_api_key = api_key if api_key is not None else get_claude_api_key()
+    analysis_text = await loop.run_in_executor(
+        executor,
+        lambda: generate_custom_analysis(
+            transcript_text,
+            prompt,
+            api_key=claude_api_key,
+        ),
+    )
+    if not analysis_text:
+        return None
+
+    suffix = artifact_id or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    safe_suffix = "".join(char for char in suffix if char.isalnum() or char in "-_")[:32]
+    analysis_path = os.path.join(
+        output_dir,
+        f"{sanitized_title}_custom_analysis_{safe_suffix}.md",
+    )
+    with open(analysis_path, "w", encoding="utf-8") as file_obj:
+        file_obj.write(f"# {title} - Własna analiza transkrypcji\n\n")
+        file_obj.write(analysis_text)
+
+    return CustomAnalysisResult(
+        analysis_text=analysis_text,
+        analysis_path=analysis_path,
     )
 
 

@@ -46,6 +46,7 @@ from bot.handlers.playlist_callbacks import (
     download_playlist as _extracted_download_playlist,
     handle_playlist_callback as _extracted_handle_playlist_callback,
 )
+from bot.handlers.transcript_prompt_handlers import handle_transcript_prompt_callback
 from bot.handlers.transcription_callbacks import (
     _handle_subtitle_callback as _extracted_handle_subtitle_callback,
     _handle_subtitle_summary_callback as _extracted_handle_subtitle_summary_callback,
@@ -118,6 +119,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("pl_"):
         await handle_playlist_callback(update, context, data)
+        return
+
+    if data.startswith("tr_prompt_"):
+        await handle_transcript_prompt_callback(update, context, data)
         return
 
     if data == "audio_transcribe":

@@ -60,6 +60,41 @@ def test_generate_summary_returns_none_without_api_key():
     assert result is None
 
 
+def test_generate_custom_analysis_separates_instruction_from_transcript(monkeypatch):
+    captured = {}
+
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {"content": [{"type": "text", "text": "custom result"}]}
+
+    def fake_post(_url, **kwargs):
+        captured.update(kwargs["json"])
+        return Resp()
+
+    monkeypatch.setattr(providers.requests, "post", fake_post)
+
+    result = providers.generate_custom_analysis(
+        "transcript body",
+        "List decisions",
+        api_key="key",
+        requests_module=providers.requests,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert result == "custom result"
+    assert "source material" in captured["system"]
+    blocks = captured["messages"][0]["content"]
+    assert "List decisions" in blocks[0]["text"]
+    assert "transcript body" not in blocks[0]["text"]
+    assert "transcript body" in blocks[1]["text"]
+
+
+def test_generate_custom_analysis_returns_none_without_api_key():
+    assert providers.generate_custom_analysis("text", "instruction", api_key=None) is None
+
+
 def test_post_process_transcript_skips_when_text_too_long(monkeypatch):
     called = []
     monkeypatch.setattr(providers.requests, "post", lambda *a, **k: called.append(1))
@@ -82,6 +117,22 @@ def test_generate_summary_skips_when_text_exceeds_context_window(monkeypatch):
     result = providers.generate_summary(
         "x" * 800_000,
         1,
+        api_key="key",
+        requests_module=providers.requests,
+        sleep_fn=lambda _s: None,
+    )
+
+    assert result is None
+    assert called == []
+
+
+def test_generate_custom_analysis_skips_when_input_exceeds_context_window(monkeypatch):
+    called = []
+    monkeypatch.setattr(providers.requests, "post", lambda *a, **k: called.append(1))
+
+    result = providers.generate_custom_analysis(
+        "x" * 800_000,
+        "instruction",
         api_key="key",
         requests_module=providers.requests,
         sleep_fn=lambda _s: None,

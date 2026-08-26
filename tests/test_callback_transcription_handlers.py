@@ -23,6 +23,23 @@ def test_handle_callback_audio_transcribe_starts_directly(monkeypatch):
     assert called.get("invoked") is True
 
 
+def test_handle_callback_custom_prompt_does_not_require_active_url(monkeypatch):
+    tc.user_urls.pop(123, None)
+    update = _make_update("tr_prompt_token", chat_id=123)
+    context = _make_context()
+    called = {}
+
+    async def fake_handle(update_arg, context_arg, data):
+        called["data"] = data
+
+    monkeypatch.setattr(tc, "handle_transcript_prompt_callback", fake_handle)
+
+    asyncio.run(tc.handle_callback(update, context))
+
+    assert called["data"] == "tr_prompt_token"
+    update.callback_query.edit_message_text.assert_not_awaited()
+
+
 def test_show_audio_summary_options_reads_title_from_runtime_session():
     update = _make_update("audio_transcribe_summary", chat_id=321)
     context = _make_context()
