@@ -2,6 +2,11 @@
 
 from __future__ import annotations
 
+# Video heights the UI offers; anything else is a stale or forged callback.
+# Imported rather than restated so the keyboard and this validator can
+# never disagree about which buttons exist -- see bot/spotify_video.py.
+from bot.spotify_video import SPOTIFY_VIDEO_HEIGHTS  # noqa: F401  (re-exported)
+
 
 def parse_download_callback(data):
     """Parses download-related callback data.
@@ -70,3 +75,38 @@ def parse_summary_option(option_data):
         return None
 
     return summary_option
+
+
+def parse_spotify_video_callback(data):
+    """Parses native Spotify video callback payloads.
+
+    Expected formats:
+      - spv_video_<height>p
+      - spv_audio_m4a
+
+    A dedicated prefix keeps the native Spotify path separate from the legacy
+    dl_* flow, which routes through the iTunes/YouTube fallback.
+    """
+    if not isinstance(data, str) or not data.startswith("spv_"):
+        return None
+
+    if data == "spv_audio_m4a":
+        return {"media_type": "audio", "height": None}
+
+    parts = data.split("_")
+    if len(parts) != 3 or parts[1] != "video":
+        return None
+
+    raw_height = parts[2]
+    if not raw_height.endswith("p"):
+        return None
+
+    try:
+        height = int(raw_height[:-1])
+    except ValueError:
+        return None
+
+    if height not in SPOTIFY_VIDEO_HEIGHTS:
+        return None
+
+    return {"media_type": "video", "height": height}

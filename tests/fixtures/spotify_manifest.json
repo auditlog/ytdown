@@ -1,0 +1,28 @@
+{
+  "contents": [
+    {
+      "encoding_id": "b3b3dce09fa711f1b83ccf1e1a200f9f",
+      "segment_length": 4,
+      "start_time_millis": 0,
+      "end_time_millis": 32000,
+      "profiles": [
+        {"id": 15, "audio_bitrate": 96000, "audio_codec": "mp4a.40.2", "file_type": "mp4", "max_bitrate": 100114, "mime_type": "audio/mp4"},
+        {"id": 20, "audio_bitrate": 96000, "audio_codec": "opus", "file_type": "mp4", "max_bitrate": 112126, "mime_type": "audio/mp4"},
+        {"id": 2, "file_type": "mp4", "max_bitrate": 1419290, "mime_type": "video/mp4", "video_codec": "avc1.4d401f", "video_height": 480, "video_width": 854},
+        {"id": 1, "file_type": "mp4", "max_bitrate": 2605250, "mime_type": "video/mp4", "video_codec": "avc1.4d4020", "video_height": 720, "video_width": 1280},
+        {"id": 0, "file_type": "mp4", "max_bitrate": 4810372, "mime_type": "video/mp4", "video_codec": "avc1.4d402a", "video_height": 1080, "video_width": 1920},
+        {"id": 4, "file_type": "mp4", "max_bitrate": 479580, "mime_type": "video/mp4", "video_codec": "avc1.4d401e", "video_height": 240, "video_width": 426},
+        {"id": 17, "file_type": "mp4", "max_bitrate": 2678294, "mime_type": "video/mp4", "video_codec": "vp9", "video_height": 720, "video_width": 1280}
+      ],
+      "encryption_infos": []
+    }
+  ],
+  "start_time_millis": 0,
+  "end_time_millis": 999999,
+  "initialization_template": "v1/origins/ORIGIN/sources/SRC/encodings/ENC/profiles/{{profile_id}}/inits/{{file_type}}?token=FAKE_TOKEN&fauth=FAKE_FAUTH",
+  "segment_template": "v1/origins/ORIGIN/sources/SRC/encodings/ENC/profiles/{{profile_id}}/{{segment_timestamp}}.{{file_type}}?token=FAKE_TOKEN&fauth=FAKE_FAUTH",
+  "subtitle_template": "v1.1/sources/SRC/{{language_code}}.webvtt?__token__=FAKE&fauth=FAKE_FAUTH",
+  "base_urls": ["https://video-fa.scdn.co/segments/", "https://video-cf.spotifycdn.com/segments/"],
+  "subtitle_base_urls": ["https://subtitles.spotifycdn.com/subtitles/"],
+  "subtitle_language_codes": ["pl-pl"]
+}

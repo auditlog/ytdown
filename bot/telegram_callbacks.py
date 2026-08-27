@@ -19,7 +19,11 @@ from bot.handlers import download_callbacks as _download_callbacks_module
 from bot.handlers import media_extras_callbacks as _media_extras_callbacks_module
 from bot.handlers import playlist_callbacks as _playlist_callbacks_module
 from bot.handlers import transcription_callbacks as _transcription_callbacks_module
-from bot.handlers.callback_parsing import parse_download_callback, parse_summary_option
+from bot.handlers.callback_parsing import (
+    parse_download_callback,
+    parse_spotify_video_callback,
+    parse_summary_option,
+)
 from bot.handlers.common_ui import (
     build_main_keyboard,
     escape_md as _shared_escape_md,
@@ -46,6 +50,8 @@ from bot.handlers.playlist_callbacks import (
     download_playlist as _extracted_download_playlist,
     handle_playlist_callback as _extracted_handle_playlist_callback,
 )
+from bot.handlers.spotify_callbacks import download_spotify_video, transcribe_spotify_video
+from bot.handlers.transcript_prompt_handlers import handle_transcript_prompt_callback
 from bot.handlers.transcription_callbacks import (
     _handle_subtitle_callback as _extracted_handle_subtitle_callback,
     _handle_subtitle_summary_callback as _extracted_handle_subtitle_summary_callback,
@@ -120,6 +126,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_playlist_callback(update, context, data)
         return
 
+    if data.startswith("tr_prompt_"):
+        await handle_transcript_prompt_callback(update, context, data)
+        return
+
     if data == "audio_transcribe":
         await transcribe_audio_file(update, context)
         return
@@ -141,6 +151,20 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if "castbox.fm" in url:
         url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
+
+    if data.startswith("spv_"):
+        video_data = parse_spotify_video_callback(data)
+        if not video_data:
+            await query.edit_message_text("Nieobsługiwany format. Spróbuj wybrać format ponownie.")
+            return
+        session_data = _get_session_context_value(
+            context, chat_id, "spotify_video", legacy_key="spotify_video"
+        )
+        if not session_data:
+            await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
+            return
+        await download_spotify_video(update, context, session_data, height=video_data["height"])
+        return
 
     if data.startswith("dl_ig_"):
         await _handle_instagram_download(update, context, url, data)
@@ -201,30 +225,14 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
         if _get_session_context_value(context, chat_id, "platform", legacy_key="platform") == "spotify":
-            resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
-            if resolved:
-                await download_spotify_resolved(
-                    update,
-                    context,
-                    resolved,
-                    "mp3",
-                    transcribe=True,
-                    summary=True,
-                    summary_type=option,
-                )
-            else:
-                await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
+            await _route_spotify_transcription(update, context, chat_id, summary=True, summary_type=option)
         else:
             await download_file(update, context, "audio", "mp3", url, transcribe=True, summary=True, summary_type=option)
         return
 
     if data == "transcribe":
         if _get_session_context_value(context, chat_id, "platform", legacy_key="platform") == "spotify":
-            resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
-            if resolved:
-                await download_spotify_resolved(update, context, resolved, "mp3", transcribe=True)
-            else:
-                await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
+            await _route_spotify_transcription(update, context, chat_id, summary=False, summary_type=None)
         else:
             await show_subtitle_source_menu(update, context, url, with_summary=False)
         return
@@ -369,6 +377,43 @@ async def download_spotify_resolved(
         summary=summary,
         summary_type=summary_type,
     )
+
+
+async def _route_spotify_transcription(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    *,
+    summary: bool,
+    summary_type: int | None,
+) -> None:
+    """Route a Spotify transcription request to its best available source.
+
+    Preference order: a native video session (subtitles when the episode
+    has them -- no audio download at all; native audio + Groq otherwise),
+    then the legacy resolved-audio fallback unchanged, then "session
+    expired" once neither survived. A video session always wins over a
+    stale resolved fallback still sitting in the session, since it is the
+    fresher, more capable source for the same episode.
+    """
+
+    video_session = _get_session_context_value(
+        context, chat_id, "spotify_video", legacy_key="spotify_video"
+    )
+    if video_session:
+        await transcribe_spotify_video(
+            update, context, video_session, summary=summary, summary_type=summary_type,
+        )
+        return
+
+    resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+    if resolved:
+        await download_spotify_resolved(
+            update, context, resolved, "mp3",
+            transcribe=True, summary=summary, summary_type=summary_type,
+        )
+    else:
+        await update.callback_query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
 
 
 async def back_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, url):

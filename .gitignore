@@ -54,3 +54,7 @@ backup/
 youtube_downloader_telegram.py
 run_tests.sh
 git/
+
+# Credential files - any cookie jar, never commit
+*cookies*.txt
+*_cookies.txt

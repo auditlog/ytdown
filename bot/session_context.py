@@ -23,19 +23,25 @@ TRANSIENT_FLOW_FIELDS = (
     "playlist_data",
     "platform",
     "spotify_resolved",
+    "spotify_video",
     "instagram_carousel",
     "audio_file_path",
     "audio_file_title",
     "subtitle_pending",
+    "transcript_contexts",
+    "pending_transcript_prompt",
 )
 
 TRANSIENT_FLOW_LEGACY_KEYS = (
     "platform",
     "spotify_resolved",
+    "spotify_video",
     "ig_carousel",
     "audio_file_path",
     "audio_file_title",
     "subtitle_pending",
+    "transcript_contexts",
+    "pending_transcript_prompt",
 )
 
 

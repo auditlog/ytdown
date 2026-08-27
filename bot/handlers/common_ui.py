@@ -92,6 +92,49 @@ def build_instagram_photo_keyboard(photos: list, videos: list) -> list:
     return keyboard
 
 
+def build_spotify_episode_keyboard(
+    *,
+    quality_options: list,
+    has_native_audio: bool,
+    has_fallback_audio: bool,
+) -> list:
+    """Build the keyboard for a Spotify episode from actually available sources.
+
+    Buttons that would fail under the current configuration are omitted rather
+    than shown and then erroring — the native video path needs a cookie jar,
+    the legacy iTunes/YouTube path needs Web API credentials, and an episode
+    may have either, both, or neither.
+    """
+
+    keyboard = []
+
+    for option in quality_options:
+        height = option["height"]
+        size_mb = option["size_mb"]
+        keyboard.append([
+            InlineKeyboardButton(
+                f"Video {height}p (~{size_mb:.0f} MB)",
+                callback_data=f"spv_video_{height}p",
+            )
+        ])
+
+    if has_native_audio:
+        keyboard.append([
+            InlineKeyboardButton("Audio (M4A) — Spotify", callback_data="spv_audio_m4a")
+        ])
+
+    if has_fallback_audio:
+        keyboard.append([InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")])
+        keyboard.append([InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")])
+
+    keyboard.append([InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")])
+    keyboard.append([
+        InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")
+    ])
+
+    return keyboard
+
+
 def format_bytes(bytes_value):
     """Formats bytes to human readable string."""
     if bytes_value is None:

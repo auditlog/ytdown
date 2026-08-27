@@ -18,12 +18,31 @@ def _make_update(data: str, chat_id: int = 123):
     return update
 
 
+def _make_message_update(text: str = "", chat_id: int = 123):
+    """Build an update carrying a plain message, for handlers entered via a
+    freshly received link rather than a button press (e.g.
+    ``extracted_process_spotify_episode``).
+
+    ``message.reply_text`` returns a message mock whose own ``edit_text`` is
+    an ``AsyncMock`` -- handlers post a progress message and then edit it in
+    place as resolution proceeds.
+    """
+    update = Mock()
+    update.effective_chat.id = chat_id
+    update.message = Mock()
+    update.message.text = text
+    update.message.reply_text = AsyncMock(return_value=Mock(edit_text=AsyncMock()))
+    return update
+
+
 def _make_context():
     context = Mock()
     context.user_data = {}
     context.bot = Mock()
     context.bot.send_document = AsyncMock()
     context.bot.send_message = AsyncMock()
+    context.bot.send_video = AsyncMock()
+    context.bot.send_audio = AsyncMock()
     return context
 
 
