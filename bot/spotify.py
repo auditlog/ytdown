@@ -1,27 +1,69 @@
-"""
-Spotify podcast episode resolution module.
+"""Spotify metadata and external audio-resolution helpers.
 
-Resolves Spotify episode URLs to downloadable audio by searching
-iTunes API (direct MP3) or YouTube (via yt-dlp) as fallback.
-Spotify Web API credentials are optional — used for richer metadata only.
+Podcast episodes prefer iTunes and fall back to YouTube. Music tracks use
+Spotify metadata to find a high-confidence YouTube Music/official-audio match;
+Spotify's protected music streams are never downloaded by this module.
 """
 
 import logging
 import os
 import re
 import time
+import unicodedata
 from difflib import SequenceMatcher
-from urllib.parse import urlparse, parse_qs
+from urllib.parse import urlparse
 
 import requests
 import yt_dlp
 
 from bot.config import YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS, get_runtime_value
-
+from bot.spotify_oauth import SpotifyOAuthError, get_spotify_user_access_token
+from bot.spotify_video import fetch_embed_access_token, load_spotify_cookie
 
 # Spotify API token cache
 _spotify_token = None
 _spotify_token_expires = 0
+
+SPOTIFY_COLLECTION_MAX_ITEMS = 500
+_SPOTIFY_RESOURCE_TYPES = {"track", "album", "playlist", "episode"}
+
+
+class SpotifyMetadataError(RuntimeError):
+    """Normalized Spotify metadata failure safe to map to Polish UI text."""
+
+    def __init__(self, reason: str, status_code: int | None = None):
+        super().__init__(reason)
+        self.reason = reason
+        self.status_code = status_code
+
+
+def parse_spotify_url(url: str) -> tuple[str, str] | None:
+    """Return ``(resource_type, id)`` for supported open.spotify.com URLs."""
+
+    try:
+        parsed = urlparse(url)
+        if parsed.netloc.lower() not in ("open.spotify.com", "www.open.spotify.com"):
+            return None
+        match = re.match(r"^/(track|album|playlist|episode)/([a-zA-Z0-9]+)(?:/|$)", parsed.path)
+        if not match:
+            return None
+        return match.group(1), match.group(2)
+    except Exception:
+        return None
+
+
+def parse_spotify_track_url(url: str) -> str | None:
+    """Extract a track ID from a Spotify track URL."""
+
+    parsed = parse_spotify_url(url)
+    return parsed[1] if parsed and parsed[0] == "track" else None
+
+
+def parse_spotify_collection_url(url: str) -> tuple[str, str] | None:
+    """Extract an album or playlist type/ID pair from a Spotify URL."""
+
+    parsed = parse_spotify_url(url)
+    return parsed if parsed and parsed[0] in {"album", "playlist"} else None
 
 
 def parse_spotify_episode_url(url: str) -> str | None:
@@ -33,23 +75,43 @@ def parse_spotify_episode_url(url: str) -> str | None:
 
     Returns episode ID string, or None if URL is not a valid episode link.
     """
-    try:
-        parsed = urlparse(url)
-        if parsed.netloc.lower() not in ('open.spotify.com', 'www.open.spotify.com'):
-            return None
-        # Path: /episode/{ID}
-        match = re.match(r'^/episode/([a-zA-Z0-9]+)', parsed.path)
-        return match.group(1) if match else None
-    except Exception:
-        return None
+    parsed = parse_spotify_url(url)
+    return parsed[1] if parsed and parsed[0] == "episode" else None
 
 
-def _get_spotify_token() -> str | None:
-    """Gets Spotify API access token using client credentials flow.
+def _get_spotify_token(
+    resource_type: str | None = None,
+    resource_id: str | None = None,
+) -> str | None:
+    """Get a Spotify API token, preferring the user's web session.
 
-    Returns access token string, or None if credentials are not configured.
+    A real user OAuth token is required for playlist ownership checks. The
+    cookie-derived embed token and client credentials remain fallbacks for
+    public catalog metadata and legacy behavior.
     """
     global _spotify_token, _spotify_token_expires
+
+    try:
+        user_token = get_spotify_user_access_token()
+    except SpotifyOAuthError as exc:
+        logging.warning("Spotify user OAuth unavailable: reason=%s", exc.reason)
+        user_token = None
+    if user_token:
+        return user_token
+
+    if resource_type in _SPOTIFY_RESOURCE_TYPES and resource_id:
+        cookie = load_spotify_cookie()
+        if cookie:
+            try:
+                embed_token = fetch_embed_access_token(
+                    resource_type,
+                    resource_id,
+                    cookie,
+                )
+                if embed_token:
+                    return embed_token
+            except requests.RequestException as exc:
+                logging.warning("Spotify embed token request failed: %s", exc)
 
     client_id = get_runtime_value('SPOTIFY_CLIENT_ID', '')
     client_secret = get_runtime_value('SPOTIFY_CLIENT_SECRET', '')
@@ -81,13 +143,349 @@ def _get_spotify_token() -> str | None:
         return None
 
 
+def _spotify_api_get(path_or_url: str, token: str, *, params: dict | None = None) -> dict:
+    """Call one Spotify Web API endpoint and normalize actionable failures."""
+
+    url = (
+        path_or_url
+        if path_or_url.startswith("https://")
+        else f"https://api.spotify.com/v1/{path_or_url.lstrip('/')}"
+    )
+    try:
+        response = requests.get(
+            url,
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=15,
+        )
+    except requests.RequestException as exc:
+        raise SpotifyMetadataError("network_error") from exc
+
+    if response.status_code == 200:
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise SpotifyMetadataError("api_changed", response.status_code) from exc
+        if not isinstance(payload, dict):
+            raise SpotifyMetadataError("api_changed", response.status_code)
+        return payload
+
+    reason = {
+        401: "expired_session",
+        403: "forbidden",
+        404: "not_found",
+        429: "rate_limited",
+    }.get(response.status_code, "api_error")
+    logging.warning(
+        "Spotify metadata request failed: endpoint=%s status=%s",
+        urlparse(url).path,
+        response.status_code,
+    )
+    raise SpotifyMetadataError(reason, response.status_code)
+
+
+def _normalize_track(track: dict, *, album_name: str = "") -> dict | None:
+    """Normalize full or simplified Spotify track objects for UI/search use."""
+
+    if not isinstance(track, dict) or track.get("type", "track") != "track":
+        return None
+    if track.get("is_local"):
+        return None
+
+    track_id = track.get("id")
+    title = track.get("name")
+    if not track_id or not title:
+        return None
+
+    artists = [
+        artist.get("name", "").strip()
+        for artist in track.get("artists") or []
+        if isinstance(artist, dict) and artist.get("name")
+    ]
+    album = track.get("album") if isinstance(track.get("album"), dict) else {}
+    spotify_url = (track.get("external_urls") or {}).get("spotify")
+    if not spotify_url:
+        spotify_url = f"https://open.spotify.com/track/{track_id}"
+
+    return {
+        "id": track_id,
+        "title": str(title),
+        "artists": artists,
+        "artist": ", ".join(artists),
+        "duration_ms": int(track.get("duration_ms") or 0),
+        "album": album.get("name") or album_name,
+        "spotify_url": spotify_url,
+        "explicit": bool(track.get("explicit")),
+    }
+
+
+def get_spotify_track_info(track_id: str) -> dict | None:
+    """Fetch normalized metadata for one Spotify catalog track."""
+
+    token = _get_spotify_token("track", track_id)
+    if not token:
+        return None
+    return _normalize_track(_spotify_api_get(f"tracks/{track_id}", token))
+
+
+def _page_items(page: dict | None) -> list[dict]:
+    if not isinstance(page, dict):
+        return []
+    return [item for item in page.get("items") or [] if isinstance(item, dict)]
+
+
+def _unwrap_playlist_track(item: dict) -> dict | None:
+    candidate = item.get("item") or item.get("track") or item
+    return candidate if isinstance(candidate, dict) else None
+
+
+def get_spotify_collection(
+    url: str,
+    *,
+    max_items: int = SPOTIFY_COLLECTION_MAX_ITEMS,
+) -> dict | None:
+    """Load selectable tracks from a Spotify album or accessible playlist."""
+
+    parsed = parse_spotify_collection_url(url)
+    if not parsed:
+        return None
+    resource_type, resource_id = parsed
+    token = _get_spotify_token(resource_type, resource_id)
+    if not token:
+        return {
+            "kind": resource_type,
+            "id": resource_id,
+            "error": "no_credentials",
+        }
+
+    try:
+        detail = _spotify_api_get(f"{resource_type}s/{resource_id}", token)
+        title = str(detail.get("name") or ("Album" if resource_type == "album" else "Playlista"))
+        if resource_type == "album":
+            owner = ", ".join(
+                artist.get("name", "")
+                for artist in detail.get("artists") or []
+                if isinstance(artist, dict) and artist.get("name")
+            )
+            page = detail.get("tracks")
+        else:
+            owner_data = detail.get("owner") if isinstance(detail.get("owner"), dict) else {}
+            owner = str(owner_data.get("display_name") or owner_data.get("id") or "")
+            page = detail.get("items") or detail.get("tracks")
+            if not isinstance(page, dict):
+                page = _spotify_api_get(
+                    f"playlists/{resource_id}/items",
+                    token,
+                    params={"limit": min(max_items, 50)},
+                )
+
+        total = int(page.get("total") or 0) if isinstance(page, dict) else 0
+        tracks = []
+        while isinstance(page, dict) and len(tracks) < max_items:
+            for wrapper in _page_items(page):
+                raw_track = (
+                    wrapper if resource_type == "album" else _unwrap_playlist_track(wrapper)
+                )
+                normalized = _normalize_track(raw_track or {}, album_name=title)
+                if normalized:
+                    tracks.append(normalized)
+                if len(tracks) >= max_items:
+                    break
+            next_url = page.get("next")
+            if not next_url or len(tracks) >= max_items:
+                break
+            page = _spotify_api_get(next_url, token)
+
+        return {
+            "kind": resource_type,
+            "id": resource_id,
+            "title": title,
+            "owner": owner,
+            "tracks": tracks,
+            "total": total or len(tracks),
+            "truncated": (total or len(tracks)) > len(tracks),
+            "spotify_url": url,
+        }
+    except SpotifyMetadataError as exc:
+        return {
+            "kind": resource_type,
+            "id": resource_id,
+            "error": exc.reason,
+            "status_code": exc.status_code,
+        }
+
+
+def _search_text(value: str) -> str:
+    value = unicodedata.normalize("NFKD", value or "")
+    value = "".join(char for char in value if not unicodedata.combining(char))
+    value = value.casefold()
+    value = re.sub(
+        r"\b(official|audio|video|lyrics?|visuali[sz]er|hd|hq|remaster(?:ed)?)\b",
+        " ",
+        value,
+    )
+    return " ".join(re.findall(r"[a-z0-9]+", value))
+
+
+def _candidate_url(entry: dict) -> str:
+    candidate = entry.get("webpage_url") or entry.get("original_url") or entry.get("url")
+    if isinstance(candidate, str) and candidate.startswith("http"):
+        return candidate
+    video_id = entry.get("id") or candidate
+    return f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
+
+
+def search_youtube_track(
+    title: str,
+    artist: str,
+    duration_sec: int | None = None,
+) -> dict | None:
+    """Find a matching song, preferring YouTube Music catalog uploads."""
+
+    query = f"{artist} - {title} official audio".strip(" -")
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "extract_flat": True,
+        "noplaylist": True,
+        "remote_components": YTDLP_REMOTE_COMPONENTS,
+        "js_runtimes": YTDLP_JS_RUNTIMES,
+    }
+
+    try:
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            results = ydl.extract_info(f"ytsearch10:{query}", download=False)
+    except Exception as exc:
+        logging.error("YouTube Music search failed: %s", exc)
+        return None
+
+    target_title = _search_text(title)
+    target_artist = _search_text(artist)
+    best_match = None
+    best_score = 0.0
+
+    for entry in (results or {}).get("entries", []):
+        if not isinstance(entry, dict):
+            continue
+        candidate_title_raw = str(entry.get("title") or "")
+        channel_raw = str(entry.get("channel") or entry.get("uploader") or "")
+        candidate_title = _search_text(candidate_title_raw)
+        candidate_channel = _search_text(channel_raw.removesuffix(" - Topic"))
+        if not candidate_title:
+            continue
+
+        title_score = SequenceMatcher(None, target_title, candidate_title).ratio()
+        if target_title and target_title in candidate_title:
+            title_score = 1.0
+
+        artist_score = SequenceMatcher(None, target_artist, candidate_channel).ratio()
+        if target_artist and (
+            target_artist in candidate_title or target_artist in candidate_channel
+        ):
+            artist_score = 1.0
+
+        candidate_duration = int(entry.get("duration") or 0)
+        duration_score = 0.0
+        if duration_sec and candidate_duration:
+            difference = abs(duration_sec - candidate_duration)
+            if difference <= 3:
+                duration_score = 1.0
+            elif difference <= 10:
+                duration_score = 0.8
+            elif difference <= 20:
+                duration_score = 0.4
+
+        is_topic = channel_raw.casefold().endswith(" - topic")
+        is_official_audio = "official audio" in candidate_title_raw.casefold()
+        official_bonus = 0.18 if is_topic else (0.1 if is_official_audio else 0.0)
+
+        penalty = 0.0
+        disfavored = ("karaoke", "cover", "nightcore", "slowed", "sped up", "live")
+        target_raw = f"{title} {artist}".casefold()
+        candidate_raw = f"{candidate_title_raw} {channel_raw}".casefold()
+        if any(word in candidate_raw and word not in target_raw for word in disfavored):
+            penalty = 0.3
+
+        score = title_score * 0.48 + artist_score * 0.27 + duration_score * 0.2
+        score += official_bonus - penalty
+        url = _candidate_url(entry)
+        if url and score > best_score:
+            best_score = score
+            best_match = {
+                "url": url,
+                "title": candidate_title_raw,
+                "channel": channel_raw,
+                "duration": candidate_duration or None,
+                "score": score,
+                "source": "youtube_music" if is_topic or is_official_audio else "youtube",
+            }
+
+    if best_match and best_score >= 0.55:
+        logging.info(
+            "YouTube Music match: %r by %s (score %.2f)",
+            best_match["title"],
+            best_match["channel"],
+            best_score,
+        )
+        return best_match
+    return None
+
+
+def resolve_spotify_track_info(track: dict) -> dict | None:
+    """Resolve normalized Spotify track metadata to a downloadable source."""
+
+    youtube = search_youtube_track(
+        track.get("title", ""),
+        track.get("artist", ""),
+        (track.get("duration_ms") or 0) // 1000 or None,
+    )
+    if not youtube:
+        return None
+    return {
+        "source": youtube["source"],
+        "youtube_url": youtube["url"],
+        "title": track.get("title", youtube["title"]),
+        "artist": track.get("artist", ""),
+        "artists": track.get("artists", []),
+        "album": track.get("album", ""),
+        "duration": (track.get("duration_ms") or 0) // 1000 or youtube.get("duration"),
+        "spotify_url": track.get("spotify_url", ""),
+        "matched_title": youtube["title"],
+        "matched_channel": youtube["channel"],
+        "match_score": youtube["score"],
+    }
+
+
+def resolve_spotify_track(url: str) -> dict | None:
+    """Resolve one Spotify track URL through preferred YT Music matching."""
+
+    track_id = parse_spotify_track_url(url)
+    if not track_id:
+        return None
+    try:
+        track = get_spotify_track_info(track_id)
+    except SpotifyMetadataError as exc:
+        return {"source": exc.reason, "track_id": track_id}
+    if not track:
+        return {"source": "no_credentials", "track_id": track_id}
+    resolved = resolve_spotify_track_info(track)
+    if resolved:
+        return resolved
+    return {
+        "source": "not_found",
+        "track_id": track_id,
+        "title": track.get("title", ""),
+        "artist": track.get("artist", ""),
+    }
+
+
 def get_spotify_episode_info(episode_id: str) -> dict | None:
     """Fetches episode metadata from Spotify Web API.
 
-    Requires SPOTIFY_CLIENT_ID and SPOTIFY_CLIENT_SECRET in config.
+    Uses app credentials when configured, otherwise the Spotify cookie jar.
     Returns dict with title, show_name, duration_ms, description, or None.
     """
-    token = _get_spotify_token()
+    token = _get_spotify_token("episode", episode_id)
     if not token:
         return None
 

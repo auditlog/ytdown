@@ -33,6 +33,10 @@ from bot.handlers.command_access import (
     cleanup_command,
     users_command,
 )
+from bot.handlers.spotify_auth_commands import (
+    spotify_login_command,
+    spotify_logout_command,
+)
 from bot.handlers.inbound_media import (
     handle_youtube_link,
     handle_audio_upload,
@@ -40,6 +44,7 @@ from bot.handlers.inbound_media import (
 )
 from bot.telegram_callbacks import handle_callback
 from bot.telegram_commands import stop_command
+from bot.spotify_oauth import start_spotify_oauth_callback_server
 
 # Configure logging
 logging.basicConfig(
@@ -57,6 +62,8 @@ async def set_bot_commands(application):
         BotCommand("history", "Historia pobrań"),
         BotCommand("cleanup", "Usuń stare pliki (>24h)"),
         BotCommand("users", "Zarządzanie użytkownikami"),
+        BotCommand("spotify_login", "Połącz konto Spotify"),
+        BotCommand("spotify_logout", "Odłącz konto Spotify"),
         BotCommand("logout", "Wyloguj się z bota")
     ]
 
@@ -72,6 +79,7 @@ def start_background_services() -> None:
     logging.info("Started automatic file cleanup thread")
 
     monitor_disk_space()
+    start_spotify_oauth_callback_server()
 
 
 def build_application(runtime=None):
@@ -104,6 +112,8 @@ def register_handlers(application) -> None:
     application.add_handler(CommandHandler("users", users_command))
     application.add_handler(CommandHandler("logout", logout_command))
     application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("spotify_login", spotify_login_command))
+    application.add_handler(CommandHandler("spotify_logout", spotify_logout_command))
 
     # Handler for text messages (including PIN and links)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_youtube_link))

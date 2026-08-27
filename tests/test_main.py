@@ -19,6 +19,11 @@ def test_set_bot_commands_configures_menu():
     asyncio.run(app_main.set_bot_commands(app))
 
     app.bot.set_my_commands.assert_called_once()
+    configured = app.bot.set_my_commands.await_args.args[0]
+    assert {command.command for command in configured} >= {
+        "spotify_login",
+        "spotify_logout",
+    }
 
 
 class DummyFilter:
@@ -66,6 +71,7 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
     monkeypatch.setattr(app_main, "ApplicationBuilder", lambda: builder)
     monkeypatch.setattr(app_main, "monitor_disk_space", Mock())
     monkeypatch.setattr(app_main, "periodic_cleanup", Mock())
+    monkeypatch.setattr(app_main, "start_spotify_oauth_callback_server", Mock())
     monkeypatch.setattr(
         app_main,
         "build_app_runtime",

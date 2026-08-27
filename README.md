@@ -5,7 +5,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram, Link
 ## Funkcje
 
 ### Podstawowe
-- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp), Spotify podcasty (via iTunes/YouTube)
+- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp), podcastów Spotify oraz utworów dopasowanych w YT Music
 - Pobieranie video w różnych formatach (1080p, 720p, 480p, 360p)
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
@@ -27,7 +27,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram, Link
 | Instagram | instagram.com | Reels i posty video przez yt-dlp. Zdjęcia i karuzele wymagają dodatkowo `instaloader` oraz `cookies.txt` |
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
 | X (Twitter) | x.com, twitter.com, mobile.twitter.com | Video z tweetów. Treści oznaczone jako Sensitive wymagają cookies.txt |
-| Spotify | open.spotify.com | Odcinki podcastów. Wideo i audio (M4A) prosto ze Spotify — wymaga pliku `spotify_cookies.txt` z ciasteczkiem `sp_dc`, bez kluczy Web API. Starsza ścieżka (audio z iTunes lub YouTube) nadal działa i wymaga SPOTIFY_CLIENT_ID/SECRET |
+| Spotify | open.spotify.com | Odcinki podcastów oraz linki do utworów, albumów i playlist. Muzyka jest dopasowywana do oficjalnych publikacji YT Music/YouTube; natywne wideo podcastów wymaga cookies Spotify |
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik
@@ -231,6 +231,7 @@ Bot automatycznie wykrywa brak cookies i wyświetla odpowiedni komunikat.
 
 Pobieranie wideo i audio prosto ze Spotify korzysta z **osobnego** słoika ciasteczek —
 `spotify_cookies.txt` w głównym katalogu projektu (ścieżkę zmienia klucz `SPOTIFY_COOKIES_FILE`).
+Rozpoznawana jest również typowa nazwa eksportu `open.spotify.com_cookies.txt`.
 Jest celowo oddzielony od `cookies.txt`: ciasteczko `sp_dc` uwierzytelnia odtwarzacz webowy
 Spotify i nie ma nic wspólnego z yt-dlp, więc mieszanie obu plików byłoby mylące.
 
@@ -243,6 +244,34 @@ Ta ścieżka **nie wymaga** `SPOTIFY_CLIENT_ID` ani `SPOTIFY_CLIENT_SECRET` — 
 odcinka pochodzi ze strony embed. Klucze Web API są nadal potrzebne wyłącznie starszej ścieżce
 audio (dopasowanie odcinka w iTunes lub na YouTube), która obsługuje odcinki bez wideo.
 
+Link do pojedynczego utworu wyświetla wybór MP3/M4A po dopasowaniu tytułu, wykonawcy i czasu
+do YT Music. Link do albumu lub playlisty otwiera stronicowane menu wielokrotnego wyboru
+(maksymalnie 500 pozycji). Zaznaczone utwory można wysłać pojedynczo albo spakować jako MP3/M4A
+do archiwów 7z po 50, 100 lub wszystkie naraz. Każde archiwum jest dodatkowo dzielone na
+wolumeny do około 1 GB. Odczyt playlist wymaga jednorazowego połączenia konta właściciela lub
+współpracownika przez Spotify OAuth. Bot nie pobiera chronionego strumienia muzycznego Spotify
+i nie obchodzi DRM.
+
+#### Autoryzacja playlist Spotify (OAuth)
+
+Same cookies `sp_dc` uwierzytelniają odtwarzacz embed, ale nie nadają botowi uprawnień Web API
+do playlist użytkownika. Dla playlist skonfiguruj:
+
+```text
+SPOTIFY_CLIENT_ID=...
+SPOTIFY_CLIENT_SECRET=...
+SPOTIFY_REDIRECT_URI=https://twoj-host.example/spotify/callback
+SPOTIFY_OAUTH_CALLBACK_HOST=127.0.0.1
+SPOTIFY_OAUTH_CALLBACK_PORT=8091
+```
+
+Adres `SPOTIFY_REDIRECT_URI` musi być wpisany identycznie w Redirect URIs aplikacji w Spotify
+Developer Dashboard. Publiczne HTTPS powinno przekazywać tę ścieżkę do lokalnego listenera
+HTTP na skonfigurowanym porcie. Następnie administrator używa `/spotify_login` w Telegramie
+i zatwierdza dwa zakresy tylko do odczytu: `playlist-read-private` oraz
+`playlist-read-collaborative`. Token jest zapisywany w `spotify_oauth.json` z uprawnieniami
+`600` i automatycznie odświeżany. `/spotify_logout` usuwa lokalną autoryzację.
+
 **UWAGA**: `spotify_cookies.txt` to żywe poświadczenie sesji — traktuj go jak hasło.
 Wzorce `*cookies*.txt` są ignorowane przez git.
 
@@ -254,6 +283,7 @@ Te pliki nie są częścią kodu aplikacji i powinny pozostać lokalne:
 - `api_key.md`
 - `cookies.txt`
 - `spotify_cookies.txt`
+- `spotify_oauth.json`
 - `authorized_users.json`
 - `download_history.json`
 - `downloads/`
@@ -331,6 +361,8 @@ python -m pytest tests/test_subtitles.py -v
 | `/history` | Historia pobrań i statystyki użytkownika |
 | `/cleanup` | Ręczne usunięcie starych plików |
 | `/users` | Zarządzanie autoryzowanymi użytkownikami |
+| `/spotify_login` | Połącz konto Spotify do odczytu prywatnych i współdzielonych playlist (administrator) |
+| `/spotify_logout` | Usuń zapisaną autoryzację Spotify (administrator) |
 | `/logout` | Wyloguj się z bota (zakończ sesję) |
 
 ## Używanie bota
@@ -365,6 +397,20 @@ python -m pytest tests/test_subtitles.py -v
 (oraz zainstalowanego `pyrogram`) bot pobierze plik, ale nie będzie miał czym go wysłać i
 poprosi o uzupełnienie konfiguracji. Podział pliku na wolumeny `7z` (dostępny na zwykłej ścieżce
 pobierania, wymaga binarki `7z` w PATH) nie jest jeszcze podpięty do ścieżki Spotify wideo.
+
+### Utwory, albumy i playlisty Spotify
+
+1. Dla playlist prywatnych lub współdzielonych administrator jednorazowo wykonuje
+   `/spotify_login` i zatwierdza dostęp tylko do odczytu.
+2. Wyślij link `open.spotify.com/track/...`, `album/...` albo `playlist/...`.
+3. Dla albumu lub playlisty zaznacz wybrane pozycje albo użyj **Zaznacz wszystkie**.
+4. Wybierz pojedynczą wysyłkę MP3/M4A lub **MP3/M4A → paczki 7z**.
+5. Dla archiwum wybierz 50, 100 albo wszystkie utwory w jednej logicznej paczce. Paczka
+   przekraczająca około 1 GB zostanie automatycznie podzielona na wolumeny `.7z.001`,
+   `.7z.002` itd.; wszystkie wolumeny trzeba zapisać w jednym katalogu i otworzyć `.001`.
+
+Muzyka jest wyszukiwana przede wszystkim w YT Music na podstawie tytułu, wykonawcy i czasu
+trwania. Bot nie pobiera strumienia muzycznego Spotify i nie obchodzi DRM.
 
 ### Transkrypcja plików audio
 1. Wyślij wiadomość głosową, plik audio lub dokument audio (np. notatkę głosową z WhatsApp)
@@ -418,7 +464,9 @@ ytdown/
 │   ├── downloader_metadata.py      # Pobieranie metadanych video (get_video_info)
 │   ├── downloader_subtitles.py     # Napisy: wykrywanie, pobieranie i parsowanie VTT/SRT
 │   ├── downloader_media.py         # Thumbnails, Instagram info, photo download, is_photo_entry
-│   ├── spotify.py                  # Rozwiązywanie Spotify podcastów (iTunes/YouTube)
+│   ├── spotify.py                  # Web API Spotify, metadane kolekcji i dopasowanie YT Music
+│   ├── spotify_oauth.py            # OAuth playlist Spotify, callback, token i odświeżanie
+│   ├── spotify_video.py            # Manifesty i pobieranie natywnego wideo Spotify
 │   ├── mtproto.py                  # Upload dużych plików przez MTProto (Pyrogram)
 │   ├── cli.py                      # Frontend CLI — korzysta z download_service (prepare/execute)
 │   ├── telegram_commands.py        # Cienki wrapper kompatybilności — deleguje do handler layer
@@ -430,6 +478,8 @@ ytdown/
 │   │   ├── inbound_video.py        # Upload i przetwarzanie plików video
 │   │   ├── download_callbacks.py   # Core download flow i progress
 │   │   ├── spotify_callbacks.py    # Pobieranie odcinków Spotify (transkrypcja, podsumowania)
+│   │   ├── spotify_auth_commands.py # /spotify_login i /spotify_logout
+│   │   ├── spotify_collection_callbacks.py # Wybór utworów i paczek 7z Spotify
 │   │   ├── playlist_callbacks.py   # Playlist callback flows (browse, download items)
 │   │   ├── media_extras_callbacks.py # Instagram photos/videos, format list, Spotify summary
 │   │   ├── transcription_callbacks.py # Transkrypcja, napisy, podsumowania
@@ -440,11 +490,14 @@ ytdown/
 │   └── services/                   # Logika biznesowa niezależna od Telegrama
 │       ├── auth_service.py         # PIN, login/logout, security state reset
 │       ├── download_service.py     # Planowanie i wykonywanie pobrań
+│       ├── archive_service.py      # Pakowanie, wysyłka i wznawianie wolumenów 7z
 │       ├── playlist_service.py     # Obsługa playlist (budowanie, pobieranie itemów)
-│       ├── spotify_service.py      # Resolving odcinków Spotify (iTunes/YouTube)
+│       ├── spotify_service.py      # Audio Spotify/YouTube Music i kolekcje
+│       ├── spotify_archive_service.py # Grupowe archiwa 50/100/całość dla Spotify
+│       ├── spotify_video_service.py # Natywne audio/wideo i napisy Spotify
 │       └── transcription_service.py # Artefakty transkrypcji i podsumowań
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~591 testów)
+├── tests/                          # Testy (~979 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
@@ -462,6 +515,9 @@ ytdown/
 │   ├── test_session_store.py       # Testy SessionStore i session cleanup
 │   ├── test_repositories.py        # Testy persystencji JSON
 │   ├── test_spotify.py             # Testy Spotify podcastów
+│   ├── test_spotify_oauth.py       # Testy OAuth, callbacku i odświeżania tokenu
+│   ├── test_spotify_tracks.py      # Testy utworów, albumów, playlist i YT Music
+│   ├── test_spotify_archive_service.py # Testy grupowania i archiwów Spotify
 │   ├── test_downloader.py          # Testy downloadera, walidacji czasu
 │   ├── test_download_history.py    # Testy historii pobrań
 │   ├── test_cli.py                 # Testy CLI

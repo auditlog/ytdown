@@ -51,6 +51,7 @@ from bot.handlers.playlist_callbacks import (
     handle_playlist_callback as _extracted_handle_playlist_callback,
 )
 from bot.handlers.spotify_callbacks import download_spotify_video, transcribe_spotify_video
+from bot.handlers.spotify_collection_callbacks import handle_spotify_collection_callback
 from bot.handlers.transcript_prompt_handlers import handle_transcript_prompt_callback
 from bot.handlers.transcription_callbacks import (
     _handle_subtitle_callback as _extracted_handle_subtitle_callback,
@@ -151,6 +152,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if "castbox.fm" in url:
         url = await asyncio.get_event_loop().run_in_executor(None, normalize_url, url)
+
+    if data.startswith("spc_"):
+        await handle_spotify_collection_callback(update, context, data)
+        return
 
     if data.startswith("spv_"):
         video_data = parse_spotify_video_callback(data)

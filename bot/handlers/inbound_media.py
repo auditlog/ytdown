@@ -16,7 +16,13 @@ from bot.downloader_media import get_instagram_post_info, is_photo_entry
 from bot.download_errors import build_media_error_message
 from bot.downloader_metadata import get_video_info, get_video_info_with_error
 from bot.downloader_playlist import is_playlist_url, is_pure_playlist_url
-from bot.security_limits import FFMPEG_TIMEOUT, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
+from bot.security_limits import (
+    FFMPEG_TIMEOUT,
+    MAX_FILE_SIZE_MB,
+    MAX_PLAYLIST_ITEMS,
+    RATE_LIMIT_REQUESTS,
+    RATE_LIMIT_WINDOW,
+)
 from bot.security_pin import get_block_remaining_seconds, is_user_blocked
 from bot.security_policy import (
     detect_platform,
@@ -33,8 +39,12 @@ from bot.services.playlist_service import build_playlist_message, load_playlist
 from bot.session_store import block_until, user_playlist_data, user_time_ranges, user_urls
 from bot.services.spotify_service import (
     build_episode_caption_data,
+    get_collection_error_message,
     get_resolution_error_message,
+    get_track_resolution_error_message,
+    load_collection,
     resolve_episode,
+    resolve_track,
 )
 from bot.services.spotify_video_service import (
     build_quality_options,
@@ -45,7 +55,9 @@ from bot.spotify_video import SpotifyVideoError
 from bot.handlers.common_ui import (
     build_instagram_photo_keyboard as _build_instagram_photo_keyboard,
     build_main_keyboard as _build_main_keyboard,
+    build_spotify_collection_view,
     build_spotify_episode_keyboard,
+    build_spotify_track_keyboard,
     escape_md,
 )
 from bot.handlers.time_range import parse_time_range as _shared_parse_time_range
@@ -58,7 +70,12 @@ from bot.session_context import (
     clear_session_context_value as _clear_session_context_value,
     clear_session_value as _clear_session_value,
 )
-from bot.spotify import parse_spotify_episode_url
+from bot.spotify import (
+    SPOTIFY_COLLECTION_MAX_ITEMS,
+    parse_spotify_collection_url,
+    parse_spotify_episode_url,
+    parse_spotify_track_url,
+)
 from bot.handlers.inbound_audio import (
     MTPROTO_MAX_FILE_SIZE_MB,
     TELEGRAM_DOWNLOAD_LIMIT_MB,
@@ -99,6 +116,14 @@ async def process_playlist_link(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def _process_spotify_episode(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
     return await extracted_process_spotify_episode(update, context, url)
+
+
+async def _process_spotify_track(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    return await extracted_process_spotify_track(update, context, url)
+
+
+async def _process_spotify_collection(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str):
+    return await extracted_process_spotify_collection(update, context, url)
 
 
 async def process_audio_file(update: Update, context: ContextTypes.DEFAULT_TYPE, audio_info: dict | None = None):
@@ -448,6 +473,127 @@ async def extracted_process_spotify_episode(update: Update, context: ContextType
     )
 
 
+async def extracted_process_spotify_track(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+):
+    """Resolve one Spotify music track to a preferred YT Music candidate."""
+
+    chat_id = update.effective_chat.id
+    progress_message = await update.message.reply_text(
+        "Spotify: odczytywanie utworu i dopasowywanie w YT Music..."
+    )
+    _set_session_value(context, chat_id, "current_url", url, user_urls)
+
+    try:
+        resolved = await resolve_track(url)
+    except Exception:
+        logging.exception("Unexpected failure resolving Spotify track")
+        resolved = {"source": "api_error"}
+
+    error_message = get_track_resolution_error_message(resolved)
+    if error_message:
+        _clear_session_context_value(
+            context, chat_id, "spotify_resolved", legacy_key="spotify_resolved"
+        )
+        await progress_message.edit_text(error_message)
+        return
+
+    _set_session_context_value(
+        context,
+        chat_id,
+        "spotify_resolved",
+        resolved,
+        legacy_key="spotify_resolved",
+    )
+    _clear_session_context_value(
+        context, chat_id, "spotify_video", legacy_key="spotify_video"
+    )
+    _clear_session_context_value(
+        context, chat_id, "spotify_collection", legacy_key="spotify_collection"
+    )
+
+    duration = int(resolved.get("duration") or 0)
+    duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
+    source_label = "YT Music" if resolved.get("source") == "youtube_music" else "YouTube"
+    matched = resolved.get("matched_title", "")
+    matched_line = f"\nDopasowanie: {escape_md(matched)}" if matched else ""
+    await progress_message.edit_text(
+        f"*{escape_md(resolved.get('title', 'Utwór'))}*\n"
+        f"Wykonawca: {escape_md(resolved.get('artist', '') or '?')}\n"
+        f"Czas trwania: {duration_str}\n"
+        f"Źródło audio: {source_label}{matched_line}\n\n"
+        "Wybierz format:",
+        reply_markup=InlineKeyboardMarkup(build_spotify_track_keyboard()),
+        parse_mode="Markdown",
+    )
+
+
+async def extracted_process_spotify_collection(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    url: str,
+):
+    """Load a Spotify album/playlist and show paginated track selection."""
+
+    chat_id = update.effective_chat.id
+    parsed_collection = parse_spotify_collection_url(url)
+    if not parsed_collection:
+        await update.message.reply_text("Nieprawidłowy link do albumu lub playlisty Spotify.")
+        return
+    kind = parsed_collection[0]
+    kind_label = "albumu" if kind == "album" else "playlisty"
+    progress_message = await update.message.reply_text(
+        f"Spotify: pobieranie listy utworów z {kind_label}..."
+    )
+    _set_session_value(context, chat_id, "current_url", url, user_urls)
+
+    try:
+        collection = await load_collection(url, max_items=SPOTIFY_COLLECTION_MAX_ITEMS)
+    except Exception:
+        logging.exception("Unexpected failure loading Spotify collection")
+        collection = {"kind": kind, "error": "api_error"}
+
+    error_message = get_collection_error_message(collection)
+    if error_message:
+        _clear_session_context_value(
+            context, chat_id, "spotify_collection", legacy_key="spotify_collection"
+        )
+        await progress_message.edit_text(error_message)
+        return
+    if not collection.get("tracks"):
+        await progress_message.edit_text("Ta kolekcja nie zawiera dostępnych utworów.")
+        return
+
+    collection = dict(collection)
+    collection["selected"] = []
+    collection["page"] = 0
+    runtime = get_app_runtime(context)
+    collection["archive_available"] = bool(
+        runtime is not None and runtime.archive_available
+    )
+    _set_session_context_value(
+        context,
+        chat_id,
+        "spotify_collection",
+        collection,
+        legacy_key="spotify_collection",
+    )
+    _clear_session_context_value(
+        context, chat_id, "spotify_resolved", legacy_key="spotify_resolved"
+    )
+    _clear_session_context_value(
+        context, chat_id, "spotify_video", legacy_key="spotify_video"
+    )
+    text, keyboard = build_spotify_collection_view(collection)
+    await progress_message.edit_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(keyboard),
+        parse_mode="Markdown",
+    )
+
+
 async def extracted_process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Processes a media link after PIN authorization."""
     chat_id = update.effective_chat.id
@@ -465,6 +611,9 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
     _set_session_context_value(context, chat_id, "platform", platform, legacy_key="platform")
     _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
     _clear_session_context_value(context, chat_id, "spotify_video", legacy_key="spotify_video")
+    _clear_session_context_value(
+        context, chat_id, "spotify_collection", legacy_key="spotify_collection"
+    )
     _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
     _clear_session_context_value(context, chat_id, "subtitle_pending", legacy_key="subtitle_pending")
 
@@ -477,14 +626,20 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
         return
 
     if platform == "spotify":
-        if not parse_spotify_episode_url(url):
-            await update.message.reply_text(
-                "Spotify: obsługiwane są tylko linki do odcinków podcastów.\n\n"
-                "Wyślij link w formacie:\n"
-                "open.spotify.com/episode/..."
-            )
+        if parse_spotify_episode_url(url):
+            await _process_spotify_episode(update, context, url)
             return
-        await _process_spotify_episode(update, context, url)
+        if parse_spotify_track_url(url):
+            await _process_spotify_track(update, context, url)
+            return
+        if parse_spotify_collection_url(url):
+            await _process_spotify_collection(update, context, url)
+            return
+        await update.message.reply_text(
+            "Spotify: obsługiwane są linki do utworów, albumów, playlist "
+            "i odcinków podcastów.\n\n"
+            "Przykład: open.spotify.com/track/..."
+        )
         return
 
     if platform == "instagram":
@@ -618,4 +773,3 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )
-

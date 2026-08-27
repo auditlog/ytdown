@@ -16,6 +16,7 @@ import threading
 from dataclasses import dataclass
 from datetime import datetime
 from collections.abc import Mapping
+
 from bot.repositories import (
     AuthorizedUsersRepository,
     DownloadHistoryRepository,
@@ -34,6 +35,11 @@ DEFAULT_CONFIG = {
     "ADMIN_CHAT_ID": "",
     "SPOTIFY_CLIENT_ID": "",
     "SPOTIFY_CLIENT_SECRET": "",
+    "SPOTIFY_COOKIES_FILE": "",
+    "SPOTIFY_REDIRECT_URI": "",
+    "SPOTIFY_OAUTH_CALLBACK_HOST": "127.0.0.1",
+    "SPOTIFY_OAUTH_CALLBACK_PORT": "8091",
+    "SPOTIFY_OAUTH_TOKEN_FILE": "",
     "TELEGRAM_API_ID": "",
     "TELEGRAM_API_HASH": "",
 }
@@ -159,6 +165,13 @@ def load_config(
         "ADMIN_CHAT_ID": environment.get("ADMIN_CHAT_ID"),
         "TELEGRAM_API_ID": environment.get("TELEGRAM_API_ID"),
         "TELEGRAM_API_HASH": environment.get("TELEGRAM_API_HASH"),
+        "SPOTIFY_CLIENT_ID": environment.get("SPOTIFY_CLIENT_ID"),
+        "SPOTIFY_CLIENT_SECRET": environment.get("SPOTIFY_CLIENT_SECRET"),
+        "SPOTIFY_COOKIES_FILE": environment.get("SPOTIFY_COOKIES_FILE"),
+        "SPOTIFY_REDIRECT_URI": environment.get("SPOTIFY_REDIRECT_URI"),
+        "SPOTIFY_OAUTH_CALLBACK_HOST": environment.get("SPOTIFY_OAUTH_CALLBACK_HOST"),
+        "SPOTIFY_OAUTH_CALLBACK_PORT": environment.get("SPOTIFY_OAUTH_CALLBACK_PORT"),
+        "SPOTIFY_OAUTH_TOKEN_FILE": environment.get("SPOTIFY_OAUTH_TOKEN_FILE"),
     }
 
     for key, value in overrides.items():

@@ -10,6 +10,7 @@ venv/
 api_key.md
 api_key_draft.md
 authorized_users.json
+spotify_oauth.json
 cookies.txt
 cookies_insta.txt
 # Browser cookie exports carry live session tokens for every site in the profile,

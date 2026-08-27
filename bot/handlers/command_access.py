@@ -238,7 +238,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "do pobierania treści z ograniczonym dostępem.\n\n"
         "Komendy administracyjne:\n"
         "- /status - sprawdź przestrzeń dyskową\n"
-        "- /cleanup - usuń stare pliki (>24h)",
+        "- /cleanup - usuń stare pliki (>24h)\n"
+        "- /spotify_login - połącz konto Spotify dla playlist\n"
+        "- /spotify_logout - odłącz konto Spotify",
         parse_mode="Markdown",
     )
 

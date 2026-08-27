@@ -304,7 +304,7 @@ class TestSpotifyTelegramFlow:
         ))
 
         call_text = update.message.reply_text.await_args.args[0]
-        assert "tylko linki do odcinków" in call_text
+        assert "linki do utworów, albumów, playlist" in call_text
 
     def test_keyboard_is_audio_only_for_spotify(self):
         keyboard = tc._build_main_keyboard('spotify')

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import math
 
 from telegram import InlineKeyboardButton
 from telegram.error import BadRequest, NetworkError, TimedOut
@@ -133,6 +134,129 @@ def build_spotify_episode_keyboard(
     ])
 
     return keyboard
+
+
+def build_spotify_track_keyboard() -> list:
+    """Build audio choices for a Spotify music track resolved via YT Music."""
+
+    return [
+        [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
+        [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+    ]
+
+
+def build_spotify_collection_view(
+    collection: dict,
+    *,
+    page_size: int = 8,
+) -> tuple[str, list]:
+    """Render a paginated multi-select album/playlist view."""
+
+    tracks = collection.get("tracks") or []
+    selected = {int(index) for index in collection.get("selected") or []}
+    page_count = max(1, math.ceil(len(tracks) / page_size))
+    page = min(max(int(collection.get("page") or 0), 0), page_count - 1)
+    collection["page"] = page
+
+    kind_label = "Album" if collection.get("kind") == "album" else "Playlista"
+    owner = collection.get("owner", "")
+    owner_line = f"\nAutor: {escape_md(owner)}" if owner else ""
+    loaded = len(tracks)
+    total = int(collection.get("total") or loaded)
+    truncated_line = (
+        f"\nPokazano pierwsze {loaded} z {total} pozycji."
+        if collection.get("truncated")
+        else ""
+    )
+    text = (
+        f"*{kind_label}: {escape_md(collection.get('title', 'Spotify'))}*"
+        f"{owner_line}\nUtwory: {loaded}/{total}"
+        f"\nZaznaczono: {len(selected)}{truncated_line}\n\n"
+        "Wybierz utwory do pobrania z YT Music:"
+    )
+
+    keyboard = []
+    start = page * page_size
+    for index in range(start, min(start + page_size, len(tracks))):
+        track = tracks[index]
+        marker = "✅" if index in selected else "▫️"
+        artist = track.get("artist", "")
+        label = f"{index + 1}. {artist} — {track.get('title', '?')}" if artist else (
+            f"{index + 1}. {track.get('title', '?')}"
+        )
+        if len(label) > 52:
+            label = f"{label[:49]}..."
+        keyboard.append([
+            InlineKeyboardButton(f"{marker} {label}", callback_data=f"spc_t_{index}")
+        ])
+
+    if page_count > 1:
+        navigation = []
+        if page > 0:
+            navigation.append(InlineKeyboardButton("⬅️", callback_data=f"spc_p_{page - 1}"))
+        navigation.append(
+            InlineKeyboardButton(f"{page + 1}/{page_count}", callback_data=f"spc_p_{page}")
+        )
+        if page < page_count - 1:
+            navigation.append(InlineKeyboardButton("➡️", callback_data=f"spc_p_{page + 1}"))
+        keyboard.append(navigation)
+
+    keyboard.append([
+        InlineKeyboardButton("Zaznacz wszystkie", callback_data="spc_all"),
+        InlineKeyboardButton("Wyczyść", callback_data="spc_clear"),
+    ])
+    keyboard.append([
+        InlineKeyboardButton(
+            f"Pobierz MP3 ({len(selected)})",
+            callback_data="spc_dl_mp3",
+        ),
+        InlineKeyboardButton(
+            f"Pobierz M4A ({len(selected)})",
+            callback_data="spc_dl_m4a",
+        ),
+    ])
+    if collection.get("archive_available"):
+        keyboard.append([
+            InlineKeyboardButton(
+                f"MP3 → paczki 7z ({len(selected)})",
+                callback_data="spc_pack_mp3",
+            ),
+            InlineKeyboardButton(
+                f"M4A → paczki 7z ({len(selected)})",
+                callback_data="spc_pack_m4a",
+            ),
+        ])
+    return text, keyboard
+
+
+def build_spotify_archive_batch_view(
+    collection: dict,
+    *,
+    audio_format: str,
+) -> tuple[str, list]:
+    """Ask how many selected Spotify tracks should go into each archive."""
+
+    selected_count = len(collection.get("selected") or [])
+    format_label = audio_format.upper()
+    text = (
+        f"*Spotify → {format_label} → 7z*\n"
+        f"Zaznaczono: {selected_count}\n\n"
+        "Ile utworów ma zawierać jedno archiwum?\n"
+        "Archiwa większe niż około 1 GB zostaną dodatkowo podzielone na wolumeny."
+    )
+    prefix = f"spc_pack_{audio_format}"
+    keyboard = [
+        [
+            InlineKeyboardButton("50", callback_data=f"{prefix}_50"),
+            InlineKeyboardButton("100", callback_data=f"{prefix}_100"),
+            InlineKeyboardButton(
+                f"Całość ({selected_count})",
+                callback_data=f"{prefix}_all",
+            ),
+        ],
+        [InlineKeyboardButton("Wróć", callback_data="spc_pack_back")],
+    ]
+    return text, keyboard
 
 
 def format_bytes(bytes_value):
