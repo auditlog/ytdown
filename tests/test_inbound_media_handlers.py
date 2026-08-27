@@ -112,7 +112,9 @@ class TestProcessYoutubeLink:
         progress_message.edit_text = AsyncMock()
         update.message.reply_text = AsyncMock(return_value=progress_message)
 
-        monkeypatch.setattr(tc, "get_video_info", lambda *_: {"title": "Sample", "duration": 120})
+        monkeypatch.setattr(
+            tc, "get_video_info_with_error", lambda *_: ({"title": "Sample", "duration": 120}, None)
+        )
         monkeypatch.setattr(tc, "estimate_file_size", lambda *_: 10)
 
         _async(tc.process_youtube_link(update, context, "https://youtube.com/watch?v=test"))
@@ -128,13 +130,34 @@ class TestProcessYoutubeLink:
         progress_message.edit_text = AsyncMock()
         update.message.reply_text = AsyncMock(return_value=progress_message)
 
-        monkeypatch.setattr(tc, "get_video_info", lambda *_: None)
+        monkeypatch.setattr(
+            tc, "get_video_info_with_error", lambda *_: (None, "ERROR: something entirely new")
+        )
 
         _async(tc.process_youtube_link(update, context, "https://youtube.com/watch?v=test"))
 
         progress_message.edit_text.assert_awaited_once_with(
             "Wystąpił błąd podczas pobierania informacji o filmie."
         )
+
+    def test_process_youtube_link_explains_age_restriction(self, monkeypatch):
+        update = _make_update(user_id=444, chat_id=444)
+        context = _make_context()
+        progress_message = Mock()
+        progress_message.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=progress_message)
+
+        monkeypatch.setattr(
+            tc,
+            "get_video_info_with_error",
+            lambda *_: (None, "ERROR: [youtube] abc: Sign in to confirm your age."),
+        )
+
+        _async(tc.process_youtube_link(update, context, "https://youtube.com/watch?v=test"))
+
+        message = progress_message.edit_text.await_args.args[0]
+        assert "wiek" in message.lower()
+        assert message != "Wystąpił błąd podczas pobierania informacji o filmie."
 
 
 class TestAudioUpload:
@@ -313,7 +336,7 @@ class TestProcessYoutubeLinkAndStatus:
         progress_message.edit_text = AsyncMock()
         update.message.reply_text = AsyncMock(return_value=progress_message)
 
-        monkeypatch.setattr(tc, "get_video_info", lambda *_: {"title": "Sample", "duration": 120})
+        monkeypatch.setattr(tc, "get_video_info_with_error", lambda *_: ({"title": "Sample", "duration": 120}, None))
         monkeypatch.setattr(tc, "estimate_file_size", lambda *_: tc.MAX_FILE_SIZE_MB + 10)
 
         _async(tc.process_youtube_link(update, context, "https://youtube.com/watch?v=large"))
@@ -379,7 +402,7 @@ class TestMultiPlatformUI:
         progress_message.edit_text = AsyncMock()
         update.message.reply_text = AsyncMock(return_value=progress_message)
 
-        monkeypatch.setattr(tc, "get_video_info", lambda *_: {"title": "TikTok Video", "duration": 30})
+        monkeypatch.setattr(tc, "get_video_info_with_error", lambda *_: ({"title": "TikTok Video", "duration": 30}, None))
         monkeypatch.setattr(tc, "estimate_file_size", lambda *_: 10)
         monkeypatch.setattr(tc, "detect_platform", lambda *_: "tiktok")
 
@@ -402,7 +425,7 @@ class TestMultiPlatformUI:
         progress_message.edit_text = AsyncMock()
         update.message.reply_text = AsyncMock(return_value=progress_message)
 
-        monkeypatch.setattr(tc, "get_video_info", lambda *_: {"title": "YouTube Video", "duration": 600})
+        monkeypatch.setattr(tc, "get_video_info_with_error", lambda *_: ({"title": "YouTube Video", "duration": 600}, None))
         monkeypatch.setattr(tc, "estimate_file_size", lambda *_: 10)
         monkeypatch.setattr(tc, "detect_platform", lambda *_: "youtube")
 
@@ -423,7 +446,7 @@ class TestMultiPlatformUI:
         progress_message.edit_text = AsyncMock()
         update.message.reply_text = AsyncMock(return_value=progress_message)
 
-        monkeypatch.setattr(tc, "get_video_info", lambda *_: {"title": "Podcast Episode", "duration": 0})
+        monkeypatch.setattr(tc, "get_video_info_with_error", lambda *_: ({"title": "Podcast Episode", "duration": 0}, None))
         monkeypatch.setattr(tc, "estimate_file_size", lambda *_: 10)
         monkeypatch.setattr(tc, "detect_platform", lambda *_: "castbox")
         monkeypatch.setattr(tc, "normalize_url", lambda url: url)

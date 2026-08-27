@@ -14,7 +14,7 @@ from datetime import datetime
 
 import yt_dlp
 
-from bot.config import COOKIES_FILE, YTDLP_REMOTE_COMPONENTS
+from bot.config import COOKIES_FILE, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
 from bot.downloader_validation import (
     is_valid_audio_format,
     is_valid_audio_quality,
@@ -49,6 +49,7 @@ def get_basic_ydl_opts(*, include_progress_hooks: bool = False):
         'quiet': True,
         'no_warnings': True,
         'remote_components': YTDLP_REMOTE_COMPONENTS,
+        'js_runtimes': YTDLP_JS_RUNTIMES,
     }
     if include_progress_hooks:
         opts['progress_hooks'] = [progress_hook]
@@ -124,6 +125,7 @@ def download_youtube_video(
             'retries': 3,
             'fragment_retries': 3,
             'remote_components': YTDLP_REMOTE_COMPONENTS,
+            'js_runtimes': YTDLP_JS_RUNTIMES,
         }
         if os.path.exists(COOKIES_FILE):
             ydl_opts['cookiefile'] = COOKIES_FILE

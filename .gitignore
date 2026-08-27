@@ -12,6 +12,12 @@ api_key_draft.md
 authorized_users.json
 cookies.txt
 cookies_insta.txt
+# Browser cookie exports carry live session tokens for every site in the profile,
+# not just YouTube. Catch dated/ad-hoc exports (e.g. 20260811cookies.txt) too.
+*cookie*.txt
+*cookies*.json
+# Backups made by scripts/filter_cookies.py hold the previous live session too.
+*cookie*.bak
 
 # Runtime data
 downloads/

@@ -11,6 +11,7 @@ Handles loading and validation of configuration from various sources:
 import os
 import re
 import logging
+import shutil
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -53,6 +54,27 @@ SPOTIFY_COOKIES_FILE = os.path.join(
 
 # Remote components for yt-dlp YouTube JS challenge solving (signature + n-parameter)
 YTDLP_REMOTE_COMPONENTS = ['ejs:github']
+
+# yt-dlp needs a JavaScript runtime to solve YouTube's "n challenge"; without one
+# extraction degrades to "Only images are available for download". Only deno is
+# enabled by default, so a host that ships node instead must say so explicitly.
+# Order mirrors yt-dlp's own priority. NOTE: quickjs is omitted because its binary
+# is named "qjs", so probing for "quickjs" would never match anyway.
+_JS_RUNTIME_PREFERENCE = ('deno', 'node', 'bun')
+
+
+def detect_js_runtimes(which=shutil.which) -> dict[str, dict]:
+    """Return the first available JS runtime in yt-dlp's option format."""
+
+    for runtime in _JS_RUNTIME_PREFERENCE:
+        if which(runtime):
+            return {runtime: {}}
+    # Keep yt-dlp's own default rather than {} - an empty dict disables every
+    # runtime, silencing the warning that tells the user what to install.
+    return {'deno': {}}
+
+
+YTDLP_JS_RUNTIMES = detect_js_runtimes()
 
 # Path to authorized users file
 AUTHORIZED_USERS_FILE = "authorized_users.json"

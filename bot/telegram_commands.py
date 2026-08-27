@@ -18,7 +18,7 @@ from bot.jobs import job_registry
 from bot.cleanup import cleanup_old_files, get_disk_usage
 from bot.config import DOWNLOAD_PATH, get_download_stats, get_runtime_value
 from bot.downloader_media import get_instagram_post_info, is_photo_entry
-from bot.downloader_metadata import get_video_info
+from bot.downloader_metadata import get_video_info, get_video_info_with_error
 from bot.downloader_playlist import is_playlist_url, is_pure_playlist_url
 from bot.handlers import command_access as _command_access_module
 from bot.handlers import inbound_media as _inbound_media_module
@@ -154,6 +154,7 @@ def _sync_inbound_media_dependencies() -> None:
     _inbound_media_module.is_user_blocked = is_user_blocked
     _inbound_media_module.get_block_remaining_seconds = get_block_remaining_seconds
     _inbound_media_module.get_video_info = get_video_info
+    _inbound_media_module.get_video_info_with_error = get_video_info_with_error
     _inbound_media_module.is_playlist_url = is_playlist_url
     _inbound_media_module.is_pure_playlist_url = is_pure_playlist_url
     _inbound_media_module.get_instagram_post_info = get_instagram_post_info

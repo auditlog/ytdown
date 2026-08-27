@@ -13,7 +13,8 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.downloader_media import get_instagram_post_info, is_photo_entry
-from bot.downloader_metadata import get_video_info
+from bot.download_errors import build_media_error_message
+from bot.downloader_metadata import get_video_info, get_video_info_with_error
 from bot.downloader_playlist import is_playlist_url, is_pure_playlist_url
 from bot.security_limits import FFMPEG_TIMEOUT, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
 from bot.security_pin import get_block_remaining_seconds, is_user_blocked
@@ -572,9 +573,11 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
 
     media_name = get_media_label(platform)
     progress_message = await update.message.reply_text(f"Pobieranie informacji o {media_name}...")
-    info = get_video_info(url)
+    info, fetch_error = get_video_info_with_error(url)
     if not info:
-        await progress_message.edit_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
+        # Surface why it failed (age gate, expired cookies, geo block, ...) instead of
+        # one generic sentence that leaves the user guessing whether to retry.
+        await progress_message.edit_text(build_media_error_message(media_name, fetch_error))
         return
 
     title = info.get("title", "Nieznany tytuł")
