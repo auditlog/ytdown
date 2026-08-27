@@ -1,4 +1,4 @@
-"""Spotify episode download callback flows."""
+"""Spotify audio and native video download callback flows."""
 
 from __future__ import annotations
 
@@ -224,16 +224,18 @@ async def download_spotify_resolved(
     summary: bool = False,
     summary_type: int | None = None,
 ):
-    """Download a resolved Spotify episode, optionally transcribe and summarise."""
+    """Download resolved Spotify audio, optionally transcribe and summarise."""
 
     query = update.callback_query
     chat_id = update.effective_chat.id
-    title = resolved.get("title", "Podcast episode")
+    title = resolved.get("title", "Spotify audio")
+    artist = resolved.get("artist", "")
+    is_music_track = bool(artist or resolved.get("spotify_url"))
 
     async def update_status(text):
         await safe_edit_message(query, text)
 
-    await update_status("Pobieranie odcinka podcastu...")
+    await update_status("Pobieranie utworu..." if is_music_track else "Pobieranie odcinka podcastu...")
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     os.makedirs(chat_download_path, exist_ok=True)
 
@@ -241,7 +243,13 @@ async def download_spotify_resolved(
     downloaded_file_path = None
 
     try:
-        await update_status("Pobieranie audio z iTunes..." if source == "itunes" else "Pobieranie audio z YouTube...")
+        if source == "itunes":
+            source_label = "iTunes"
+        elif source == "youtube_music":
+            source_label = "YT Music"
+        else:
+            source_label = "YouTube"
+        await update_status(f"Pobieranie audio z {source_label}...")
         downloaded_file_path = await download_resolved_audio(
             resolved=resolved,
             audio_format=audio_format,
@@ -250,7 +258,7 @@ async def download_spotify_resolved(
         )
         if not downloaded_file_path:
             await update_status("Nie udało się pobrać pliku audio.")
-            return
+            return False
 
         file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
 
@@ -268,6 +276,7 @@ async def download_spotify_resolved(
                     chat_id=chat_id,
                     audio=file_obj,
                     title=title,
+                    performer=artist or None,
                     caption=title[:200],
                     read_timeout=120,
                     write_timeout=120,
@@ -283,9 +292,11 @@ async def download_spotify_resolved(
             _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
 
         await update_status(f"Gotowe: {title}")
+        return True
     except Exception as exc:
-        logging.error("Error downloading Spotify episode: %s", exc)
+        logging.error("Error downloading Spotify audio: %s", exc)
         await update_status(f"Błąd pobierania: {str(exc)[:200]}")
+        return False
     finally:
         if downloaded_file_path and os.path.exists(downloaded_file_path):
             try:

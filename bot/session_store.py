@@ -53,6 +53,8 @@ class ArchivePartialState:
     format_choice: str
     use_mtproto: bool
     created_at: Any       # datetime
+    files_per_archive: int | None = None
+    volume_size_mb: int | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +88,7 @@ class SessionState:
     platform: str | None = None
     spotify_resolved: dict[str, Any] | None = None
     spotify_video: dict[str, Any] | None = None
+    spotify_collection: dict[str, Any] | None = None
     instagram_carousel: dict[str, Any] | None = None
     audio_file_path: str | None = None
     audio_file_title: str | None = None
@@ -226,6 +229,7 @@ class SessionStore:
             and session.platform is None
             and session.spotify_resolved is None
             and session.spotify_video is None
+            and session.spotify_collection is None
             and session.instagram_carousel is None
             and session.audio_file_path is None
             and session.audio_file_title is None

@@ -34,6 +34,11 @@ MAX_PLAYLIST_ITEMS_EXPANDED = 50
 # for 7z header overhead and per-message metadata.
 MTPROTO_VOLUME_SIZE_MB = 1900
 
+# Spotify collection archives use smaller volumes than the transport maximum.
+# This keeps each download manageable on a phone while still reducing hundreds
+# of individual Telegram messages to a handful of archive files.
+SPOTIFY_ARCHIVE_VOLUME_SIZE_MB = 1000
+
 # Bot API upload caps at 50 MB; 49 MB volume keeps slack for the wrapper.
 BOTAPI_VOLUME_SIZE_MB = 49
 

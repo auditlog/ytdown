@@ -10,7 +10,6 @@ from typing import Any
 
 import requests
 
-from bot.config import SPOTIFY_COOKIES_FILE
 from bot.downloader_subtitles import parse_subtitle_file
 from bot.downloader_validation import sanitize_filename
 from bot.services.transcription_service import save_transcript_markdown
@@ -134,7 +133,7 @@ def resolve_video_episode(
     if not episode_id:
         return None
 
-    cookie = load_spotify_cookie(cookies_file or SPOTIFY_COOKIES_FILE)
+    cookie = load_spotify_cookie(cookies_file)
     if not cookie:
         raise SpotifyVideoError("no_cookie")
 

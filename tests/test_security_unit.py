@@ -395,6 +395,11 @@ def test_archive_volume_size_constants_defined():
     assert security_limits.MTPROTO_VOLUME_SIZE_MB == 1900
     assert security_limits.BOTAPI_VOLUME_SIZE_MB == 49
     assert security_limits.BOTAPI_VOLUME_SIZE_MB < security_limits.TELEGRAM_UPLOAD_LIMIT_MB
+    assert security_limits.SPOTIFY_ARCHIVE_VOLUME_SIZE_MB == 1000
+    assert (
+        security_limits.SPOTIFY_ARCHIVE_VOLUME_SIZE_MB
+        < security_limits.MTPROTO_VOLUME_SIZE_MB
+    )
 
 
 def test_archive_item_size_limit_defined():

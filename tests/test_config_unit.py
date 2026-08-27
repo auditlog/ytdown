@@ -26,6 +26,11 @@ def test_load_config_uses_environment_over_file(tmp_path):
             "GROQ_API_KEY": "env_groq",
             "PIN_CODE": "12341234",
             "CLAUDE_API_KEY": "env_claude",
+            "SPOTIFY_CLIENT_ID": "spotify_client",
+            "SPOTIFY_CLIENT_SECRET": "spotify_secret",
+            "SPOTIFY_COOKIES_FILE": "browser_cookies.txt",
+            "SPOTIFY_REDIRECT_URI": "https://example.test/spotify/callback",
+            "SPOTIFY_OAUTH_CALLBACK_PORT": "8091",
         },
         load_env_file=False,
     )
@@ -34,6 +39,11 @@ def test_load_config_uses_environment_over_file(tmp_path):
     assert loaded["GROQ_API_KEY"] == "env_groq"
     assert loaded["PIN_CODE"] == "12341234"
     assert loaded["CLAUDE_API_KEY"] == "env_claude"
+    assert loaded["SPOTIFY_CLIENT_ID"] == "spotify_client"
+    assert loaded["SPOTIFY_CLIENT_SECRET"] == "spotify_secret"
+    assert loaded["SPOTIFY_COOKIES_FILE"] == "browser_cookies.txt"
+    assert loaded["SPOTIFY_REDIRECT_URI"] == "https://example.test/spotify/callback"
+    assert loaded["SPOTIFY_OAUTH_CALLBACK_PORT"] == "8091"
 
 
 def test_load_config_ignores_invalid_config_lines(tmp_path):

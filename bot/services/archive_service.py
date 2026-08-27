@@ -358,7 +358,7 @@ async def execute_playlist_archive_flow(
         )
 
         if cancellation.event.is_set():
-            await _save_partial_state_after_cancel(
+            await save_partial_archive_after_cancel(
                 update, chat_id, workspace, downloaded, title,
                 media_type, format_choice, use_mtproto, total,
             )
@@ -385,7 +385,7 @@ async def execute_playlist_archive_flow(
 
         if cancellation.event.is_set():
             # User cancelled during pack — pack_to_volumes already cleaned partials.
-            await _save_partial_state_after_cancel(
+            await save_partial_archive_after_cancel(
                 update, chat_id, workspace, downloaded, title,
                 media_type, format_choice, use_mtproto, total,
             )
@@ -459,7 +459,7 @@ async def execute_playlist_archive_flow(
         job_registry.unregister(cancellation.job_id)
 
 
-async def _save_partial_state_after_cancel(
+async def save_partial_archive_after_cancel(
     update,
     chat_id: int,
     workspace: Path,
@@ -469,6 +469,9 @@ async def _save_partial_state_after_cancel(
     format_choice: str,
     use_mtproto: bool,
     total: int,
+    *,
+    files_per_archive: int | None = None,
+    volume_size_mb: int | None = None,
 ) -> None:
     """Persist ArchivePartialState and edit the status message with recovery buttons."""
 
@@ -491,6 +494,8 @@ async def _save_partial_state_after_cancel(
         format_choice=format_choice,
         use_mtproto=use_mtproto,
         created_at=datetime.now(),
+        files_per_archive=files_per_archive,
+        volume_size_mb=volume_size_mb,
     )
     bucket = partial_archive_workspaces.get(chat_id) or {}
     token = secrets.token_hex(4)
@@ -543,7 +548,7 @@ async def execute_partial_archive_flow(
         return
 
     use_mtproto = mtproto_unavailability_reason() is None
-    volume_size_mb = volume_size_for(use_mtproto)
+    volume_size_mb = state.volume_size_mb or volume_size_for(use_mtproto)
 
     descriptor = JobDescriptor(
         job_id="", chat_id=chat_id, kind="archive_pack",
@@ -561,10 +566,26 @@ async def execute_partial_archive_flow(
         dest_basename = state.workspace / compute_archive_basename(
             f"{slug}_{state.media_type}_{state.format_choice}", datetime.now()
         )
-        volumes = await pack_to_volumes(
-            state.downloaded, dest_basename, volume_size_mb,
-            cancellation=cancellation,
-        )
+        batch_size = state.files_per_archive or len(state.downloaded)
+        groups = [
+            state.downloaded[index:index + batch_size]
+            for index in range(0, len(state.downloaded), batch_size)
+        ]
+        volumes: list[Path] = []
+        for group_index, group in enumerate(groups):
+            group_dest = dest_basename
+            if len(groups) > 1:
+                start = group_index * batch_size + 1
+                end = start + len(group) - 1
+                group_dest = Path(f"{dest_basename}_{start:03d}-{end:03d}")
+            volumes.extend(
+                await pack_to_volumes(
+                    group,
+                    group_dest,
+                    volume_size_mb,
+                    cancellation=cancellation,
+                )
+            )
 
         if cancellation.event.is_set():
             await status("⏹ Zatrzymano w trakcie pakowania.")

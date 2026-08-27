@@ -402,6 +402,7 @@ def test_execute_playlist_archive_flow_happy_path(tmp_path, monkeypatch):
 
     session_store.reset()
     monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(archive_service, "is_7z_available", lambda: True)
 
     async def fake_download_into(workspace, entries, **kwargs):
         path1 = workspace / "a.mp3"
@@ -574,6 +575,7 @@ def test_execute_playlist_archive_flow_registers_and_unregisters(tmp_path, monke
 
     session_store.reset()
     monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(archive_service, "is_7z_available", lambda: True)
 
     test_registry = JobRegistry()
     monkeypatch.setattr(archive_service, "job_registry", test_registry)
@@ -628,6 +630,7 @@ def test_execute_playlist_archive_flow_captures_partial_state_on_cancel(tmp_path
 
     session_store.reset()
     monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(archive_service, "is_7z_available", lambda: True)
 
     test_registry = JobRegistry()
     monkeypatch.setattr(archive_service, "job_registry", test_registry)
@@ -749,6 +752,7 @@ def test_execute_partial_archive_flow_packs_remaining(tmp_path, monkeypatch):
 
     session_store.reset()
     monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(archive_service, "is_7z_available", lambda: True)
 
     workspace = tmp_path / "ws"
     workspace.mkdir()

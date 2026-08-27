@@ -28,6 +28,19 @@ def test_load_spotify_cookie_reads_sp_dc(tmp_path):
     assert sv.load_spotify_cookie(str(jar)) == "AQDKCX3CHO2D"
 
 
+def test_load_spotify_cookie_discovers_browser_export_name(tmp_path, monkeypatch):
+    jar = tmp_path / "open.spotify.com_cookies.txt"
+    jar.write_text(
+        ".spotify.com\tTRUE\t/\tTRUE\t1819277774\tsp_dc\tSESSION_TOKEN\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(sv, "__file__", str(tmp_path / "bot" / "spotify_video.py"))
+    monkeypatch.setattr(sv, "SPOTIFY_COOKIES_FILE", str(tmp_path / "missing.txt"))
+    monkeypatch.setattr(sv, "get_runtime_value", lambda key, default="": default)
+
+    assert sv.load_spotify_cookie() == "SESSION_TOKEN"
+
+
 def test_load_spotify_cookie_returns_none_for_missing_file(tmp_path):
     assert sv.load_spotify_cookie(str(tmp_path / "absent.txt")) is None
 

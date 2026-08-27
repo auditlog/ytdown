@@ -25,7 +25,7 @@ from dataclasses import dataclass
 
 import requests
 
-from bot.config import SPOTIFY_COOKIES_FILE
+from bot.config import SPOTIFY_COOKIES_FILE, get_runtime_value
 
 
 class SpotifyVideoError(Exception):
@@ -36,37 +36,67 @@ class SpotifyVideoCancelled(Exception):
     """Raised when a download is aborted through a JobCancellation handle."""
 
 
-def load_spotify_cookie(cookies_file: str = SPOTIFY_COOKIES_FILE) -> str | None:
+def _spotify_cookie_candidates(cookies_file: str | None) -> list[str]:
+    """Return explicit or conventional Spotify cookie-jar paths.
+
+    Browser exporters commonly produce ``open.spotify.com_cookies.txt`` while
+    the project documentation uses ``spotify_cookies.txt``.  An explicit path
+    is never widened to other files; automatic discovery is used only when the
+    caller did not provide one.
+    """
+
+    if cookies_file:
+        return [os.path.abspath(os.path.expanduser(cookies_file))]
+
+    configured = get_runtime_value("SPOTIFY_COOKIES_FILE", "")
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    candidates = []
+    if configured:
+        configured_path = os.path.expanduser(configured)
+        if not os.path.isabs(configured_path):
+            configured_path = os.path.join(project_root, configured_path)
+        candidates.append(os.path.abspath(configured_path))
+    candidates.extend(
+        [
+            SPOTIFY_COOKIES_FILE,
+            os.path.join(project_root, "open.spotify.com_cookies.txt"),
+        ]
+    )
+    return list(dict.fromkeys(candidates))
+
+
+def load_spotify_cookie(cookies_file: str | None = None) -> str | None:
     """Extract the sp_dc value from a Netscape-format cookie jar.
 
     Returns None when the file is absent, unreadable, or carries no sp_dc
     entry — callers turn that into a user-facing setup hint.
     """
 
-    if not cookies_file or not os.path.exists(cookies_file):
-        return None
-
-    try:
-        with open(cookies_file, encoding="utf-8") as file_obj:
-            for line in file_obj:
-                if line.startswith("#"):
-                    continue
-                fields = line.rstrip("\n").split("\t")
-                # Netscape format: domain, flag, path, secure, expiry, name, value
-                if len(fields) >= 7 and fields[5] == "sp_dc":
-                    return fields[6] or None
-    except (OSError, UnicodeDecodeError) as exc:
-        # UnicodeDecodeError (a ValueError, not an OSError) is what a jar
-        # saved in another encoding raises on read. Either way the file is
-        # unusable, which is exactly what returning None already means --
-        # left uncaught it escaped every caller above and froze the user's
-        # status message instead of showing the cookie-export instructions.
-        logging.error("Cannot read Spotify cookie jar %s: %s", cookies_file, exc)
+    for candidate in _spotify_cookie_candidates(cookies_file):
+        if not os.path.exists(candidate):
+            continue
+        try:
+            with open(candidate, encoding="utf-8") as file_obj:
+                for line in file_obj:
+                    if line.startswith("#"):
+                        continue
+                    fields = line.rstrip("\n").split("\t")
+                    # Netscape format: domain, flag, path, secure, expiry, name, value
+                    if len(fields) >= 7 and fields[5] == "sp_dc":
+                        return fields[6] or None
+        except (OSError, UnicodeDecodeError) as exc:
+            # UnicodeDecodeError (a ValueError, not an OSError) is what a jar
+            # saved in another encoding raises on read. Either way the file is
+            # unusable, which is exactly what returning None already means --
+            # left uncaught it escaped every caller above and froze the user's
+            # status message instead of showing the cookie-export instructions.
+            logging.error("Cannot read Spotify cookie jar %s: %s", candidate, exc)
 
     return None
 
 
 EMBED_URL = "https://open.spotify.com/embed/episode/{episode_id}"
+GENERIC_EMBED_URL = "https://open.spotify.com/embed/{resource_type}/{resource_id}"
 
 # Spotify serves different payloads to non-browser agents; a realistic UA keeps
 # the embed page rendering the __NEXT_DATA__ blob we parse.
@@ -79,6 +109,44 @@ _NEXT_DATA_PATTERN = re.compile(
     r'<script id="__NEXT_DATA__" type="application/json">(.*?)</script>',
     re.DOTALL,
 )
+
+
+def parse_embed_access_token(html: str) -> str | None:
+    """Extract the web-player access token from a Spotify embed page."""
+
+    match = _NEXT_DATA_PATTERN.search(html)
+    if not match:
+        return None
+    try:
+        payload = json.loads(match.group(1))
+        token = payload["props"]["pageProps"]["state"]["settings"]["session"][
+            "accessToken"
+        ]
+    except (ValueError, KeyError, TypeError):
+        return None
+    return token if isinstance(token, str) and token else None
+
+
+def fetch_embed_access_token(
+    resource_type: str,
+    resource_id: str,
+    sp_dc: str,
+) -> str | None:
+    """Fetch a user-scoped web token for track/album/playlist metadata calls."""
+
+    if resource_type not in {"track", "album", "playlist", "episode"}:
+        return None
+    response = requests.get(
+        GENERIC_EMBED_URL.format(
+            resource_type=resource_type,
+            resource_id=resource_id,
+        ),
+        headers={"User-Agent": BROWSER_USER_AGENT},
+        cookies={"sp_dc": sp_dc},
+        timeout=25,
+    )
+    response.raise_for_status()
+    return parse_embed_access_token(response.text)
 
 
 def _require_int(value, field: str) -> int:
