@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import shutil
+import tempfile
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -24,7 +25,8 @@ from bot.handlers.common_ui import (
     safe_edit_message,
     send_long_message,
 )
-from bot.security_limits import MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
+from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
+from bot.download_budget import DownloadLimitError
 from bot.security_policy import get_media_label, normalize_url
 from bot.session_context import (
     clear_session_context_value as _clear_session_context_value,
@@ -341,6 +343,8 @@ async def download_file(
     chat_id = update.effective_chat.id
     title = "Unknown"
     success_recorded = False
+    download_workspace = None
+    archive_owns_workspace = False
 
     descriptor = JobDescriptor(
         job_id="",
@@ -360,6 +364,9 @@ async def download_file(
 
         chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
         os.makedirs(chat_download_path, exist_ok=True)
+        if not transcribe:
+            download_workspace = tempfile.mkdtemp(prefix="dl_", dir=chat_download_path)
+            chat_download_path = download_workspace
 
         time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
         try:
@@ -389,11 +396,13 @@ async def download_file(
         try:
             await update_status(f"Sprawdzanie rozmiaru pliku...\n({duration_str})")
             size_mb = await asyncio.get_event_loop().run_in_executor(_executor, lambda: estimate_download_size(plan))
-            if not ensure_size_within_limit(size_mb, max_size_mb=MAX_FILE_SIZE_MB):
+            archive_available = not transcribe and is_7z_available()
+            download_limit_mb = MAX_ARCHIVE_ITEM_SIZE_MB if archive_available else MAX_FILE_SIZE_MB
+            if not ensure_size_within_limit(size_mb, max_size_mb=download_limit_mb):
                 await update_status(
                     f"Wybrany format jest zbyt duży!\n\n"
                     f"Rozmiar: {size_mb:.1f} MB\n"
-                    f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
+                    f"Maksymalny dozwolony rozmiar: {download_limit_mb} MiB\n\n"
                     f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
                 )
                 return
@@ -412,6 +421,7 @@ async def download_file(
                 format_bytes=format_bytes,
                 format_eta=format_eta,
                 cancellation=cancellation,
+                max_file_bytes=download_limit_mb * 1024**2,
             )
             downloaded_file_path = download_result.file_path
             file_size_mb = download_result.file_size_mb
@@ -587,6 +597,7 @@ async def download_file(
                         file_size_mb=file_size_mb,
                     )
                     # The archive flow now owns the file; skip cleanup.
+                    archive_owns_workspace = True
                     success_recorded = True
                     return
 
@@ -664,7 +675,9 @@ async def download_file(
             logging.error("Error in download_file: %s", exc)
 
             error_str = str(exc).lower()
-            if any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
+            if isinstance(exc, DownloadLimitError):
+                await update_status(str(exc))
+            elif any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
                 platform_name = _get_session_context_value(
                     context, chat_id, "platform", legacy_key="platform"
                 )
@@ -684,6 +697,8 @@ async def download_file(
                 await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
     finally:
         job_registry.unregister(cancellation.job_id)
+        if download_workspace and not archive_owns_workspace:
+            shutil.rmtree(download_workspace, ignore_errors=True)
 
 
 async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):

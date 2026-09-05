@@ -10,6 +10,84 @@ from bot.handlers import time_range_callbacks as _trc
 from tests.telegram_callbacks_support import _make_context, _make_update
 
 
+@pytest.mark.parametrize(
+    "estimate, seven_zip, transcribe, should_download",
+    [(3000, True, False, True), (None, True, False, True),
+     (11000, True, False, False), (3000, False, False, False), (3000, True, True, False)],
+)
+def test_large_single_download_can_reach_archive_offer(
+    tmp_path, monkeypatch, estimate, seven_zip, transcribe, should_download,
+):
+    from types import SimpleNamespace
+    from pathlib import Path
+    from bot.handlers import download_callbacks as dc
+
+    monkeypatch.setattr(dc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(dc, "is_7z_available", lambda: seven_zip)
+    monkeypatch.setattr(dc, "_mtproto_unavailability_reason", lambda: None)
+    monkeypatch.setattr(dc, "get_media_label", lambda _: "filmie")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: None)
+    monkeypatch.setattr(dc, "record_download_for", mock.Mock())
+    monkeypatch.setattr(dc, "estimate_download_size", lambda _: estimate)
+
+    def plan(**kwargs):
+        return SimpleNamespace(info={"title": "Movie"}, title="Movie", duration_str="1:00",
+                               sanitized_title="Movie", chat_download_path=kwargs["chat_download_path"])
+
+    async def download(plan, **kwargs):
+        assert kwargs["max_file_bytes"] == 10240 * 1024**2
+        file = Path(plan.chat_download_path) / "movie.mp4"
+        file.write_bytes(b"stand-in for a large video")
+        return SimpleNamespace(file_path=str(file), file_size_mb=3000)
+
+    fetch = mock.AsyncMock(side_effect=download)
+    offer = mock.AsyncMock()
+    monkeypatch.setattr(dc, "prepare_download_plan", plan)
+    monkeypatch.setattr(dc, "execute_download", fetch)
+    monkeypatch.setattr(dc, "_offer_archive_or_cancel", offer)
+    update, context = _make_update("dl_video_best"), _make_context()
+    asyncio.run(dc.download_file(update, context, "video", "best", "https://youtube.com/", transcribe=transcribe))
+    assert fetch.await_count == int(should_download)
+    assert offer.await_count == int(should_download)
+    if should_download:
+        assert Path(offer.await_args.kwargs["file_path"]).exists()
+    else:
+        assert not list(tmp_path.glob("*/dl_*"))
+
+
+def test_size_failure_removes_only_current_download_workspace(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from pathlib import Path
+    from bot.download_budget import DownloadLimitError
+    from bot.handlers import download_callbacks as dc
+
+    chat = tmp_path / "123"
+    chat.mkdir()
+    previous = chat / "keep.mp4"
+    previous.write_bytes(b"existing file")
+    monkeypatch.setattr(dc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(dc, "get_media_label", lambda _: "filmie")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: None)
+    monkeypatch.setattr(dc, "record_download_for", mock.Mock())
+    monkeypatch.setattr(dc, "estimate_download_size", lambda _: None)
+
+    def plan(**kwargs):
+        return SimpleNamespace(info={}, title="Movie", duration_str="1:00", sanitized_title="Movie",
+                               chat_download_path=kwargs["chat_download_path"])
+
+    async def download(plan, **kwargs):
+        (Path(plan.chat_download_path) / "movie.mp4.part").write_bytes(b"partial")
+        raise DownloadLimitError("Pobierany plik przekroczył dozwolony limit rozmiaru.")
+
+    monkeypatch.setattr(dc, "prepare_download_plan", plan)
+    monkeypatch.setattr(dc, "execute_download", download)
+    update, context = _make_update("dl_video_best"), _make_context()
+    asyncio.run(dc.download_file(update, context, "video", "best", "https://youtube.com/"))
+    assert previous.read_bytes() == b"existing file"
+    assert not list(chat.glob("dl_*"))
+    assert "limit rozmiaru" in update.callback_query.edit_message_text.await_args.args[0]
+
+
 def test_handle_callback_video_and_audio_download_data_dispatch():
     tc.user_urls[555] = "https://www.youtube.com/watch?v=abc"
 

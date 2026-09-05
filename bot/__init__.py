@@ -1,14 +1,6 @@
-"""Intentional top-level package surface for the Telegram bot project."""
+"""Public modules, imported on demand so non-Telegram entry points stay lightweight."""
 
-from bot import cli
-from bot import config
-from bot import runtime
-from bot import security
-from bot import session_context
-from bot import session_store
-from bot import telegram_callbacks
-from bot import telegram_commands
-from bot import transcription
+from importlib import import_module
 
 __all__ = [
     "cli",
@@ -21,3 +13,11 @@ __all__ = [
     "telegram_commands",
     "transcription",
 ]
+
+
+def __getattr__(name):
+    if name in __all__:
+        module = import_module(f"bot.{name}")
+        globals()[name] = module
+        return module
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

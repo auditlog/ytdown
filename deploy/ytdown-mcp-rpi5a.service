@@ -1,0 +1,33 @@
+[Unit]
+Description=Private ytdown MCP server on rpi5a
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=pi
+Group=pi
+WorkingDirectory=/home/pi/ytdown-mcp
+ExecStart=/home/pi/ytdown-mcp/.venv-mcp/bin/python -m bot.mcp --transport streamable-http --port 8092 --data-dir /home/pi/.local/state/ytdown/mcp --allowed-host rpi5a.tail3e20a0.ts.net:9443
+EnvironmentFile=/home/pi/.config/ytdown/mcp.env
+Environment=PATH=/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=YTDOWN_MCP_MAX_ACTIVE=1
+Environment=XDG_CACHE_HOME=/home/pi/.local/state/ytdown/mcp/cache
+UMask=0077
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+KillMode=control-group
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=true
+ReadWritePaths=/home/pi/.local/state/ytdown/mcp
+MemoryMax=2G
+CPUQuota=200%
+TasksMax=128
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

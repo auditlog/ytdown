@@ -38,6 +38,9 @@ def build_main_keyboard(platform: str, large_file: bool = False) -> list:
 
     if large_file:
         keyboard = [
+            [InlineKeyboardButton("Video — maksymalna rozdzielczość źródła", callback_data="dl_video_best")],
+            [InlineKeyboardButton("Video 2160p (4K)", callback_data="dl_video_2160p")],
+            [InlineKeyboardButton("Video 1440p (QHD)", callback_data="dl_video_1440p")],
             [InlineKeyboardButton("Video 1080p (Full HD)", callback_data="dl_video_1080p")],
             [InlineKeyboardButton("Video 720p (HD)", callback_data="dl_video_720p")],
             [InlineKeyboardButton("Video 480p (SD)", callback_data="dl_video_480p")],
@@ -49,7 +52,7 @@ def build_main_keyboard(platform: str, large_file: bool = False) -> list:
         ]
     else:
         keyboard = [
-            [InlineKeyboardButton("Video — najwyższa (do 4K/2160p)", callback_data="dl_video_best")],
+            [InlineKeyboardButton("Video — maksymalna rozdzielczość źródła", callback_data="dl_video_best")],
             [InlineKeyboardButton("Video — średnia (720p HD)", callback_data="dl_video_medium")],
             [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
             [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],

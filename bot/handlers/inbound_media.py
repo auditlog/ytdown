@@ -758,14 +758,15 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
     time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
     time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}" if time_range else ""
 
-    # Explain what "najwyższa" and "średnia" mean — only relevant when those
-    # labels are shown (non-podcast, non-large-file flow).
+    # Explain source quality in both the regular and large-file menus.
     quality_hint = ""
-    if not is_podcast and not large_file:
+    if not is_podcast:
         quality_hint = (
-            "\n_Najwyższa_ = najlepsza dostępna rozdzielczość (do 4K/2160p)."
-            "  _Średnia_ = 720p HD.\n"
+            "\n_Maksymalna_ = najwyższa rozdzielczość dostępna w źródle, także 4K lub 8K."
+            " Obowiązują limity rozmiaru plików.\n"
         )
+        if not large_file:
+            quality_hint += "_Średnia_ = preferowane 720p HD.\n"
 
     await progress_message.edit_text(
         f"*{escape_md(title)}*\nCzas trwania: {duration_str}{size_warning}{time_range_info}{quality_hint}\n"
