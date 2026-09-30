@@ -475,9 +475,14 @@ pobierania, wymaga binarki `7z` w PATH) nie jest jeszcze podpięty do ścieżki 
 5. Dla archiwum wybierz 50, 100 albo wszystkie utwory w jednej logicznej paczce. Paczka
    przekraczająca około 1 GB zostanie automatycznie podzielona na wolumeny `.7z.001`,
    `.7z.002` itd.; wszystkie wolumeny trzeba zapisać w jednym katalogu i otworzyć `.001`.
+   Każde niezależne archiwum zaczyna własną numerację od `.001`, więc kilka plików kończących
+   się na `.7z.001` jest prawidłowe, jeśli ich nazwy bazowe lub zakresy utworów są różne.
 
 Muzyka jest wyszukiwana przede wszystkim w YT Music na podstawie tytułu, wykonawcy i czasu
-trwania. Bot nie pobiera strumienia muzycznego Spotify i nie obchodzi DRM.
+trwania. Dopasowanie obsługuje tytuły Unicode (w tym cyrylicę), wielu wykonawców oraz zapasowe,
+mniej restrykcyjne warianty zapytań. Jeśli któregoś utworu nie uda się dopasować lub pobrać,
+bot wysyła pełny raport TXT zawierający wszystkie nieudane pozycje, etap i przyczynę. Bot nie
+pobiera strumienia muzycznego Spotify i nie obchodzi DRM.
 
 ### Transkrypcja plików audio
 1. Wyślij wiadomość głosową, plik audio lub dokument audio (np. notatkę głosową z WhatsApp)

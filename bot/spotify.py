@@ -10,6 +10,7 @@ import os
 import re
 import time
 import unicodedata
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from urllib.parse import urlparse
 
@@ -26,6 +27,25 @@ _spotify_token_expires = 0
 
 SPOTIFY_COLLECTION_MAX_ITEMS = 500
 _SPOTIFY_RESOURCE_TYPES = {"track", "album", "playlist", "episode"}
+_YOUTUBE_MATCH_THRESHOLD = 0.55
+
+
+@dataclass(frozen=True)
+class YouTubeTrackSearchOutcome:
+    """A YouTube search match or an actionable reason why matching failed."""
+
+    match: dict | None
+    failure_code: str | None = None
+    failure_detail: str | None = None
+
+
+@dataclass(frozen=True)
+class TrackResolutionOutcome:
+    """A resolved Spotify track or an actionable reason for a failure report."""
+
+    resolved: dict | None
+    failure_code: str | None = None
+    failure_detail: str | None = None
 
 
 class SpotifyMetadataError(RuntimeError):
@@ -316,7 +336,8 @@ def get_spotify_collection(
 
 
 def _search_text(value: str) -> str:
-    value = unicodedata.normalize("NFKD", value or "")
+    value = (value or "").translate(str.maketrans({"ł": "l", "Ł": "L"}))
+    value = unicodedata.normalize("NFKD", value)
     value = "".join(char for char in value if not unicodedata.combining(char))
     value = value.casefold()
     value = re.sub(
@@ -324,7 +345,54 @@ def _search_text(value: str) -> str:
         " ",
         value,
     )
-    return " ".join(re.findall(r"[a-z0-9]+", value))
+    # ``str.isalnum`` keeps non-Latin alphabets (for example Cyrillic) while
+    # still turning punctuation and underscores into token separators.
+    return " ".join(
+        "".join(char if char.isalnum() else " " for char in value).split()
+    )
+
+
+def _artist_search_variants(artist: str) -> list[str]:
+    """Return normalized full and individual artist names for candidate scoring."""
+
+    raw_values = [artist]
+    raw_values.extend(
+        re.split(
+            r"\s*(?:,|&|/|\bfeat\.?\b|\bft\.?\b|\bx\b)\s*",
+            artist,
+            flags=re.IGNORECASE,
+        )
+    )
+    variants: list[str] = []
+    for value in raw_values:
+        normalized = _search_text(value)
+        if len(normalized) >= 2 and normalized not in variants:
+            variants.append(normalized)
+    return variants
+
+
+def _track_search_queries(title: str, artist: str) -> list[str]:
+    """Build strict-first YouTube queries with progressively broader fallbacks."""
+
+    primary_artist = re.split(
+        r"\s*(?:,|&|/|\bfeat\.?\b|\bft\.?\b|\bx\b)\s*",
+        artist,
+        maxsplit=1,
+    )[0]
+    candidates = [
+        f"{artist} - {title} official audio".strip(" -"),
+        f"{artist} - {title}".strip(" -"),
+        f"{primary_artist} - {title}".strip(" -"),
+        f"{title} {primary_artist}".strip(),
+    ]
+    queries: list[str] = []
+    seen: set[str] = set()
+    for query in candidates:
+        key = query.casefold()
+        if query and key not in seen:
+            seen.add(key)
+            queries.append(query)
+    return queries
 
 
 def _candidate_url(entry: dict) -> str:
@@ -335,14 +403,13 @@ def _candidate_url(entry: dict) -> str:
     return f"https://www.youtube.com/watch?v={video_id}" if video_id else ""
 
 
-def search_youtube_track(
+def search_youtube_track_detailed(
     title: str,
     artist: str,
     duration_sec: int | None = None,
-) -> dict | None:
-    """Find a matching song, preferring YouTube Music catalog uploads."""
+) -> YouTubeTrackSearchOutcome:
+    """Find a song using strict-first queries and return failure diagnostics."""
 
-    query = f"{artist} - {title} official audio".strip(" -")
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
@@ -352,96 +419,151 @@ def search_youtube_track(
         "js_runtimes": YTDLP_JS_RUNTIMES,
     }
 
-    try:
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            results = ydl.extract_info(f"ytsearch10:{query}", download=False)
-    except Exception as exc:
-        logging.error("YouTube Music search failed: %s", exc)
-        return None
-
     target_title = _search_text(title)
-    target_artist = _search_text(artist)
+    artist_variants = _artist_search_variants(artist)
     best_match = None
     best_score = 0.0
+    search_errors: list[str] = []
+    successful_searches = 0
 
-    for entry in (results or {}).get("entries", []):
-        if not isinstance(entry, dict):
+    for query in _track_search_queries(title, artist):
+        try:
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                results = ydl.extract_info(f"ytsearch10:{query}", download=False)
+            successful_searches += 1
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {str(exc)[:160]}"
+            search_errors.append(error)
+            logging.warning("YouTube track search failed for query %r: %s", query, error)
             continue
-        candidate_title_raw = str(entry.get("title") or "")
-        channel_raw = str(entry.get("channel") or entry.get("uploader") or "")
-        candidate_title = _search_text(candidate_title_raw)
-        candidate_channel = _search_text(channel_raw.removesuffix(" - Topic"))
-        if not candidate_title:
-            continue
 
-        title_score = SequenceMatcher(None, target_title, candidate_title).ratio()
-        if target_title and target_title in candidate_title:
-            title_score = 1.0
+        for entry in (results or {}).get("entries", []):
+            if not isinstance(entry, dict):
+                continue
+            candidate_title_raw = str(entry.get("title") or "")
+            channel_raw = str(entry.get("channel") or entry.get("uploader") or "")
+            candidate_title = _search_text(candidate_title_raw)
+            candidate_channel = _search_text(channel_raw.removesuffix(" - Topic"))
+            if not candidate_title:
+                continue
 
-        artist_score = SequenceMatcher(None, target_artist, candidate_channel).ratio()
-        if target_artist and (
-            target_artist in candidate_title or target_artist in candidate_channel
-        ):
-            artist_score = 1.0
+            title_score = SequenceMatcher(None, target_title, candidate_title).ratio()
+            if target_title and target_title in candidate_title:
+                title_score = 1.0
 
-        candidate_duration = int(entry.get("duration") or 0)
-        duration_score = 0.0
-        if duration_sec and candidate_duration:
-            difference = abs(duration_sec - candidate_duration)
-            if difference <= 3:
-                duration_score = 1.0
-            elif difference <= 10:
-                duration_score = 0.8
-            elif difference <= 20:
-                duration_score = 0.4
+            artist_score = 0.0
+            for target_artist in artist_variants:
+                similarity = SequenceMatcher(
+                    None,
+                    target_artist,
+                    candidate_channel,
+                ).ratio()
+                if target_artist in candidate_title or target_artist in candidate_channel:
+                    similarity = 1.0
+                artist_score = max(artist_score, similarity)
 
-        is_topic = channel_raw.casefold().endswith(" - topic")
-        is_official_audio = "official audio" in candidate_title_raw.casefold()
-        official_bonus = 0.18 if is_topic else (0.1 if is_official_audio else 0.0)
+            candidate_duration = int(entry.get("duration") or 0)
+            duration_score = 0.0
+            if duration_sec and candidate_duration:
+                difference = abs(duration_sec - candidate_duration)
+                if difference <= 3:
+                    duration_score = 1.0
+                elif difference <= 10:
+                    duration_score = 0.8
+                elif difference <= 20:
+                    duration_score = 0.4
 
-        penalty = 0.0
-        disfavored = ("karaoke", "cover", "nightcore", "slowed", "sped up", "live")
-        target_raw = f"{title} {artist}".casefold()
-        candidate_raw = f"{candidate_title_raw} {channel_raw}".casefold()
-        if any(word in candidate_raw and word not in target_raw for word in disfavored):
-            penalty = 0.3
+            is_topic = channel_raw.casefold().endswith(" - topic")
+            is_official_audio = "official audio" in candidate_title_raw.casefold()
+            official_bonus = 0.18 if is_topic else (0.1 if is_official_audio else 0.0)
 
-        score = title_score * 0.48 + artist_score * 0.27 + duration_score * 0.2
-        score += official_bonus - penalty
-        url = _candidate_url(entry)
-        if url and score > best_score:
-            best_score = score
-            best_match = {
-                "url": url,
-                "title": candidate_title_raw,
-                "channel": channel_raw,
-                "duration": candidate_duration or None,
-                "score": score,
-                "source": "youtube_music" if is_topic or is_official_audio else "youtube",
-            }
+            penalty = 0.0
+            disfavored = ("karaoke", "cover", "nightcore", "slowed", "sped up", "live")
+            target_raw = f"{title} {artist}".casefold()
+            candidate_raw = f"{candidate_title_raw} {channel_raw}".casefold()
+            if any(word in candidate_raw and word not in target_raw for word in disfavored):
+                penalty = 0.3
 
-    if best_match and best_score >= 0.55:
-        logging.info(
-            "YouTube Music match: %r by %s (score %.2f)",
-            best_match["title"],
-            best_match["channel"],
-            best_score,
+            score = title_score * 0.48 + artist_score * 0.27 + duration_score * 0.2
+            score += official_bonus - penalty
+            url = _candidate_url(entry)
+            if url and score > best_score:
+                best_score = score
+                best_match = {
+                    "url": url,
+                    "title": candidate_title_raw,
+                    "channel": channel_raw,
+                    "duration": candidate_duration or None,
+                    "score": score,
+                    "source": "youtube_music" if is_topic or is_official_audio else "youtube",
+                    "search_query": query,
+                }
+
+        if best_match and best_score >= _YOUTUBE_MATCH_THRESHOLD:
+            logging.info(
+                "YouTube Music match: %r by %s (score %.2f, query=%r)",
+                best_match["title"],
+                best_match["channel"],
+                best_score,
+                query,
+            )
+            return YouTubeTrackSearchOutcome(match=best_match)
+
+    if best_match:
+        detail = (
+            f"Najlepszy wynik „{best_match['title']}” ({best_match['channel']}) "
+            f"uzyskał {best_score:.2f}; wymagane co najmniej "
+            f"{_YOUTUBE_MATCH_THRESHOLD:.2f}."
         )
-        return best_match
-    return None
+        failure_code = "low_confidence"
+    elif successful_searches:
+        detail = "YouTube nie zwrócił wyników dla żadnego wariantu wyszukiwania."
+        failure_code = "no_search_results"
+    else:
+        suffix = f" Ostatni błąd: {search_errors[-1]}" if search_errors else ""
+        detail = f"Wyszukiwanie YouTube nie powiodło się.{suffix}"
+        failure_code = "search_error"
+
+    logging.info(
+        "No YouTube track match for %r by %s: code=%s detail=%s",
+        title,
+        artist,
+        failure_code,
+        detail,
+    )
+    return YouTubeTrackSearchOutcome(
+        match=None,
+        failure_code=failure_code,
+        failure_detail=detail,
+    )
 
 
-def resolve_spotify_track_info(track: dict) -> dict | None:
-    """Resolve normalized Spotify track metadata to a downloadable source."""
+def search_youtube_track(
+    title: str,
+    artist: str,
+    duration_sec: int | None = None,
+) -> dict | None:
+    """Find a matching song, preferring YouTube Music catalog uploads."""
 
-    youtube = search_youtube_track(
+    return search_youtube_track_detailed(title, artist, duration_sec).match
+
+
+def resolve_spotify_track_info_detailed(track: dict) -> TrackResolutionOutcome:
+    """Resolve track metadata and preserve an actionable matching failure."""
+
+    search = search_youtube_track_detailed(
         track.get("title", ""),
         track.get("artist", ""),
         (track.get("duration_ms") or 0) // 1000 or None,
     )
-    if not youtube:
-        return None
-    return {
+    if not search.match:
+        return TrackResolutionOutcome(
+            resolved=None,
+            failure_code=search.failure_code,
+            failure_detail=search.failure_detail,
+        )
+    youtube = search.match
+    return TrackResolutionOutcome(resolved={
         "source": youtube["source"],
         "youtube_url": youtube["url"],
         "title": track.get("title", youtube["title"]),
@@ -453,7 +575,14 @@ def resolve_spotify_track_info(track: dict) -> dict | None:
         "matched_title": youtube["title"],
         "matched_channel": youtube["channel"],
         "match_score": youtube["score"],
-    }
+        "search_query": youtube.get("search_query", ""),
+    })
+
+
+def resolve_spotify_track_info(track: dict) -> dict | None:
+    """Resolve normalized Spotify track metadata to a downloadable source."""
+
+    return resolve_spotify_track_info_detailed(track).resolved
 
 
 def resolve_spotify_track(url: str) -> dict | None:

@@ -13,11 +13,13 @@ import yt_dlp
 from bot.config import COOKIES_FILE, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
 from bot.downloader_validation import sanitize_filename
 from bot.spotify import (
+    TrackResolutionOutcome,
     download_direct_audio,
     get_spotify_collection,
     resolve_spotify_episode,
     resolve_spotify_track,
     resolve_spotify_track_info,
+    resolve_spotify_track_info_detailed,
 )
 
 
@@ -137,6 +139,20 @@ async def resolve_track_info(track: dict, *, executor: Any | None = None) -> dic
     return await loop.run_in_executor(
         executor,
         lambda: resolve_spotify_track_info(track),
+    )
+
+
+async def resolve_track_info_detailed(
+    track: dict,
+    *,
+    executor: Any | None = None,
+) -> TrackResolutionOutcome:
+    """Resolve collection metadata and retain a failure reason for reports."""
+
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        executor,
+        lambda: resolve_spotify_track_info_detailed(track),
     )
 
 
