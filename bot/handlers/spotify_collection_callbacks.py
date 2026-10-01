@@ -12,6 +12,7 @@ from bot.handlers.common_ui import (
     build_spotify_archive_batch_view,
     build_spotify_collection_view,
     safe_edit_message,
+    stop_button_markup,
 )
 from bot.handlers.spotify_callbacks import download_spotify_resolved
 from bot.jobs import JobDescriptor, job_registry
@@ -129,6 +130,7 @@ async def _download_selected(
             await safe_edit_message(
                 update.callback_query,
                 f"[{position}/{len(selected)}] Dopasowywanie w YT Music:\n{label}",
+                reply_markup=stop_button_markup(cancellation.job_id),
             )
 
             resolved = await resolve_track_info(track, executor=_executor)

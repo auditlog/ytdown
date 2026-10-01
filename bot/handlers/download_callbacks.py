@@ -24,6 +24,7 @@ from bot.handlers.common_ui import (
     format_eta,
     safe_edit_message,
     send_long_message,
+    stop_button_markup,
 )
 from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.download_budget import DownloadLimitError
@@ -335,6 +336,9 @@ async def _download_and_send_ig_videos(
     _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
 
 
+STOPPED_TEXT = "⏹ Zatrzymano pobieranie."
+
+
 async def download_file(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -367,6 +371,13 @@ async def download_file(
 
     try:
         async def update_status(text):
+            # In-progress edit: carries the stop button for this job.
+            await safe_edit_message(
+                query, text, reply_markup=stop_button_markup(cancellation.job_id),
+            )
+
+        async def finish_status(text):
+            # Terminal edit (success, error, stop, delivery): no stop button.
             await safe_edit_message(query, text)
 
         media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
@@ -398,11 +409,11 @@ async def download_file(
                 audio_quality=audio_quality,
             )
         except ValueError:
-            await update_status("Nieobsługiwana jakość audio. Spróbuj zmienić opcję.")
+            await finish_status("Nieobsługiwana jakość audio. Spróbuj zmienić opcję.")
             return
 
         if not plan:
-            await update_status(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
+            await finish_status(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
             return
 
         info = plan.info
@@ -416,7 +427,7 @@ async def download_file(
             archive_available = not transcribe and is_7z_available()
             download_limit_mb = MAX_ARCHIVE_ITEM_SIZE_MB if archive_available else MAX_FILE_SIZE_MB
             if not ensure_size_within_limit(size_mb, max_size_mb=download_limit_mb):
-                await update_status(
+                await finish_status(
                     f"Wybrany format jest zbyt duży!\n\n"
                     f"Rozmiar: {size_mb:.1f} MB\n"
                     f"Maksymalny dozwolony rozmiar: {download_limit_mb} MiB\n\n"
@@ -464,15 +475,19 @@ async def download_file(
                     cancellation=cancellation,
                 )
 
+                if cancellation.event.is_set():
+                    await finish_status(STOPPED_TEXT)
+                    return
+
                 if not transcript_path or not os.path.exists(transcript_path):
-                    await update_status("Wystąpił błąd podczas transkrypcji.")
+                    await finish_status("Wystąpił błąd podczas transkrypcji.")
                     return
 
                 transcript_result = load_transcript_result(transcript_path)
 
                 if summary:
                     if not get_runtime_value("CLAUDE_API_KEY", ""):
-                        await update_status(
+                        await finish_status(
                             "Funkcja niedostępna — brak klucza API do podsumowań.\n"
                             "Skontaktuj się z administratorem."
                         )
@@ -480,7 +495,7 @@ async def download_file(
 
                     transcript_text = transcript_result.display_text
                     if transcript_too_long_for_summary(transcript_text):
-                        await update_status(
+                        await finish_status(
                             "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
                             "Wysyłam samą transkrypcję."
                         )
@@ -504,7 +519,7 @@ async def download_file(
                         )
                         return
 
-                    await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
+                    await finish_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
                     summary_result = await generate_summary_artifact(
                         transcript_text=transcript_text,
                         summary_type=summary_type,
@@ -514,17 +529,17 @@ async def download_file(
                         executor=_executor,
                     )
                     if not summary_result:
-                        await update_status("Wystąpił błąd podczas generowania podsumowania.")
+                        await finish_status("Wystąpił błąd podczas generowania podsumowania.")
                         return
 
-                    await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
+                    await finish_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
                     await send_long_message(
                         context.bot,
                         chat_id,
                         summary_result.summary_text,
                         header=f"*{escape_md(title)} - {summary_result.summary_type_name}*\n\n",
                     )
-                    await update_status("Wysyłanie pliku z pełną transkrypcją...")
+                    await finish_status("Wysyłanie pliku z pełną transkrypcją...")
                     with open(transcript_path, "rb") as file_obj:
                         await context.bot.send_document(
                             chat_id=chat_id,
@@ -545,7 +560,7 @@ async def download_file(
                         selected_format=format,
                     )
                     success_recorded = True
-                    await update_status("Transkrypcja i podsumowanie zostały wysłane!")
+                    await finish_status("Transkrypcja i podsumowanie zostały wysłane!")
                     await offer_custom_transcript_prompt(
                         context,
                         chat_id=chat_id,
@@ -554,7 +569,7 @@ async def download_file(
                         title=title,
                     )
                 else:
-                    await update_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
+                    await finish_status("Transkrypcja zakończona.\n\nWysyłanie transkrypcji...")
                     display_text = transcript_result.display_text
                     if len(display_text) <= 30000:
                         await send_long_message(
@@ -586,7 +601,7 @@ async def download_file(
                         logging.error("Error deleting files: %s", exc)
                     record_download_for(context, chat_id, title, url, "transcription", file_size_mb, time_range, selected_format=format)
                     success_recorded = True
-                    await update_status("Transkrypcja została wysłana!")
+                    await finish_status("Transkrypcja została wysłana!")
                     await offer_custom_transcript_prompt(
                         context,
                         chat_id=chat_id,
@@ -705,10 +720,16 @@ async def download_file(
                 record_download_for(context, chat_id, title, url, f"{media_type}_{format}", file_size_mb, session_range, selected_format=format)
                 success_recorded = True
                 if trim_source is not None:
-                    await update_status(f"Plik został wysłany!\n\n{trim_hint}")
+                    await finish_status(f"Plik został wysłany!\n\n{trim_hint}")
                 else:
-                    await update_status("Plik został wysłany!")
+                    await finish_status("Plik został wysłany!")
         except Exception as exc:
+            if cancellation.event.is_set():
+                # A user stop surfaces as an exception from the download layer;
+                # report it as a stop, not as a failure.
+                logging.info("download_file stopped by user: %s", exc)
+                await finish_status(STOPPED_TEXT)
+                return
             if not success_recorded:
                 record_download_for(
                     context,
@@ -724,7 +745,7 @@ async def download_file(
 
             error_str = str(exc).lower()
             if isinstance(exc, (DownloadLimitError, AudioDeliveryError)):
-                await update_status(str(exc))
+                await finish_status(str(exc))
             elif any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
                 platform_name = _get_session_context_value(
                     context, chat_id, "platform", legacy_key="platform"
@@ -735,14 +756,14 @@ async def download_file(
                     if config and config.cookies_hint
                     else GENERIC_COOKIES_HINT
                 )
-                await update_status(hint)
+                await finish_status(hint)
             elif "requested format is not available" in error_str:
-                await update_status(
+                await finish_status(
                     "Wybrana jakość nie jest dostępna dla tego filmu. "
                     "Spróbuj wybrać inną rozdzielczość lub opcję „best”."
                 )
             else:
-                await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
+                await finish_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
     finally:
         job_registry.unregister(cancellation.job_id)
         if download_workspace and not archive_owns_workspace:

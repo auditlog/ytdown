@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 
-from telegram import InlineKeyboardButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.helpers import escape_markdown
 
@@ -14,6 +14,17 @@ def escape_md(text: str) -> str:
     """Escape Markdown v1 special characters in text."""
 
     return escape_markdown(text, version=1)
+
+
+def stop_button_markup(job_id: str) -> InlineKeyboardMarkup:
+    """Single "stop" button for a progress message of the job ``job_id``.
+
+    Handled by handle_stop_callback (bot/telegram_commands.py).
+    """
+
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⏹ Zatrzymaj", callback_data=f"stop_{job_id}")]]
+    )
 
 
 def trim_download_button() -> InlineKeyboardButton:

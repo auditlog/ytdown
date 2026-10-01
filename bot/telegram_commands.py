@@ -408,9 +408,12 @@ async def handle_stop_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if data.startswith("stop_"):
         job_id = data[len("stop_"):]
-        ok = await job_registry.cancel_async(job_id, reason="user via /stop")
+        # Only jobs owned by this chat may be stopped; unknown or foreign ids
+        # look the same as finished jobs.
+        owned = any(d.job_id == job_id for d in job_registry.list_for_chat(chat_id))
+        ok = owned and await job_registry.cancel_async(job_id, reason="user via /stop")
         text = (
-            "Wysłano sygnał zatrzymania. Czekam na potwierdzenie..."
+            "Wysłano sygnał zatrzymania…"
             if ok else "Operacja już zakończona."
         )
         try:

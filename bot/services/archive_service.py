@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from bot.jobs import JobCancellation
 
 from bot.jobs import JobDescriptor, job_registry
+from bot.handlers.common_ui import stop_button_markup
 from bot.archive import (
     compute_archive_basename,
     is_7z_available,
@@ -285,11 +286,15 @@ async def send_volumes(
         logging.info("Sent volume %d/%d: %s (%.1f MB)", idx + 1, total, volume.name, size_mb)
 
 
-async def _safe_status_edit(update, text: str) -> None:
-    """Edit the inline-keyboard message body, ignoring 'message not modified' errors."""
+async def _safe_status_edit(update, text: str, reply_markup=None) -> None:
+    """Edit the inline-keyboard message body, ignoring 'message not modified' errors.
+
+    ``reply_markup`` is typically the stop button of an in-progress job; it is
+    omitted for terminal messages so the button disappears.
+    """
 
     try:
-        await update.callback_query.edit_message_text(text)
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
     except Exception as exc:
         logging.debug("status edit failed (non-fatal): %s", exc)
 
@@ -339,6 +344,11 @@ async def execute_playlist_archive_flow(
     lock_path.touch()
 
     async def status(text: str) -> None:
+        await _safe_status_edit(
+            update, text, reply_markup=stop_button_markup(cancellation.job_id),
+        )
+
+    async def finish_status(text: str) -> None:
         await _safe_status_edit(update, text)
 
     await status(
@@ -372,7 +382,7 @@ async def execute_playlist_archive_flow(
 
         if not downloaded:
             shutil.rmtree(workspace, ignore_errors=True)
-            await status("Nie udało się pobrać żadnego elementu.")
+            await finish_status("Nie udało się pobrać żadnego elementu.")
             return
 
         job_registry.update_label(
@@ -456,7 +466,7 @@ async def execute_playlist_archive_flow(
             logging.debug("summary edit failed: %s", exc)
     except Exception as exc:
         logging.error("Playlist archive flow failed: %s", exc)
-        await status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
+        await finish_status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
     finally:
         try:
             lock_path.unlink()
@@ -564,6 +574,11 @@ async def execute_partial_archive_flow(
     cancellation = job_registry.register(chat_id, descriptor)
 
     async def status(text: str) -> None:
+        await _safe_status_edit(
+            update, text, reply_markup=stop_button_markup(cancellation.job_id),
+        )
+
+    async def finish_status(text: str) -> None:
         await _safe_status_edit(update, text)
 
     try:
@@ -594,7 +609,7 @@ async def execute_partial_archive_flow(
             )
 
         if cancellation.event.is_set():
-            await status("⏹ Zatrzymano w trakcie pakowania.")
+            await finish_status("⏹ Zatrzymano w trakcie pakowania.")
             return
 
         caption_prefix = f"{state.title} ({state.media_type} {state.format_choice})"
@@ -632,7 +647,7 @@ async def execute_partial_archive_flow(
         )
     except Exception as exc:
         logging.error("Partial archive flow failed: %s", exc)
-        await status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
+        await finish_status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
     finally:
         # Consume partial state regardless of outcome.
         bucket.pop(token, None)

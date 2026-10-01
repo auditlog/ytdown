@@ -20,6 +20,7 @@ from bot.archive import (
     volume_size_for,
 )
 from bot.downloader_validation import sanitize_filename
+from bot.handlers.common_ui import stop_button_markup
 from bot.jobs import JobDescriptor, job_registry
 from bot.mtproto import mtproto_unavailability_reason
 from bot.security_limits import (
@@ -295,6 +296,7 @@ async def execute_spotify_collection_archive_flow(
                 update,
                 f"Spotify → 7z ({audio_format.upper()})\n"
                 f"[{position}/{total}] Dopasowywanie i pobieranie:\n{label}",
+                reply_markup=stop_button_markup(cancellation.job_id),
             )
 
             temp_dir = workspace / f".spotify_{track_index:04d}"
@@ -454,6 +456,7 @@ async def execute_spotify_collection_archive_flow(
                 update,
                 f"Pakowanie archiwum {group_index}/{archive_count} "
                 f"({len(group)} utworów, wolumeny do {volume_size_mb} MB)...",
+                reply_markup=stop_button_markup(cancellation.job_id),
             )
             packed_volumes.extend(
                 await pack_to_volumes(
@@ -498,6 +501,7 @@ async def execute_spotify_collection_archive_flow(
             update,
             f"Pakowanie zakończone: {archive_count} archiwów, "
             f"{len(packed_volumes)} plików do wysłania.",
+            reply_markup=stop_button_markup(cancellation.job_id),
         )
         await send_volumes(
             context.bot,
@@ -505,7 +509,9 @@ async def execute_spotify_collection_archive_flow(
             volumes=packed_volumes,
             caption_prefix=caption_prefix,
             use_mtproto=use_mtproto,
-            status_cb=lambda text: _safe_status_edit(update, text),
+            status_cb=lambda text: _safe_status_edit(
+                update, text, reply_markup=stop_button_markup(cancellation.job_id),
+            ),
             cancellation=cancellation,
         )
 

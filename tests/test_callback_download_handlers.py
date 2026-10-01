@@ -672,3 +672,76 @@ def test_download_file_video_with_range_keeps_ytdlp_sections(tmp_path, monkeypat
 
     assert plan.kwargs["time_range"] == _SESSION_RANGE
     range_sender.assert_not_awaited()
+
+
+def _markup_of(call):
+    return call.kwargs.get("reply_markup")
+
+
+def test_download_file_progress_has_stop_button_and_final_has_none(tmp_path, monkeypatch):
+    from bot.jobs import JobRegistry
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    registry = JobRegistry()
+    monkeypatch.setattr(dc, "job_registry", registry)
+    monkeypatch.setattr(dc, "send_audio_with_trim", mock.AsyncMock(return_value=None))
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+    seen = {}
+
+    async def spy_download(plan_obj, **kwargs):
+        seen["job_id"] = kwargs["cancellation"].job_id
+        return await download_orig(plan_obj, **kwargs)
+
+    download_orig = dc.execute_download
+    monkeypatch.setattr(dc, "execute_download", spy_download)
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    calls = update.callback_query.edit_message_text.await_args_list
+    progress = [c for c in calls if c.args[0].startswith("Rozpoczynam pobieranie")]
+    assert progress
+    button = _markup_of(progress[0]).inline_keyboard[0][0]
+    assert button.text == "⏹ Zatrzymaj"
+    assert button.callback_data == f"stop_{seen['job_id']}"
+    assert calls[-1].args[0] == "Plik został wysłany!"
+    assert _markup_of(calls[-1]) is None
+
+
+def test_download_file_stopped_mid_download_reports_stop_not_failure(tmp_path, monkeypatch):
+    import yt_dlp
+    from bot.jobs import JobRegistry
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    registry = JobRegistry()
+    monkeypatch.setattr(dc, "job_registry", registry)
+
+    async def stopped_download(plan_obj, **kwargs):
+        kwargs["cancellation"].event.set()
+        raise yt_dlp.utils.DownloadError("cancelled by user")
+
+    monkeypatch.setattr(dc, "execute_download", stopped_download)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0] == "⏹ Zatrzymano pobieranie."
+    assert _markup_of(last) is None
+    dc.record_download_for.assert_not_called()
+
+
+def test_download_error_without_stop_still_records_failure(tmp_path, monkeypatch):
+    import yt_dlp
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+
+    async def broken_download(plan_obj, **kwargs):
+        raise yt_dlp.utils.DownloadError("boom")
+
+    monkeypatch.setattr(dc, "execute_download", broken_download)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    assert update.callback_query.edit_message_text.await_args.args[0].startswith("Wystąpił błąd")
+    assert dc.record_download_for.call_args.kwargs["status"] == "failure"
