@@ -78,6 +78,7 @@ folders, retaining files only when handed to the pending archive workflow.
 - Generowanie podsumowań transkrypcji (Claude API - Haiku 4.5)
 - **Transkrypcja przesłanych plików audio** — wiadomości głosowe, pliki audio i dokumenty audio (np. notatki głosowe z WhatsApp)
 - **Transkrypcja przesłanych plików video** — ekstrakcja audio z MP4, MKV, AVI, MOV, WebM
+- Przycinanie audio według znaczników czasu (✂️), także kilku fragmentów naraz
 - Ochrona dostępu kodem PIN
 - Interfejs wiersza poleceń (CLI) z pełnym wsparciem dla wyboru formatu, jakości i audio
 - Bot Telegram z interaktywnym menu
@@ -497,6 +498,30 @@ pobiera strumienia muzycznego Spotify i nie obchodzi DRM.
 4. Obsługiwane formaty: MP4, MOV, MKV, AVI, WebM
 5. Limit rozmiaru: 20 MB (ograniczenie Telegram Bot API)
 
+### Przycinanie audio
+Bot wycina fragmenty audio bez utraty jakości (MP3 i M4A bez ponownego kodowania, FLAC bezstratnie), z dokładnością ~25 ms.
+
+- **Pod wysłanym plikiem audio** jest przycisk **✂️ Przytnij** — działa przez 24 h od wysłania
+  (plik czeka na serwerze; przy wolnym miejscu < 5 GB bot go nie zatrzymuje i przycisku nie ma).
+- **Podcasty (Spotify, Castbox) i utwory Spotify:** **✂️ Pobierz i przytnij** pobiera całość
+  bez wysyłania i od razu pyta o zakres.
+- **Własny plik:** wyślij MP3 lub wiadomość głosową i wybierz **✂️ Przytnij**.
+- **YouTube, Vimeo, Instagram, LinkedIn:** **✂️ Zakres czasowy** przed pobraniem pobiera tylko
+  jeden wskazany fragment.
+
+Zapis zakresów:
+
+| Wpis | Znaczenie |
+|---|---|
+| `1:30-4:45` | jeden fragment |
+| `90-285`, `1:02:30-1:05:00` | sekundy albo H:MM:SS |
+| `2:15-` | od 2:15 do końca |
+| `-5:00` | od początku do 5:00 |
+| `1:00-2:00, 5:30-7:00` | kilka fragmentów (maks. 10), każdy jako osobny plik |
+
+Cięcie można przerwać komendą `/stop`. Po wysłaniu fragmentów przycisk **✂️ Tnij dalej**
+pozwala wyciąć kolejne z tego samego źródła.
+
 ## Typy streszczeń
 
 Bot oferuje 4 typy streszczeń AI (Claude Haiku 4.5):
@@ -549,6 +574,8 @@ ytdown/
 │   │   ├── command_access.py       # Auth/admin/info: /start, PIN, /logout, /help, /status
 │   │   ├── inbound_media.py        # Intake URL-i, routing platform, playlist entry
 │   │   ├── inbound_audio.py        # Upload i przetwarzanie plików audio
+│   │   ├── audio_delivery.py       # Wysyłka pojedynczego audio (Bot API/MTProto) z przyciskiem ✂️
+│   │   ├── trim_callbacks.py       # Przepływ przycinania: prompt, zakresy, cięcie i wysyłka fragmentów
 │   │   ├── inbound_video.py        # Upload i przetwarzanie plików video
 │   │   ├── download_callbacks.py   # Core download flow i progress
 │   │   ├── spotify_callbacks.py    # Pobieranie odcinków Spotify (transkrypcja, podsumowania)
@@ -575,6 +602,8 @@ ytdown/
 ├── docs/mcp-rpi5a.md                # Remote deployment and client configuration
 ├── requirements-mcp.txt            # Optional MCP dependencies
 ├── setup_config.py                 # Narzędzie konfiguracyjne
+│       ├── audio_trim_service.py   # Cięcie fragmentów ffmpeg (MP3/M4A bez rekodowania, FLAC bezstratnie)
+│       ├── trim_store.py           # Magazyn źródeł do przycinania (24 h, meta.json)
 ├── tests/                          # Testy (~979 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
@@ -587,6 +616,11 @@ ytdown/
 │   ├── test_callback_common.py     # Testy routera callbacków, rate limit, sesji
 │   ├── test_callback_download_handlers.py # Testy pobierania, playlist, time range
 │   ├── test_callback_transcription_handlers.py # Testy transkrypcji, napisów, Spotify
+│   ├── test_time_ranges.py         # Testy parsera wielu i otwartych zakresów
+│   ├── test_audio_trim_service.py  # Testy cięcia ffmpeg (wymaga ffmpeg)
+│   ├── test_trim_store.py          # Testy magazynu źródeł i wygasania
+│   ├── test_audio_delivery.py      # Testy wysyłki audio z ✂️
+│   ├── test_trim_callbacks.py      # Testy przepływu przycinania
 │   ├── test_telegram_integration.py # Testy integracyjne cross-module (PIN→URL, callback routing)
 │   ├── test_auth_service.py        # Testy auth service (PIN, logout)
 │   ├── test_runtime.py             # Testy runtime auth helperów
