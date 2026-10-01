@@ -11,7 +11,7 @@ import logging
 import threading
 import curses
 
-from telegram import BotCommand
+from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 from telegram.error import Forbidden, NetworkError, RetryAfter
 from telegram.ext import (
     ApplicationBuilder,
@@ -54,21 +54,52 @@ logging.basicConfig(
 )
 
 
-async def set_bot_commands(application):
-    """Sets Telegram bot menu commands."""
-    commands = [
-        BotCommand("start", "Rozpocznij korzystanie z bota"),
-        BotCommand("help", "Pomoc i instrukcje"),
-        BotCommand("status", "Sprawdź przestrzeń dyskową"),
-        BotCommand("history", "Historia pobrań"),
-        BotCommand("cleanup", "Usuń stare pliki (>24h)"),
-        BotCommand("users", "Zarządzanie użytkownikami"),
-        BotCommand("spotify_login", "Połącz konto Spotify"),
-        BotCommand("spotify_logout", "Odłącz konto Spotify"),
-        BotCommand("logout", "Wyloguj się z bota")
-    ]
+USER_COMMANDS = [
+    BotCommand("start", "Rozpocznij korzystanie z bota"),
+    BotCommand("help", "Pomoc i instrukcje"),
+    BotCommand("stop", "Zatrzymaj trwające operacje"),
+    BotCommand("history", "Historia pobrań"),
+    BotCommand("logout", "Wyloguj się"),
+]
 
-    await application.bot.set_my_commands(commands)
+ADMIN_COMMANDS = [
+    BotCommand("status", "Miejsce na dysku"),
+    BotCommand("cleanup", "Usuń pliki starsze niż 24 h"),
+    BotCommand("users", "Lista autoryzowanych użytkowników"),
+    BotCommand("spotify_login", "Połącz konto Spotify"),
+    BotCommand("spotify_logout", "Odłącz konto Spotify"),
+]
+
+
+async def set_bot_commands(application):
+    """Sets Telegram bot menu commands, scoping admin commands to the admin chat.
+
+    Mirrors the admin rules of `_is_admin` (bot/handlers/command_access.py):
+    - ADMIN_CHAT_ID unset: everyone is an admin, so the default scope gets the full list;
+    - ADMIN_CHAT_ID valid: the default scope gets user commands, the admin chat gets all;
+    - ADMIN_CHAT_ID set but invalid: nobody is an admin, so only user commands are published.
+    """
+    bot = application.bot
+    admin_chat_id = get_config_value_for(application, "ADMIN_CHAT_ID", "")
+
+    if not admin_chat_id:
+        await bot.set_my_commands(
+            USER_COMMANDS + ADMIN_COMMANDS, scope=BotCommandScopeDefault()
+        )
+    else:
+        await bot.set_my_commands(USER_COMMANDS, scope=BotCommandScopeDefault())
+        try:
+            admin_id = int(admin_chat_id)
+        except (ValueError, TypeError):
+            logging.warning(
+                "ADMIN_CHAT_ID is not a valid integer (%r); admin commands are not published",
+                admin_chat_id,
+            )
+        else:
+            await bot.set_my_commands(
+                USER_COMMANDS + ADMIN_COMMANDS, scope=BotCommandScopeChat(admin_id)
+            )
+
     logging.info("Set Telegram bot menu commands")
 
 

@@ -485,3 +485,60 @@ class TestHistoryWithNewFields:
         assert "✅" in text
         assert "❌" in text
         assert "✂️0:30-5:00" in text
+
+
+NOT_ADMIN_TEXT = "Ta komenda jest dostępna tylko dla administratora bota."
+
+
+class TestAdminOnlyCommandsAndHelp:
+    def test_status_rejects_non_admin(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+        _set_authorized_users(monkeypatch, {111})
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="999")
+
+        _async(tc.status_command(update, context))
+
+        update.message.reply_text.assert_awaited_once_with(NOT_ADMIN_TEXT)
+
+    def test_cleanup_rejects_non_admin_without_deleting(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+        _set_authorized_users(monkeypatch, {111})
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="999")
+        cleanup = Mock(return_value=0)
+        monkeypatch.setattr(tc, "cleanup_old_files", cleanup)
+
+        _async(tc.cleanup_command(update, context))
+
+        update.message.reply_text.assert_awaited_once_with(NOT_ADMIN_TEXT)
+        cleanup.assert_not_called()
+
+    def test_help_for_regular_user_has_no_admin_section_and_no_parse_mode(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="999")
+
+        _async(tc.help_command(update, context))
+
+        update.message.reply_text.assert_awaited_once()
+        assert "parse_mode" not in update.message.reply_text.await_args.kwargs
+        text = update.message.reply_text.await_args.args[0]
+        assert "/stop" in text and "/history" in text and "/logout" in text
+        assert "✂️ Przytnij" in text
+        assert "cookies" not in text
+        assert "/status" not in text and "/cleanup" not in text
+        assert "/users" not in text and "/spotify_login" not in text
+
+    def test_help_for_admin_lists_admin_commands(self, monkeypatch):
+        update = _make_update(user_id=999)
+        context = _make_context()
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="999")
+
+        _async(tc.help_command(update, context))
+
+        assert "parse_mode" not in update.message.reply_text.await_args.kwargs
+        text = update.message.reply_text.await_args.args[0]
+        assert "Komendy administratora" in text
+        for command in ("/status", "/cleanup", "/users", "/spotify_login", "/spotify_logout"):
+            assert command in text

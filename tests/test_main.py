@@ -7,23 +7,60 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
 
 import main as app_main
+from telegram import BotCommandScopeChat, BotCommandScopeDefault
 from bot.runtime import AppRuntime
 from bot.session_store import SecurityStore, SessionStore
 
 
-def test_set_bot_commands_configures_menu():
+USER_COMMANDS = ["start", "help", "stop", "history", "logout"]
+ADMIN_ONLY_COMMANDS = ["status", "cleanup", "users", "spotify_login", "spotify_logout"]
+
+
+def _run_set_bot_commands(monkeypatch, admin_chat_id):
     app = Mock()
     app.bot = Mock()
     app.bot.set_my_commands = AsyncMock()
-
+    monkeypatch.setattr(
+        app_main,
+        "get_config_value_for",
+        lambda _source, key, default=None: admin_chat_id if key == "ADMIN_CHAT_ID" else default,
+    )
     asyncio.run(app_main.set_bot_commands(app))
+    return app.bot.set_my_commands.await_args_list
 
-    app.bot.set_my_commands.assert_called_once()
-    configured = app.bot.set_my_commands.await_args.args[0]
-    assert {command.command for command in configured} >= {
-        "spotify_login",
-        "spotify_logout",
-    }
+
+def _names(call):
+    return [command.command for command in call.args[0]]
+
+
+def test_set_bot_commands_scopes_admin_commands_to_admin_chat(monkeypatch):
+    calls = _run_set_bot_commands(monkeypatch, "777")
+
+    assert len(calls) == 2
+    default_call, admin_call = calls
+    assert _names(default_call) == USER_COMMANDS
+    assert isinstance(default_call.kwargs["scope"], BotCommandScopeDefault)
+    assert _names(admin_call) == USER_COMMANDS + ADMIN_ONLY_COMMANDS
+    assert isinstance(admin_call.kwargs["scope"], BotCommandScopeChat)
+    assert admin_call.kwargs["scope"].chat_id == 777
+
+
+def test_set_bot_commands_gives_everyone_full_list_without_admin(monkeypatch):
+    calls = _run_set_bot_commands(monkeypatch, "")
+
+    assert len(calls) == 1
+    assert _names(calls[0]) == USER_COMMANDS + ADMIN_ONLY_COMMANDS
+    assert isinstance(calls[0].kwargs["scope"], BotCommandScopeDefault)
+
+
+def test_set_bot_commands_invalid_admin_id_publishes_user_list_only(monkeypatch, caplog):
+    with caplog.at_level("WARNING"):
+        calls = _run_set_bot_commands(monkeypatch, "not-a-number")
+
+    assert len(calls) == 1
+    assert _names(calls[0]) == USER_COMMANDS
+    assert isinstance(calls[0].kwargs["scope"], BotCommandScopeDefault)
+    assert any("ADMIN_CHAT_ID" in record.message for record in caplog.records)
 
 
 class DummyFilter:

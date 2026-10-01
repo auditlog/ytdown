@@ -220,36 +220,58 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+HELP_TEXT = (
+    "Jak korzystać z bota\n\n"
+    "📥 Pobieranie\n"
+    "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, X, Spotify, Castbox) "
+    "i wybierz format. Pliki większe niż limit Telegrama przyjdą w częściach 7z.\n\n"
+    "✂️ Przycinanie audio\n"
+    "• Pod każdym wysłanym plikiem audio jest przycisk „✂️ Przytnij” (działa 24 h).\n"
+    "• Podcasty i Spotify: „✂️ Pobierz i przytnij”.\n"
+    "• Własny plik: wyślij MP3 lub wiadomość głosową i wybierz „✂️ Przytnij”.\n"
+    "• Zapis: 1:30-4:45 · 2:15- (do końca) · -5:00 (od początku) · "
+    "kilka zakresów po przecinku.\n\n"
+    "📝 Transkrypcja i podsumowanie\n"
+    "Pod linkiem wybierz „Transkrypcja audio” lub „Transkrypcja + Podsumowanie” "
+    "albo wyślij plik audio/wideo.\n\n"
+    "🎵 Spotify\n"
+    "Odcinki, utwory, albumy i playlisty — przy albumach zaznacz utwory i pobierz je "
+    "pojedynczo albo w paczkach 7z.\n\n"
+    "Komendy\n"
+    "/stop — zatrzymaj trwające pobieranie lub przetwarzanie\n"
+    "/history — historia pobrań\n"
+    "/logout — wyloguj się"
+)
+
+HELP_ADMIN_SECTION = (
+    "\n\nKomendy administratora\n"
+    "/status — miejsce na dysku i stan plików\n"
+    "/cleanup — usuń pliki starsze niż 24 h\n"
+    "/users — lista autoryzowanych użytkowników\n"
+    "/spotify_login — połącz konto Spotify\n"
+    "/spotify_logout — odłącz konto Spotify"
+)
+
+NOT_ADMIN_TEXT = "Ta komenda jest dostępna tylko dla administratora bota."
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Jak korzystać z bota:\n\n"
-        "📹 *Pobieranie video/audio:*\n"
-        "1. Wyślij link z obsługiwanej platformy\n"
-        "2. Wybierz format (video lub audio) i jakość\n"
-        "3. Poczekaj na pobranie pliku\n\n"
-        "🎤 *Transkrypcja plików audio/video:*\n"
-        "1. Wyślij wiadomość głosową, plik audio lub video\n"
-        "2. Wybierz: transkrypcja lub transkrypcja + podsumowanie\n"
-        "3. Obsługiwane formaty audio: OGG, MP3, M4A, WAV, FLAC, OPUS\n"
-        "4. Obsługiwane formaty video: MP4, MOV, MKV, AVI, WEBM\n\n"
-        "🌐 *Obsługiwane platformy:*\n"
-        f"{_format_supported_platforms_block()}\n\n"
-        "🔒 *Platformy wymagające logowania:*\n"
-        f"{_format_cookies_required_names()} mogą wymagać pliku cookies.txt\n"
-        "do pobierania treści z ograniczonym dostępem.\n\n"
-        "Komendy administracyjne:\n"
-        "- /status - sprawdź przestrzeń dyskową\n"
-        "- /cleanup - usuń stare pliki (>24h)\n"
-        "- /spotify_login - połącz konto Spotify dla playlist\n"
-        "- /spotify_logout - odłącz konto Spotify",
-        parse_mode="Markdown",
-    )
+    # Open to unauthorized users too. Sent without parse_mode: the text contains
+    # underscores in command names (/spotify_login) that would break Markdown.
+    text = HELP_TEXT
+    if _is_admin(update.effective_user.id):
+        text += HELP_ADMIN_SECTION
+    await update.message.reply_text(text)
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
+        return
+
+    if not _is_admin(user_id):
+        await update.message.reply_text(NOT_ADMIN_TEXT)
         return
 
     used_gb, free_gb, total_gb, usage_percent = get_disk_usage()
@@ -334,6 +356,10 @@ async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
+        return
+
+    if not _is_admin(user_id):
+        await update.message.reply_text(NOT_ADMIN_TEXT)
         return
 
     await update.message.reply_text("Rozpoczynam czyszczenie starych plików...")
