@@ -2043,6 +2043,31 @@ def test_subtitle_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
     offer.assert_awaited_once()
 
 
+def test_subtitle_too_long_for_summary_keeps_notice_in_final_status(tmp_path, monkeypatch):
+    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(_trc, "transcript_too_long_for_summary", lambda text: True)
+    summarize = AsyncMock()
+    monkeypatch.setattr(_trc, "generate_summary_artifact", summarize)
+    update = _make_update("sub_sum_1", chat_id=701)
+    update.effective_user.id = 1
+    context = _make_context()
+
+    asyncio.run(_trc.handle_subtitle_download(
+        update, context, "https://youtube.com/watch?v=x", "pl", False,
+        summary=True, summary_type=1,
+    ))
+
+    summarize.assert_not_awaited()
+    context.bot.send_document.assert_awaited_once()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert "zbyt długi na podsumowanie AI" in messages[-1]
+    assert messages[-1] == (
+        "Napisy pobrane, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
+        "Wysłano samą transkrypcję z napisów."
+    )
+    offer.assert_awaited_once()
+
+
 def test_subtitle_summary_exception_still_sends_transcript(tmp_path, monkeypatch):
     _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
     monkeypatch.setattr(_trc, "generate_summary_artifact", AsyncMock(side_effect=RuntimeError("boom")))

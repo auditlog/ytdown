@@ -539,11 +539,13 @@ async def handle_subtitle_download(
         dated=True,
     )
 
+    # Set when the requested summary is skipped; kept in the final status so the
+    # user still sees why no summary arrived (same idea as the Spotify path in
+    # bot/handlers/spotify_callbacks.py).
+    summary_notice = None
     if summary and transcript_too_long_for_summary(transcript_text):
-        await update_status(
-            "Napisy pobrane, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
-            "Wysyłam samą transkrypcję z napisów."
-        )
+        summary_notice = "Napisy pobrane, ale tekst jest zbyt długi na podsumowanie AI."
+        await update_status(f"{summary_notice}\n\nWysyłam samą transkrypcję z napisów.")
         summary = False
 
     if summary:
@@ -639,7 +641,9 @@ async def handle_subtitle_download(
         )
         return
 
-    await update_status("Napisy pobrane.\n\nWysyłanie transkrypcji...")
+    if summary_notice is None:
+        # Otherwise the notice stays visible while the transcript is sent.
+        await update_status("Napisy pobrane.\n\nWysyłanie transkrypcji...")
     display_text = transcript_text
     if len(display_text) <= 30000:
         await send_long_message(
@@ -678,7 +682,10 @@ async def handle_subtitle_download(
         None,
         selected_format=f"sub_{lang}",
     )
-    await update_status("Napisy zostały wysłane!")
+    if summary_notice:
+        await update_status(f"{summary_notice}\n\nWysłano samą transkrypcję z napisów.")
+    else:
+        await update_status("Napisy zostały wysłane!")
     await offer_custom_transcript_prompt(
         context,
         chat_id=chat_id,
