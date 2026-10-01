@@ -1937,10 +1937,34 @@ def test_spotify_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
     assert result is True
     context.bot.send_document.assert_awaited_once()
     messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
-    assert (
+    notice = (
         "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
         "Wysyłam samą transkrypcję."
-    ) in messages
+    )
+    assert notice in messages
+    # The notice must survive into the final status, not be replaced by a bare "Gotowe".
+    assert messages[-1] == f"Gotowe: Episode\n\n{notice}"
+
+
+def test_spotify_video_summary_failure_keeps_notice_in_final_status(tmp_path, monkeypatch):
+    transcript = tmp_path / "t.md"
+    transcript.write_text("# Test Episode\n\nTekst.\n", encoding="utf-8")
+    monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **kw: str(transcript))
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(sc, "generate_summary_artifact", AsyncMock(return_value=None))
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "offer_custom_transcript_prompt", AsyncMock())
+    session = _spotify_video_session()
+    session["subtitle_languages"] = ["pl-pl"]
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session, summary=True, summary_type=1))
+
+    context.bot.send_document.assert_awaited_once()
+    last = update.callback_query.edit_message_text.await_args.args[0]
+    assert last.startswith("Gotowe: Test Episode")
+    assert "nie udało się wygenerować podsumowania" in last
 
 
 def test_spotify_video_transcription_checks_claude_key_before_any_download(monkeypatch):
@@ -1963,3 +1987,73 @@ def test_spotify_video_transcription_checks_claude_key_before_any_download(monke
         "Podsumowanie jest niedostępne"
     )
     context.bot.send_document.assert_not_awaited()
+
+
+def _subtitle_setup(tmp_path, monkeypatch, *, keys):
+    sub = tmp_path / "subs.vtt"
+    sub.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(_trc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(_trc, "get_runtime_value", keys)
+    monkeypatch.setattr(_trc, "get_video_info", lambda url: {"title": "Clip"})
+    download = Mock(return_value=str(sub))
+    monkeypatch.setattr(_trc, "download_subtitles", download)
+    monkeypatch.setattr(_trc, "parse_subtitle_file", lambda path: "Tekst napisów.")
+    monkeypatch.setattr(_trc, "record_download_for", Mock())
+    offer = AsyncMock()
+    monkeypatch.setattr(_trc, "offer_custom_transcript_prompt", offer)
+    return download, offer
+
+
+def test_subtitle_summary_checks_claude_key_before_downloading(tmp_path, monkeypatch):
+    download, _offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys())
+    update = _make_update("sub_sum_1", chat_id=701)
+    update.effective_user.id = 1
+
+    asyncio.run(_trc.handle_subtitle_download(
+        update, _make_context(), "https://youtube.com/watch?v=x", "pl", False,
+        summary=True, summary_type=1,
+    ))
+
+    download.assert_not_called()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages == [
+        "Podsumowanie jest niedostępne — brak klucza API Claude. "
+        "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
+    ]
+
+
+def test_subtitle_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
+    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(_trc, "generate_summary_artifact", AsyncMock(return_value=None))
+    update = _make_update("sub_sum_1", chat_id=701)
+    update.effective_user.id = 1
+    context = _make_context()
+
+    asyncio.run(_trc.handle_subtitle_download(
+        update, context, "https://youtube.com/watch?v=x", "pl", False,
+        summary=True, summary_type=1,
+    ))
+
+    context.bot.send_document.assert_awaited_once()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages[-1] == (
+        "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
+        "Wysyłam samą transkrypcję."
+    )
+    offer.assert_awaited_once()
+
+
+def test_subtitle_summary_exception_still_sends_transcript(tmp_path, monkeypatch):
+    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(_trc, "generate_summary_artifact", AsyncMock(side_effect=RuntimeError("boom")))
+    update = _make_update("sub_sum_1", chat_id=701)
+    update.effective_user.id = 1
+    context = _make_context()
+
+    asyncio.run(_trc.handle_subtitle_download(
+        update, context, "https://youtube.com/watch?v=x", "pl", False,
+        summary=True, summary_type=1,
+    ))
+
+    context.bot.send_document.assert_awaited_once()
+    offer.assert_awaited_once()

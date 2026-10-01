@@ -786,8 +786,10 @@ def _fake_keys(**values):
 
 
 def test_link_transcription_checks_groq_key_before_downloading(tmp_path, monkeypatch):
-    dc, plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
     monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(CLAUDE_API_KEY="c"))
+    prepare = mock.Mock()
+    monkeypatch.setattr(dc, "prepare_download_plan", prepare)
     download = mock.AsyncMock()
     monkeypatch.setattr(dc, "execute_download", download)
     update, context = _make_update("dl_audio_mp3"), _make_context()
@@ -797,7 +799,7 @@ def test_link_transcription_checks_groq_key_before_downloading(tmp_path, monkeyp
     ))
 
     download.assert_not_awaited()
-    assert not hasattr(plan, "kwargs")
+    prepare.assert_not_called()
     last = update.callback_query.edit_message_text.await_args
     assert last.args[0] == (
         "Funkcja niedostępna — brak klucza API do transkrypcji. Skontaktuj się z administratorem."
@@ -868,3 +870,16 @@ def test_link_summary_exception_still_sends_transcript(tmp_path, monkeypatch):
     ))
 
     context.bot.send_document.assert_awaited_once()
+
+
+def test_plain_audio_download_ignores_missing_api_keys(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys())
+    sender = mock.AsyncMock(return_value=None)
+    monkeypatch.setattr(dc, "send_audio_with_trim", sender)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    sender.assert_awaited_once()
+    assert update.callback_query.edit_message_text.await_args.args[0].startswith("Plik został wysłany!")

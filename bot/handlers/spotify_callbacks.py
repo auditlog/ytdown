@@ -278,11 +278,13 @@ async def download_spotify_resolved(
         file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
 
         if transcribe:
+            summary_notices: list[str] = []
             transcription_ok = await _handle_transcription(
                 update, context, chat_id, title, downloaded_file_path,
                 file_size_mb, chat_download_path, summary, summary_type,
                 update_status,
                 resolved=resolved, job_url=job_url,
+                notices=summary_notices,
             )
             downloaded_file_path = None
             if not transcription_ok:
@@ -333,7 +335,11 @@ async def download_spotify_resolved(
                 await update_status(f"Gotowe: {title}\n\n{TRIM_AVAILABLE_HINT}")
                 return True
 
-        await update_status(f"Gotowe: {title}")
+        done_text = f"Gotowe: {title}"
+        if transcribe and summary_notices:
+            # Keep the summary notice in the final status, or it would vanish.
+            done_text += f"\n\n{summary_notices[0]}"
+        await update_status(done_text)
         return True
     except AudioDeliveryError as exc:
         await update_status(str(exc))
@@ -632,15 +638,15 @@ async def transcribe_spotify_video(
         transcript_result = load_transcript_result(transcript_path)
         transcript_text = transcript_result.display_text
 
-        summary_failed = False
+        summary_notice = None
         if summary and summary_type:
-            summary_failed = await _maybe_generate_summary(
+            summary_notice = await _maybe_generate_summary(
                 context, chat_id, title, transcript_text, sanitized_title,
                 chat_download_path, update_status, summary_type=summary_type,
             )
 
-        if not summary_failed:
-            # Otherwise keep the "summary failed, sending transcript" status visible.
+        if not summary_notice:
+            # Otherwise the notice stays visible while the transcript is sent.
             await update_status("Wysyłanie pliku z transkrypcją...")
         with open(transcript_path, "rb") as file_obj:
             await context.bot.send_document(
@@ -684,7 +690,8 @@ async def transcribe_spotify_video(
             transcript_path=transcript_path,
             title=title,
         )
-        await update_status(f"Gotowe: {title}")
+        # Keep the summary notice in the final status, or it would vanish.
+        await update_status(f"Gotowe: {title}" + (f"\n\n{summary_notice}" if summary_notice else ""))
 
     except SpotifyVideoCancelled:
         await update_status("Pobieranie anulowane.")
@@ -708,12 +715,14 @@ async def transcribe_spotify_video(
 async def _handle_transcription(
     update, context, chat_id, title, downloaded_file_path,
     file_size_mb, chat_download_path, summary, summary_type, update_status,
-    resolved=None, job_url="",
+    resolved=None, job_url="", notices=None,
 ):
     """Transcribe and optionally summarise a downloaded Spotify episode.
 
     Returns False when transcription failed (the error is already shown in the
-    status message), True once the transcript has been delivered.
+    status message), True once the transcript has been delivered. A summary
+    notice (summary skipped or failed) is appended to ``notices`` so the caller
+    can keep it in its final status.
     """
 
     await update_status(
@@ -733,16 +742,18 @@ async def _handle_transcription(
     transcript_text = transcript_result.display_text
     sanitized_title = os.path.splitext(os.path.basename(downloaded_file_path))[0]
 
-    summary_failed = False
+    summary_notice = None
     if summary and summary_type:
-        summary_failed = await _maybe_generate_summary(
+        summary_notice = await _maybe_generate_summary(
             context, chat_id, title, transcript_text, sanitized_title,
             chat_download_path, update_status,
             summary_type=summary_type,
         )
+        if summary_notice and notices is not None:
+            notices.append(summary_notice)
 
-    if not summary_failed:
-        # Otherwise keep the "summary failed, sending transcript" status visible.
+    if not summary_notice:
+        # Otherwise the notice stays visible while the transcript is sent.
         await update_status("Wysyłanie pliku z transkrypcją...")
     with open(transcript_path, "rb") as file_obj:
         await context.bot.send_document(
@@ -786,19 +797,19 @@ async def _maybe_generate_summary(
 ):
     """Generate an AI summary if keys are available and text is short enough.
 
-    Returns True only when the summary was attempted and failed.
+    Returns a Polish notice when no summary was produced (missing key, text too
+    long, or generation failed), otherwise None. The notice is also shown as a
+    status; callers keep it in their final status.
     """
 
     if not get_runtime_value("CLAUDE_API_KEY", ""):
-        await update_status(
-            "Transkrypcja zakończona.\n\nPodsumowanie niedostępne — brak klucza CLAUDE_API_KEY.\nWysyłam samą transkrypcję."
-        )
-        return False
+        notice = "Transkrypcja zakończona.\n\nPodsumowanie niedostępne — brak klucza CLAUDE_API_KEY.\nWysyłam samą transkrypcję."
+        await update_status(notice)
+        return notice
     if transcript_too_long_for_summary(transcript_text):
-        await update_status(
-            "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\nWysyłam samą transkrypcję."
-        )
-        return False
+        notice = "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\nWysyłam samą transkrypcję."
+        await update_status(notice)
+        return notice
 
     await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
     try:
@@ -816,11 +827,11 @@ async def _maybe_generate_summary(
     if not summary_result:
         # The caller still delivers the transcript file right after this.
         await update_status(SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT)
-        return True
+        return SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT
     await send_long_message(
         context.bot,
         chat_id,
         summary_result.summary_text,
         header=f"*Podsumowanie: {escape_md(title)}*\n\n",
     )
-    return False
+    return None

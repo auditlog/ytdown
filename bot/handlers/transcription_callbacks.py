@@ -31,6 +31,7 @@ from bot.downloader_validation import sanitize_filename
 from bot.services.transcription_service import (
     cleanup_transcription_artifacts,
     generate_summary_artifact,
+    MISSING_CLAUDE_KEY_TEXT,
     SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
     load_transcript_result,
     missing_transcription_key_message,
@@ -500,6 +501,11 @@ async def handle_subtitle_download(
     async def update_status(text):
         await safe_edit_message(query, text)
 
+    if summary and not get_runtime_value("CLAUDE_API_KEY", ""):
+        # Fail fast: do not download subtitles for a summary that cannot be made.
+        await update_status(MISSING_CLAUDE_KEY_TEXT)
+        return
+
     sub_type = "automatycznych" if auto else "manualnych"
     await update_status(f"Pobieranie napisów YouTube ({lang.upper()}, {sub_type})...")
 
@@ -541,24 +547,52 @@ async def handle_subtitle_download(
         summary = False
 
     if summary:
-        if not get_runtime_value("CLAUDE_API_KEY", ""):
-            await update_status(
-                "Funkcja niedostępna — brak klucza API do podsumowań.\n"
-                "Skontaktuj się z administratorem."
-            )
-            return
-
         await update_status("Napisy pobrane.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
-        summary_result = await generate_summary_artifact(
-            transcript_text=transcript_text,
-            summary_type=summary_type,
-            title=title,
-            sanitized_title=f"{datetime.now().strftime('%Y-%m-%d')} {sanitized_title}",
-            output_dir=chat_download_path,
-            executor=_executor,
-        )
+        try:
+            summary_result = await generate_summary_artifact(
+                transcript_text=transcript_text,
+                summary_type=summary_type,
+                title=title,
+                sanitized_title=f"{datetime.now().strftime('%Y-%m-%d')} {sanitized_title}",
+                output_dir=chat_download_path,
+                executor=_executor,
+            )
+        except Exception as exc:
+            logging.error("Summary generation failed: %s", exc)
+            summary_result = None
         if not summary_result:
-            await update_status("Wystąpił błąd podczas generowania podsumowania.")
+            # Never lose the subtitle transcript because the summary failed.
+            await update_status(SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT)
+            with open(transcript_path, "rb") as file_obj:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=file_obj,
+                    filename=os.path.basename(transcript_path),
+                    caption=f"Napisy YouTube ({lang.upper()}): {title} (podsumowanie nie powiodło się)",
+                    read_timeout=60,
+                    write_timeout=60,
+                )
+            try:
+                os.remove(sub_path)
+            except Exception as exc:
+                logging.error("Error deleting subtitle file: %s", exc)
+            record_download_for(
+                context,
+                chat_id,
+                title,
+                url,
+                f"yt_subtitles_{lang}",
+                0,
+                None,
+                selected_format=f"sub_{lang}",
+            )
+            await offer_custom_transcript_prompt(
+                context,
+                chat_id=chat_id,
+                requester_id=update.effective_user.id,
+                transcript_path=transcript_path,
+                title=title,
+            )
             return
 
         await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
