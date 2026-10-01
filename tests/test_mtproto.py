@@ -217,6 +217,47 @@ class TestSendAudioMtproto:
             assert call_kwargs['title'] == "Test"
             assert call_kwargs['caption'] == "Cap"
 
+    def _client_and_pyrogram(self):
+        mock_client_instance = MagicMock()
+        mock_client_instance.__aenter__ = AsyncMock(return_value=mock_client_instance)
+        mock_client_instance.__aexit__ = AsyncMock(return_value=False)
+        mock_client_instance.send_audio = AsyncMock()
+        mock_pyrogram = MagicMock()
+        mock_pyrogram.Client.return_value = mock_client_instance
+        return mock_client_instance, mock_pyrogram
+
+    def test_passes_performer_file_name_and_buttons(self, monkeypatch, tmp_path):
+        _set_mtproto_config(monkeypatch)
+        audio_file = tmp_path / "source.mp3"
+        audio_file.write_bytes(b"\x00" * 100)
+        client, pyrogram = self._client_and_pyrogram()
+
+        with patch.dict('sys.modules', {'pyrogram': pyrogram}):
+            result = asyncio.run(send_audio_mtproto(
+                123, str(audio_file), title="T", performer="Host", file_name="Episode.mp3",
+                buttons=[("✂️ Przytnij", "trim_src_AAAAAAAAAAA")],
+            ))
+
+        assert result is True
+        kwargs = client.send_audio.await_args.kwargs
+        assert kwargs["performer"] == "Host"
+        assert kwargs["file_name"] == "Episode.mp3"
+        pyrogram.types.InlineKeyboardButton.assert_called_once_with(
+            "✂️ Przytnij", callback_data="trim_src_AAAAAAAAAAA"
+        )
+        assert kwargs["reply_markup"] is pyrogram.types.InlineKeyboardMarkup.return_value
+
+    def test_omits_reply_markup_without_buttons(self, monkeypatch, tmp_path):
+        _set_mtproto_config(monkeypatch)
+        audio_file = tmp_path / "source.mp3"
+        audio_file.write_bytes(b"\x00" * 100)
+        client, pyrogram = self._client_and_pyrogram()
+
+        with patch.dict('sys.modules', {'pyrogram': pyrogram}):
+            asyncio.run(send_audio_mtproto(123, str(audio_file), title="T"))
+
+        assert client.send_audio.await_args.kwargs["reply_markup"] is None
+
     def test_returns_false_on_send_exception(self, monkeypatch, tmp_path):
         _set_mtproto_config(monkeypatch)
         audio_file = tmp_path / "test.mp3"
