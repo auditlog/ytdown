@@ -76,13 +76,13 @@ def looks_like_time_ranges(text: str) -> bool:
 
 def _parse_timestamp(value: str, fragment: str) -> int:
     if not _TIMESTAMP_RE.match(value):
-        raise TimeRangeError(f"Nie rozumiem zakresu “{fragment}”. {EXAMPLES}")
+        raise TimeRangeError(f"Nie rozumiem zakresu „{fragment}”. {EXAMPLES}")
     parts = [int(part) for part in value.split(":")]
     # The first component is unbounded ("90" seconds, "102:30" minutes);
     # every later one is minutes or seconds and must stay below 60.
     if any(part >= 60 for part in parts[1:]):
         raise TimeRangeError(
-            f"“{value}” nie jest poprawnym czasem — minuty i sekundy muszą być mniejsze niż 60."
+            f"„{value}” nie jest poprawnym czasem — minuty i sekundy muszą być mniejsze niż 60."
         )
     seconds = 0
     for part in parts:
@@ -106,10 +106,10 @@ def parse_time_ranges(text: str, *, max_ranges: int = TRIM_MAX_RANGES) -> list[R
     for fragment in fragments:
         bounds = _DASH_RE.split(fragment)
         if len(bounds) != 2:
-            raise TimeRangeError(f"Nie rozumiem zakresu “{fragment}”. {EXAMPLES}")
+            raise TimeRangeError(f"Nie rozumiem zakresu „{fragment}”. {EXAMPLES}")
         raw_start, raw_end = (bound.strip() for bound in bounds)
         if not raw_start and not raw_end:
-            raise TimeRangeError(f"Zakres “{fragment}” musi mieć początek albo koniec.")
+            raise TimeRangeError(f"Zakres „{fragment}” musi mieć początek albo koniec.")
         start = _parse_timestamp(raw_start, fragment) if raw_start else None
         end = _parse_timestamp(raw_end, fragment) if raw_end else None
         if end is not None and (start or 0) >= end:
@@ -137,7 +137,7 @@ def resolve_ranges(specs: list[RangeSpec], duration_sec: int) -> list[ResolvedRa
         if end > duration_sec:
             raise TimeRangeError(
                 f"Koniec {format_timestamp(end)} jest poza plikiem (długość {length}). "
-                f"Wpisz “{format_timestamp(start)}-”, żeby ciąć do końca."
+                f"Wpisz „{format_timestamp(start)}-”, żeby ciąć do końca."
             )
         if start == 0 and end == duration_sec:
             raise TimeRangeError(

@@ -43,12 +43,12 @@ def test_parse_time_ranges_accepts_supported_forms(text, expected):
 @pytest.mark.parametrize(
     "text, message_part",
     [
-        ("abc", "Nie rozumiem zakresu “abc”"),
-        ("1:30", "Nie rozumiem zakresu “1:30”"),
-        ("1-2-3", "Nie rozumiem zakresu “1-2-3”"),
-        ("-", "Zakres “-” musi mieć początek albo koniec."),
-        ("1:75-2:00", "“1:75” nie jest poprawnym czasem"),
-        ("1:61:00-2:00:00", "“1:61:00” nie jest poprawnym czasem"),
+        ("abc", "Nie rozumiem zakresu „abc”"),
+        ("1:30", "Nie rozumiem zakresu „1:30”"),
+        ("1-2-3", "Nie rozumiem zakresu „1-2-3”"),
+        ("-", "Zakres „-” musi mieć początek albo koniec."),
+        ("1:75-2:00", "„1:75” nie jest poprawnym czasem"),
+        ("1:61:00-2:00:00", "„1:61:00” nie jest poprawnym czasem"),
         ("5:00-2:00", "W zakresie 5:00-2:00 początek musi być wcześniej niż koniec."),
         ("5:00-5:00", "W zakresie 5:00-5:00 początek musi być wcześniej niż koniec."),
         ("-0", "W zakresie 0:00-0:00 początek musi być wcześniej niż koniec."),
@@ -96,14 +96,14 @@ def test_resolve_ranges_against_duration(specs, expected):
         (
             [RangeSpec(6000, 6300)],
             "Koniec 1:45:00 jest poza plikiem (długość 1:42:10). "
-            "Wpisz “1:40:00-”, żeby ciąć do końca.",
+            "Wpisz „1:40:00-”, żeby ciąć do końca.",
         ),
         ([RangeSpec(0, DURATION)], "Zakres 0:00-1:42:10 obejmuje cały plik — nie ma czego ciąć."),
         ([RangeSpec(0, None)], "Zakres 0:00-1:42:10 obejmuje cały plik — nie ma czego ciąć."),
         (
             [RangeSpec(10, 20), RangeSpec(6000, 6300)],
             "Koniec 1:45:00 jest poza plikiem (długość 1:42:10). "
-            "Wpisz “1:40:00-”, żeby ciąć do końca.",
+            "Wpisz „1:40:00-”, żeby ciąć do końca.",
         ),
     ],
 )
