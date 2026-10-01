@@ -21,6 +21,11 @@ from bot.transcription_providers import (
 )
 
 
+# User-visible placeholder for a part Groq returned no text for; written both
+# into the merged transcript and into the per-part file.
+EMPTY_PART_MARKER = "[brak transkrypcji tego fragmentu]"
+
+
 def transcribe_mp3_file(
     file_path,
     output_dir,
@@ -104,12 +109,12 @@ def transcribe_mp3_file(
             previous_text = transcription
         else:
             logging.warning("Part %s: transcription is empty!", index + 1)
-            transcriptions.append("[brak transkrypcji tego fragmentu]")
+            transcriptions.append(EMPTY_PART_MARKER)
 
         output_part_num = get_part_number_fn(os.path.basename(part_path)) or (index + 1)
         transcript_path = os.path.join(output_dir, f"{base_name}_part{output_part_num}_transcript.txt")
         with open(transcript_path, "w", encoding="utf-8") as file_obj:
-            file_obj.write(transcription if transcription else "[Transcription error]")
+            file_obj.write(transcription if transcription else EMPTY_PART_MARKER)
 
         logging.info(
             "Saved transcription for part %s (%s characters)",
@@ -141,12 +146,12 @@ def transcribe_mp3_file(
         with open(transcript_md_path, "w", encoding="utf-8") as file_obj:
             file_obj.write(f"# {base_name} Transcript\n\n")
             file_obj.write("**Błąd podczas transkrypcji**\n\n")
-            file_obj.write("Could not generate transcription for this audio file.\n")
-            file_obj.write("Possible reasons:\n")
-            file_obj.write("- Audio file is corrupted or incompatible\n")
-            file_obj.write("- Groq API (Whisper) error\n")
-            file_obj.write("- No clear speech in recording\n\n")
-            file_obj.write("Try again with a different file or contact administrator.")
+            file_obj.write("Nie udało się wygenerować transkrypcji tego pliku audio.\n")
+            file_obj.write("Możliwe przyczyny:\n")
+            file_obj.write("- plik audio jest uszkodzony lub ma nieobsługiwany format\n")
+            file_obj.write("- błąd API Groq (Whisper)\n")
+            file_obj.write("- w nagraniu nie ma wyraźnej mowy\n\n")
+            file_obj.write("Spróbuj ponownie z innym plikiem albo skontaktuj się z administratorem.")
         return transcript_md_path
 
     if get_claude_api_key_fn():

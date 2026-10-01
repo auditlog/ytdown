@@ -240,3 +240,43 @@ def test_transcribe_mp3_file_breaks_on_cancel(tmp_path):
     assert api_called["n"] == 0
     # Result must indicate cancel (None or "cancelled"/"anulowano" string).
     assert result is None or "anulowano" in str(result).lower() or "cancelled" in str(result).lower()
+
+
+def _run_single_part(tmp_path, transcription):
+    source = tmp_path / "audio.mp3"
+    source.write_bytes(b"x" * 100)
+    part1 = tmp_path / "audio_part1.mp3"
+    part1.write_bytes(b"a")
+    return pipeline.transcribe_mp3_file(
+        str(source),
+        str(tmp_path),
+        get_api_key_fn=lambda: "groq",
+        get_claude_api_key_fn=lambda: "",
+        split_mp3_fn=lambda *_args, **_kwargs: [str(part1)],
+        get_part_number_fn=lambda _filename: 1,
+        transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: transcription,
+        post_process_transcript_fn=lambda text, api_key=None: None,
+        estimate_token_count_fn=lambda text: len(text),
+        is_text_too_long_for_correction_fn=lambda _text: False,
+        rmtree_fn=lambda _path: None,
+    )
+
+
+def test_error_file_body_is_polish(tmp_path):
+    # Whitespace-only text is dropped while merging, which yields the error file.
+    result = _run_single_part(tmp_path, "   ")
+
+    content = Path(result).read_text(encoding="utf-8")
+    assert "**Błąd podczas transkrypcji**" in content
+    assert "Nie udało się wygenerować transkrypcji tego pliku audio." in content
+    assert "Możliwe przyczyny:" in content
+    assert "Spróbuj ponownie z innym plikiem albo skontaktuj się z administratorem." in content
+    for english in ("Could not", "Possible reasons", "corrupted", "Try again", "contact administrator"):
+        assert english not in content
+
+
+def test_empty_part_file_marker_is_polish(tmp_path):
+    _run_single_part(tmp_path, "")
+
+    part_text = (tmp_path / "audio_part1_transcript.txt").read_text(encoding="utf-8")
+    assert part_text == "[brak transkrypcji tego fragmentu]"
