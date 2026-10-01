@@ -14,11 +14,11 @@ from telegram.ext import ContextTypes
 
 from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.downloader_validation import sanitize_filename
+from bot.handlers.audio_delivery import AudioDeliveryError, TRIM_AVAILABLE_HINT, send_audio_with_trim
 from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_message
 from bot.handlers.transcript_prompt_handlers import offer_custom_transcript_prompt
 from bot.mtproto import (
     mtproto_unavailability_reason as _mtproto_unavailability_reason,
-    send_audio_mtproto,
     send_video_mtproto,
 )
 from bot.runtime import record_download_for
@@ -271,16 +271,14 @@ async def download_spotify_resolved(
             downloaded_file_path = None
         else:
             await update_status(f"Wysyłanie pliku ({file_size_mb:.1f} MB)...")
-            with open(downloaded_file_path, "rb") as file_obj:
-                await context.bot.send_audio(
-                    chat_id=chat_id,
-                    audio=file_obj,
-                    title=title,
-                    performer=artist or None,
-                    caption=title[:200],
-                    read_timeout=120,
-                    write_timeout=120,
-                )
+            trim_source = await send_audio_with_trim(
+                context,
+                chat_id,
+                downloaded_file_path,
+                title=title,
+                performer=artist or None,
+                caption=title[:200],
+            )
             record_download_for(
                 context,
                 chat_id,
@@ -290,9 +288,15 @@ async def download_spotify_resolved(
                 file_size_mb,
             )
             _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+            if trim_source is not None:
+                await update_status(f"Gotowe: {title}\n\n{TRIM_AVAILABLE_HINT}")
+                return True
 
         await update_status(f"Gotowe: {title}")
         return True
+    except AudioDeliveryError as exc:
+        await update_status(str(exc))
+        return False
     except Exception as exc:
         logging.error("Error downloading Spotify audio: %s", exc)
         await update_status(f"Błąd pobierania: {str(exc)[:200]}")
@@ -347,6 +351,7 @@ async def download_spotify_video(
         await update_status(text)
 
     downloaded_path = None
+    trim_source = None
     try:
         # Profiles are recomputed from the stored manifest rather than kept
         # in the session, since Profile dataclass instances are not
@@ -385,7 +390,11 @@ async def download_spotify_video(
         file_size_mb = os.path.getsize(downloaded_path) / (1024 * 1024)
         await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie...")
 
-        if file_size_mb > TELEGRAM_UPLOAD_LIMIT_MB:
+        if height is None:
+            trim_source = await send_audio_with_trim(
+                context, chat_id, downloaded_path, title=title, caption=title[:200]
+            )
+        elif file_size_mb > TELEGRAM_UPLOAD_LIMIT_MB:
             reason = _mtproto_unavailability_reason()
             if reason is not None:
                 await update_status(
@@ -393,34 +402,19 @@ async def download_spotify_video(
                     f"limit: {TELEGRAM_UPLOAD_LIMIT_MB} MB).\n{reason}"
                 )
                 return
-            if height is None:
-                ok = await send_audio_mtproto(
-                    chat_id, downloaded_path, title=title, caption=title[:200]
-                )
-            else:
-                ok = await send_video_mtproto(chat_id, downloaded_path, caption=title[:200])
+            ok = await send_video_mtproto(chat_id, downloaded_path, caption=title[:200])
             if not ok:
                 await update_status("Wysyłanie pliku przez MTProto nie powiodło się.")
                 return
         else:
             with open(downloaded_path, "rb") as file_obj:
-                if height is None:
-                    await context.bot.send_audio(
-                        chat_id=chat_id,
-                        audio=file_obj,
-                        title=title,
-                        caption=title[:200],
-                        read_timeout=120,
-                        write_timeout=120,
-                    )
-                else:
-                    await context.bot.send_video(
-                        chat_id=chat_id,
-                        video=file_obj,
-                        caption=title[:200],
-                        read_timeout=120,
-                        write_timeout=120,
-                    )
+                await context.bot.send_video(
+                    chat_id=chat_id,
+                    video=file_obj,
+                    caption=title[:200],
+                    read_timeout=120,
+                    write_timeout=120,
+                )
 
         record_download_for(
             context,
@@ -431,10 +425,15 @@ async def download_spotify_video(
             file_size_mb,
         )
         _clear_session_context_value(context, chat_id, "spotify_video", legacy_key="spotify_video")
-        await update_status(f"Gotowe: {title}")
+        if trim_source is not None:
+            await update_status(f"Gotowe: {title}\n\n{TRIM_AVAILABLE_HINT}")
+        else:
+            await update_status(f"Gotowe: {title}")
 
     except SpotifyVideoCancelled:
         await update_status("Pobieranie anulowane.")
+    except AudioDeliveryError as exc:
+        await update_status(str(exc))
     except SpotifyVideoError as exc:
         # A failed segment fetch raises a descriptive English sentence, not a
         # mapped reason code, and it is the failure this pipeline hits most

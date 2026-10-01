@@ -519,3 +519,76 @@ def test_download_file_registers_and_unregisters_job(tmp_path, monkeypatch):
     # Even on early-exit path the job should register and unregister.
     assert test_registry.list_for_chat(7) == []
     session_store.reset()
+
+
+def _patch_single_download(monkeypatch, tmp_path, *, filename, size_mb=5):
+    """Stub the yt-dlp side of download_file so only the send path runs."""
+
+    from pathlib import Path
+    from types import SimpleNamespace
+    from bot.handlers import download_callbacks as dc
+
+    monkeypatch.setattr(dc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(dc, "is_7z_available", lambda: False)
+    monkeypatch.setattr(dc, "_mtproto_unavailability_reason", lambda: None)
+    monkeypatch.setattr(dc, "get_media_label", lambda _: "filmie")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: None)
+    monkeypatch.setattr(dc, "record_download_for", mock.Mock())
+    monkeypatch.setattr(dc, "estimate_download_size", lambda _: size_mb)
+    monkeypatch.setattr(dc, "download_thumbnail", lambda *args: None)
+
+    def plan(**kwargs):
+        plan.kwargs = kwargs
+        return SimpleNamespace(info={"title": "Song"}, title="Song", duration_str="3:00",
+                               sanitized_title="Song", chat_download_path=kwargs["chat_download_path"])
+
+    async def download(plan_obj, **kwargs):
+        file = Path(plan_obj.chat_download_path) / filename
+        file.write_bytes(b"audio bytes")
+        return SimpleNamespace(file_path=str(file), file_size_mb=size_mb)
+
+    monkeypatch.setattr(dc, "prepare_download_plan", plan)
+    monkeypatch.setattr(dc, "execute_download", download)
+    return dc, plan
+
+
+def test_download_file_audio_sends_through_trim_helper(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    sender = mock.AsyncMock(return_value=SimpleNamespace(token="AAAAAAAAAAA"))
+    monkeypatch.setattr(dc, "send_audio_with_trim", sender)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    assert sender.await_args.kwargs["title"] == "Song"
+    assert sender.await_args.args[2].endswith("song.mp3")
+    final = update.callback_query.edit_message_text.await_args.args[0]
+    assert final.startswith("Plik został wysłany!")
+    assert "✂️ Pod plikiem jest przycisk „Przytnij”" in final
+
+
+def test_download_file_audio_without_trim_keeps_plain_status(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "send_audio_with_trim", mock.AsyncMock(return_value=None))
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    assert update.callback_query.edit_message_text.await_args.args[0] == "Plik został wysłany!"
+
+
+def test_download_file_audio_reports_delivery_error(tmp_path, monkeypatch):
+    from bot.handlers.audio_delivery import AudioDeliveryError
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(
+        dc, "send_audio_with_trim",
+        mock.AsyncMock(side_effect=AudioDeliveryError("Plik za duży dla Bot API (60 MB, limit: 50 MB).\nBrak pyrogram.")),
+    )
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    assert "Brak pyrogram." in update.callback_query.edit_message_text.await_args.args[0]

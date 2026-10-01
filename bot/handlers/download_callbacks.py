@@ -27,6 +27,7 @@ from bot.handlers.common_ui import (
 )
 from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.download_budget import DownloadLimitError
+from bot.handlers.audio_delivery import AudioDeliveryError, TRIM_AVAILABLE_HINT, send_audio_with_trim
 from bot.security_policy import get_media_label, normalize_url
 from bot.session_context import (
     clear_session_context_value as _clear_session_context_value,
@@ -604,9 +605,22 @@ async def download_file(
                 method_label = " (MTProto)" if use_mtproto else ""
                 await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie pliku do Telegram...{method_label}")
                 thumb_path = await asyncio.get_event_loop().run_in_executor(_executor, download_thumbnail, info, chat_download_path, True)
+                trim_source = None
                 try:
-                    if use_mtproto:
-                        from bot.mtproto import mtproto_unavailability_reason, send_audio_mtproto, send_video_mtproto
+                    if media_type == "audio":
+                        # Moves the file into the trim store when it can be kept,
+                        # so the ✂️ button under the audio works for 24 h.
+                        trim_source = await send_audio_with_trim(
+                            context,
+                            chat_id,
+                            downloaded_file_path,
+                            title=title,
+                            caption=title,
+                            thumb_path=thumb_path,
+                            cancellation=cancellation,
+                        )
+                    elif use_mtproto:
+                        from bot.mtproto import mtproto_unavailability_reason, send_video_mtproto
 
                         reason = mtproto_unavailability_reason()
                         if reason is not None:
@@ -614,35 +628,21 @@ async def download_file(
                                 f"Plik za duży dla Bot API ({file_size_mb:.0f} MB, limit: {TELEGRAM_UPLOAD_LIMIT_MB} MB).\n"
                                 f"{reason}"
                             )
-                        if media_type == "audio":
-                            ok = await send_audio_mtproto(chat_id, downloaded_file_path, title=title, caption=title, thumb_path=thumb_path, cancellation=cancellation)
-                        else:
-                            ok = await send_video_mtproto(chat_id, downloaded_file_path, caption=title, thumb_path=thumb_path, cancellation=cancellation)
+                        ok = await send_video_mtproto(chat_id, downloaded_file_path, caption=title, thumb_path=thumb_path, cancellation=cancellation)
                         if not ok:
                             raise RuntimeError("Wysyłanie pliku przez MTProto nie powiodło się.")
                     else:
                         with open(downloaded_file_path, "rb") as file_obj:
                             thumb_file = open(thumb_path, "rb") if thumb_path else None
                             try:
-                                if media_type == "audio":
-                                    await context.bot.send_audio(
-                                        chat_id=chat_id,
-                                        audio=file_obj,
-                                        title=title,
-                                        caption=title,
-                                        thumbnail=thumb_file,
-                                        read_timeout=60,
-                                        write_timeout=60,
-                                    )
-                                else:
-                                    await context.bot.send_video(
-                                        chat_id=chat_id,
-                                        video=file_obj,
-                                        caption=title,
-                                        thumbnail=thumb_file,
-                                        read_timeout=60,
-                                        write_timeout=60,
-                                    )
+                                await context.bot.send_video(
+                                    chat_id=chat_id,
+                                    video=file_obj,
+                                    caption=title,
+                                    thumbnail=thumb_file,
+                                    read_timeout=60,
+                                    write_timeout=60,
+                                )
                             finally:
                                 if thumb_file:
                                     thumb_file.close()
@@ -659,7 +659,10 @@ async def download_file(
                     pass
                 record_download_for(context, chat_id, title, url, f"{media_type}_{format}", file_size_mb, time_range, selected_format=format)
                 success_recorded = True
-                await update_status("Plik został wysłany!")
+                if trim_source is not None:
+                    await update_status(f"Plik został wysłany!\n\n{TRIM_AVAILABLE_HINT}")
+                else:
+                    await update_status("Plik został wysłany!")
         except Exception as exc:
             if not success_recorded:
                 record_download_for(
@@ -675,7 +678,7 @@ async def download_file(
             logging.error("Error in download_file: %s", exc)
 
             error_str = str(exc).lower()
-            if isinstance(exc, DownloadLimitError):
+            if isinstance(exc, (DownloadLimitError, AudioDeliveryError)):
                 await update_status(str(exc))
             elif any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
                 platform_name = _get_session_context_value(
