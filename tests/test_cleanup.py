@@ -328,3 +328,17 @@ def test_purge_partial_archive_workspaces_removes_old(tmp_path, monkeypatch):
 
     assert partial_archive_workspaces.get(1, {}).get("old") is None
     session_store.reset()
+
+
+def test_purge_chat_workspaces_runs_trim_purge_per_chat(tmp_path, monkeypatch):
+    from bot import cleanup
+
+    (tmp_path / "42").mkdir()
+    (tmp_path / "not_a_dir.txt").write_text("x")
+    seen = []
+    monkeypatch.setattr(cleanup, "purge_expired_sources", lambda chat_dir: seen.append(chat_dir.name) or 0)
+    monkeypatch.setattr(cleanup, "_purge_archive_workspaces", lambda *args, **kwargs: 0)
+
+    cleanup._purge_chat_workspaces(tmp_path)
+
+    assert seen == ["42"]
