@@ -219,6 +219,7 @@ async def extracted_process_audio_file(
             [
                 [InlineKeyboardButton("Transkrypcja", callback_data="audio_transcribe")],
                 [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="audio_transcribe_summary")],
+                [InlineKeyboardButton("✂️ Przytnij", callback_data="trim_upload")],
             ]
         )
         await progress_msg.edit_text(

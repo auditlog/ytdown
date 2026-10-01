@@ -268,6 +268,31 @@ class TestAudioFileProcessing:
         assert context.user_data["audio_file_title"] == "abc"
         assert progress_message.edit_text.await_count >= 1
 
+    def test_process_audio_file_offers_trim_button(self, tmp_path, monkeypatch):
+        update = _make_update(user_id=777, chat_id=777)
+        context = _make_context()
+        progress_message = Mock()
+        progress_message.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=progress_message)
+        monkeypatch.setattr(tc, "DOWNLOAD_PATH", str(tmp_path / "downloads"))
+        os.makedirs(tc.DOWNLOAD_PATH, exist_ok=True)
+        tg_file = AsyncMock()
+
+        async def download_to_drive(path):
+            Path(path).write_bytes(b"abc")
+
+        tg_file.download_to_drive = download_to_drive
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+
+        _async(tc.process_audio_file(update, context, {
+            "file_id": "x1", "file_size": 1024, "duration": 12,
+            "mime_type": "audio/mpeg", "title": "abc",
+        }))
+
+        markup = progress_message.edit_text.await_args.kwargs["reply_markup"]
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+        assert callbacks == ["audio_transcribe", "audio_transcribe_summary", "trim_upload"]
+
 
 class TestHandleYoutubeLinkTimeRange:
     def test_handle_youtube_link_rejects_range_after_video_end(self, monkeypatch):

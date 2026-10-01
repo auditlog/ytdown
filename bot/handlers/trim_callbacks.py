@@ -190,6 +190,35 @@ async def ensure_trim_authorized(update: Update, context: ContextTypes.DEFAULT_T
     return False
 
 
+async def _start_upload_trim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    path = get_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
+    title = get_session_context_value(
+        context, chat_id, "audio_file_title", legacy_key="audio_file_title", default="Plik audio"
+    )
+    if not path or not Path(path).is_file():
+        await safe_edit_message(query, "Sesja wygasła — wyślij plik ponownie.")
+        return
+    try:
+        duration = await probe_duration(Path(path))
+    except AudioTrimError as exc:
+        logging.error("Cannot probe uploaded audio for trimming: %s", exc)
+        await safe_edit_message(query, "Nie udało się odczytać długości pliku audio. Wyślij go ponownie.")
+        return
+    # Hardlink, not move: transcribing the same upload keeps using the original path.
+    source = retain_source(
+        chat_id, path, title=title, performer=None, duration_sec=round(duration), link=True
+    )
+    if source is None:
+        await safe_edit_message(query, "Na serwerze brakuje miejsca, żeby przechować plik do cięcia.")
+        return
+    # A new message keeps the upload menu (transcription buttons) usable.
+    await start_trim_prompt(
+        context, chat_id=chat_id, requester_id=update.effective_user.id, source=source
+    )
+
+
 async def handle_trim_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str) -> None:
     """Route trim_src_*, trim_upload and trim_cancel callbacks."""
 
@@ -215,6 +244,10 @@ async def handle_trim_callback(update: Update, context: ContextTypes.DEFAULT_TYP
             await context.bot.send_message(chat_id=chat_id, text=EXPIRED_TEXT)
             return
         await start_trim_prompt(context, chat_id=chat_id, requester_id=user_id, source=source)
+        return
+
+    if data == "trim_upload":
+        await _start_upload_trim(update, context)
         return
 
     await safe_edit_message(query, "Nieobsługiwana akcja przycinania.")

@@ -499,3 +499,30 @@ def test_trim_dl_refuses_when_disk_is_low(monkeypatch):
     asyncio.run(tc.handle_callback(update, context))
     assert update.callback_query.edit_message_text.await_args.args[0] == tcb.NO_ROOM_TEXT
     download_file.assert_not_awaited()
+
+
+# --- uploaded audio -------------------------------------------------------------
+
+
+def test_trim_upload_links_source_and_sends_prompt(store, tmp_path, monkeypatch):
+    upload = tmp_path / "2026-10-01_voice.mp3"
+    upload.write_bytes(b"ID3 audio")
+    monkeypatch.setattr(tcb, "probe_duration", AsyncMock(return_value=95.0))
+    context = _make_context()
+    context.user_data["audio_file_path"] = str(upload)
+    context.user_data["audio_file_title"] = "Wiadomość głosowa"
+    update = _callback("trim_upload")
+
+    asyncio.run(tcb.handle_trim_callback(update, context, "trim_upload"))
+
+    assert upload.exists()  # transcription of the same upload still works
+    text = context.bot.send_message.await_args.kwargs["text"]
+    assert "Wiadomość głosowa" in text and "Długość: 1:35" in text
+    update.callback_query.edit_message_text.assert_not_awaited()  # upload menu stays intact
+    assert context.user_data["pending_trim"].requester_id == USER
+
+
+def test_trim_upload_without_session_reports_expiry(store):
+    update = _callback("trim_upload")
+    asyncio.run(tcb.handle_trim_callback(update, _make_context(), "trim_upload"))
+    assert update.callback_query.edit_message_text.await_args.args[0] == "Sesja wygasła — wyślij plik ponownie."
