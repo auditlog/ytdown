@@ -1759,3 +1759,27 @@ def test_download_spotify_resolved_offers_trim(monkeypatch, tmp_path):
     assert result is True
     assert sender.await_args.kwargs["performer"] == "Host"
     assert "✂️ Pod plikiem" in update.callback_query.edit_message_text.await_args.args[0]
+
+
+def test_download_spotify_resolved_trim_after_skips_send(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    produced = tmp_path / "Host - Episode.mp3"
+    produced.write_bytes(b"X" * 1024)
+    offer = AsyncMock(return_value=True)
+    sender = AsyncMock()
+    monkeypatch.setattr(sc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(sc, "download_resolved_audio", AsyncMock(return_value=str(produced)))
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "offer_trim_after_download", offer)
+    monkeypatch.setattr(sc, "send_audio_with_trim", sender)
+    update = _make_update("trim_dl", chat_id=123)
+
+    result = asyncio.run(sc.download_spotify_resolved(
+        update, _make_context(), {"source": "itunes", "title": "Episode", "artist": "Host"},
+        "mp3", trim_after=True,
+    ))
+
+    assert result is True
+    assert offer.await_args.kwargs["performer"] == "Host"
+    sender.assert_not_awaited()

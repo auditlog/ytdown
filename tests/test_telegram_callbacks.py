@@ -112,3 +112,27 @@ def test_spotify_keyboard_height_callback_round_trip():
         assert parsed is not None, f"Parser rejected callback {callback_data} for height {height}"
         assert parsed["media_type"] == "video"
         assert parsed["height"] == height, f"Parser returned wrong height for {callback_data}"
+
+
+def _callbacks(keyboard):
+    return [button.callback_data for row in keyboard for button in row]
+
+
+def test_podcast_keyboards_offer_download_and_trim():
+    from bot.handlers.common_ui import build_main_keyboard, build_spotify_track_keyboard
+
+    assert "trim_dl" in _callbacks(build_main_keyboard("castbox"))
+    assert "trim_dl" in _callbacks(build_main_keyboard("spotify"))
+    assert "trim_dl" in _callbacks(build_spotify_track_keyboard())
+    assert "trim_dl" not in _callbacks(build_main_keyboard("youtube"))
+
+
+def test_spotify_episode_offers_trim_only_with_fallback_audio():
+    with_fallback = build_spotify_episode_keyboard(
+        quality_options=[], has_native_audio=True, has_fallback_audio=True
+    )
+    native_only = build_spotify_episode_keyboard(
+        quality_options=[], has_native_audio=True, has_fallback_audio=False
+    )
+    assert "trim_dl" in _callbacks(with_fallback)
+    assert "trim_dl" not in _callbacks(native_only)

@@ -16,6 +16,7 @@ from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.downloader_validation import sanitize_filename
 from bot.handlers.audio_delivery import AudioDeliveryError, TRIM_AVAILABLE_HINT, send_audio_with_trim
 from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_message
+from bot.handlers.trim_callbacks import offer_trim_after_download
 from bot.handlers.transcript_prompt_handlers import offer_custom_transcript_prompt
 from bot.mtproto import (
     mtproto_unavailability_reason as _mtproto_unavailability_reason,
@@ -223,6 +224,7 @@ async def download_spotify_resolved(
     transcribe: bool = False,
     summary: bool = False,
     summary_type: int | None = None,
+    trim_after: bool = False,
 ):
     """Download resolved Spotify audio, optionally transcribe and summarise."""
 
@@ -269,6 +271,26 @@ async def download_spotify_resolved(
                 update_status,
             )
             downloaded_file_path = None
+        elif trim_after:
+            offered = await offer_trim_after_download(
+                context,
+                chat_id=chat_id,
+                requester_id=update.effective_user.id,
+                file_path=downloaded_file_path,
+                title=title,
+                performer=artist or None,
+                query=query,
+            )
+            if offered:
+                record_download_for(
+                    context,
+                    chat_id,
+                    title,
+                    _get_session_value(context, chat_id, "current_url", user_urls) or "",
+                    "spotify_trim_source",
+                    file_size_mb,
+                )
+            return offered
         else:
             await update_status(f"Wysyłanie pliku ({file_size_mb:.1f} MB)...")
             trim_source = await send_audio_with_trim(

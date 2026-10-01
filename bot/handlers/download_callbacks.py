@@ -27,6 +27,7 @@ from bot.handlers.common_ui import (
 )
 from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.download_budget import DownloadLimitError
+from bot.handlers.trim_callbacks import offer_trim_after_download
 from bot.handlers.audio_delivery import AudioDeliveryError, TRIM_AVAILABLE_HINT, send_audio_with_trim
 from bot.security_policy import get_media_label, normalize_url
 from bot.session_context import (
@@ -338,6 +339,7 @@ async def download_file(
     summary_type=None,
     use_format_id=False,
     audio_quality="192",
+    trim_after=False,
 ):
     media_type = type
     query = update.callback_query
@@ -369,7 +371,8 @@ async def download_file(
             download_workspace = tempfile.mkdtemp(prefix="dl_", dir=chat_download_path)
             chat_download_path = download_workspace
 
-        time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
+        # "✂️ Pobierz i przytnij" always fetches the whole file; ranges come later.
+        time_range = None if trim_after else _get_session_value(context, chat_id, "time_range", user_time_ranges)
         try:
             plan = prepare_download_plan(
                 url=url,
@@ -579,6 +582,20 @@ async def download_file(
                         title=title,
                     )
             else:
+                if trim_after:
+                    offered = await offer_trim_after_download(
+                        context,
+                        chat_id=chat_id,
+                        requester_id=update.effective_user.id,
+                        file_path=downloaded_file_path,
+                        title=title,
+                        performer=None,
+                        query=query,
+                    )
+                    if offered:
+                        record_download_for(context, chat_id, title, url, "audio_trim_source", file_size_mb, selected_format=format)
+                        success_recorded = True
+                    return
                 use_mtproto = file_size_mb > TELEGRAM_UPLOAD_LIMIT_MB
 
                 # Detect files that exceed the active Telegram transport limit.

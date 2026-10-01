@@ -401,3 +401,101 @@ def test_handle_callback_routes_trim_callbacks_without_session_url(monkeypatch):
 
     routed.assert_awaited_once()
     assert routed.await_args.args[2] == "trim_src_AAAAAAAAAAA"
+
+
+# --- download and trim ----------------------------------------------------------
+
+
+def test_offer_trim_after_download_retains_and_prompts(store, tmp_path, monkeypatch):
+    audio = tmp_path / "Episode.mp3"
+    audio.write_bytes(b"ID3 audio")
+    monkeypatch.setattr(tcb, "probe_duration", AsyncMock(return_value=1800.4))
+    context = _make_context()
+    update = _callback("trim_dl")
+
+    ok = asyncio.run(tcb.offer_trim_after_download(
+        context, chat_id=CHAT, requester_id=USER, file_path=str(audio),
+        title="Episode", performer="Show", query=update.callback_query,
+    ))
+
+    assert ok is True
+    assert not audio.exists()
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert text.startswith(tcb.TRIM_AFTER_DOWNLOAD_INTRO)
+    assert "Długość: 30:00" in text
+    assert context.user_data["pending_trim"].requester_id == USER
+
+
+def test_offer_trim_after_download_reports_probe_failure(store, tmp_path, monkeypatch):
+    audio = tmp_path / "Episode.mp3"
+    audio.write_bytes(b"garbage")
+    monkeypatch.setattr(tcb, "probe_duration", AsyncMock(side_effect=AudioTrimError("bad")))
+    update = _callback("trim_dl")
+
+    ok = asyncio.run(tcb.offer_trim_after_download(
+        _make_context(), chat_id=CHAT, requester_id=USER, file_path=str(audio),
+        title="Episode", performer=None, query=update.callback_query,
+    ))
+
+    assert ok is False
+    assert "Nie udało się odczytać długości" in update.callback_query.edit_message_text.await_args.args[0]
+
+
+def test_offer_trim_after_download_reports_low_disk(store, tmp_path, monkeypatch):
+    audio = tmp_path / "Episode.mp3"
+    audio.write_bytes(b"ID3 audio")
+    monkeypatch.setattr(tcb, "probe_duration", AsyncMock(return_value=60.0))
+    monkeypatch.setattr(tcb, "retain_source", lambda *a, **k: None)
+    update = _callback("trim_dl")
+
+    ok = asyncio.run(tcb.offer_trim_after_download(
+        _make_context(), chat_id=CHAT, requester_id=USER, file_path=str(audio),
+        title="Episode", performer=None, query=update.callback_query,
+    ))
+
+    assert ok is False
+    assert update.callback_query.edit_message_text.await_args.args[0] == tcb.NO_ROOM_TEXT
+
+
+def _trim_dl_setup(monkeypatch, *, platform, room=True):
+    from bot import telegram_callbacks as tc
+
+    tc.user_urls[CHAT] = "https://castbox.fm/episode/x" if platform == "castbox" else "https://open.spotify.com/episode/x"
+    monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
+    monkeypatch.setattr(tc, "normalize_url", lambda url: url)
+    monkeypatch.setattr(tc, "ensure_trim_authorized", AsyncMock(return_value=True))
+    monkeypatch.setattr(tc, "has_room_for_sources", lambda: room)
+    download_file = AsyncMock()
+    download_spotify = AsyncMock()
+    monkeypatch.setattr(tc, "download_file", download_file)
+    monkeypatch.setattr(tc, "download_spotify_resolved", download_spotify)
+    context = _make_context()
+    context.user_data["platform"] = platform
+    if platform == "spotify":
+        context.user_data["spotify_resolved"] = {"source": "itunes", "title": "Ep"}
+    return tc, context, download_file, download_spotify
+
+
+def test_trim_dl_routes_spotify_to_resolved_download(monkeypatch):
+    tc, context, download_file, download_spotify = _trim_dl_setup(monkeypatch, platform="spotify")
+    asyncio.run(tc.handle_callback(_make_update("trim_dl", chat_id=CHAT), context))
+    assert download_spotify.await_args.kwargs["trim_after"] is True
+    assert download_spotify.await_args.args[3] == "mp3"
+    download_file.assert_not_awaited()
+
+
+def test_trim_dl_routes_castbox_to_download_file(monkeypatch):
+    tc, context, download_file, download_spotify = _trim_dl_setup(monkeypatch, platform="castbox")
+    asyncio.run(tc.handle_callback(_make_update("trim_dl", chat_id=CHAT), context))
+    args = download_file.await_args
+    assert args.args[2:5] == ("audio", "mp3", "https://castbox.fm/episode/x")
+    assert args.kwargs["trim_after"] is True
+    download_spotify.assert_not_awaited()
+
+
+def test_trim_dl_refuses_when_disk_is_low(monkeypatch):
+    tc, context, download_file, download_spotify = _trim_dl_setup(monkeypatch, platform="castbox", room=False)
+    update = _make_update("trim_dl", chat_id=CHAT)
+    asyncio.run(tc.handle_callback(update, context))
+    assert update.callback_query.edit_message_text.await_args.args[0] == tcb.NO_ROOM_TEXT
+    download_file.assert_not_awaited()

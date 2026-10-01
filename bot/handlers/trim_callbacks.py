@@ -27,8 +27,14 @@ from bot.runtime import record_download_for
 from bot.security_limits import TRIM_PENDING_INPUT_TIMEOUT_MIN
 from bot.security_policy import extract_url_from_text
 from bot.security_throttling import check_rate_limit
-from bot.services.audio_trim_service import AudioTrimError, cut_fragment, fragment_filename, fragment_label
-from bot.services.trim_store import TrimSource, expires_at, load_source
+from bot.services.audio_trim_service import (
+    AudioTrimError,
+    cut_fragment,
+    fragment_filename,
+    fragment_label,
+    probe_duration,
+)
+from bot.services.trim_store import TrimSource, expires_at, load_source, retain_source
 from bot.session_context import (
     clear_session_context_value,
     get_session_context_value,
@@ -50,6 +56,7 @@ NO_ROOM_TEXT = (
     "Na serwerze brakuje miejsca, żeby przechować plik do cięcia. "
     "Pobierz całość przyciskiem Audio (MP3)."
 )
+TRIM_AFTER_DOWNLOAD_INTRO = "Pobrano całość — plik nie zostanie wysłany, wytnij z niego fragmenty.\n\n"
 CANCEL_MARKUP = InlineKeyboardMarkup([[InlineKeyboardButton("Anuluj", callback_data="trim_cancel")]])
 
 
@@ -134,6 +141,44 @@ async def start_trim_prompt(
     await context.bot.send_message(
         chat_id=chat_id, text=text, reply_markup=CANCEL_MARKUP, parse_mode="Markdown"
     )
+
+
+async def offer_trim_after_download(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int,
+    requester_id: int,
+    file_path: str,
+    title: str,
+    performer: str | None,
+    query,
+) -> bool:
+    """"✂️ Pobierz i przytnij": keep a fresh download in the store and ask for ranges."""
+
+    try:
+        duration = await probe_duration(Path(file_path))
+    except AudioTrimError as exc:
+        logging.error("Cannot probe downloaded audio for trimming: %s", exc)
+        await safe_edit_message(
+            query,
+            "Nie udało się odczytać długości pobranego pliku. Pobierz całość przyciskiem Audio (MP3).",
+        )
+        return False
+    source = retain_source(
+        chat_id, file_path, title=title, performer=performer, duration_sec=round(duration)
+    )
+    if source is None:
+        await safe_edit_message(query, NO_ROOM_TEXT)
+        return False
+    await start_trim_prompt(
+        context,
+        chat_id=chat_id,
+        requester_id=requester_id,
+        source=source,
+        query=query,
+        intro=TRIM_AFTER_DOWNLOAD_INTRO,
+    )
+    return True
 
 
 async def ensure_trim_authorized(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:

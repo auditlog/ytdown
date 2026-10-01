@@ -592,3 +592,33 @@ def test_download_file_audio_reports_delivery_error(tmp_path, monkeypatch):
     asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
 
     assert "Brak pyrogram." in update.callback_query.edit_message_text.await_args.args[0]
+
+
+def test_download_file_trim_after_keeps_file_and_prompts(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    dc, plan = _patch_single_download(monkeypatch, tmp_path, filename="episode.mp3")
+    monkeypatch.setattr(
+        dc, "_get_session_value",
+        lambda *args: {"start": "0:10", "end": "0:20", "start_sec": 10, "end_sec": 20},
+    )
+    offered = {}
+
+    async def fake_offer(context, **kwargs):
+        offered.update(kwargs)
+        offered["exists"] = Path(kwargs["file_path"]).exists()
+        return True
+
+    monkeypatch.setattr(dc, "offer_trim_after_download", fake_offer)
+    sender = mock.AsyncMock()
+    monkeypatch.setattr(dc, "send_audio_with_trim", sender)
+    update, context = _make_update("trim_dl"), _make_context()
+    update.effective_user.id = 123
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://castbox.fm/x", trim_after=True))
+
+    assert plan.kwargs["time_range"] is None
+    assert offered["exists"] is True
+    assert (offered["title"], offered["requester_id"]) == ("Song", 123)
+    sender.assert_not_awaited()
+    dc.record_download_for.assert_called_once()
