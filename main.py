@@ -12,7 +12,7 @@ import threading
 import curses
 
 from telegram import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
-from telegram.error import Forbidden, NetworkError, RetryAfter
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -135,16 +135,27 @@ def build_application(runtime=None):
 
 ERROR_NOTICE_TEXT = (
     "⚠️ Nie udało się obsłużyć tej akcji z powodu błędu po stronie bota. "
-    "Spróbuj ponownie — jeśli to się powtórzy, wyślij link jeszcze raz."
+    "Spróbuj ponownie — jeśli to się powtórzy, wyślij link lub plik jeszcze raz."
 )
 # Transient or user-caused errors: logged, but telling the user would only add noise.
+# NOTE: BadRequest subclasses NetworkError in PTB, so it is silent as well.
 _SILENT_ERRORS = (NetworkError, RetryAfter, Forbidden)
+
+
+def _is_message_not_modified(error) -> bool:
+    """True for the harmless BadRequest raised when an edit repeats the same content."""
+
+    return isinstance(error, BadRequest) and "message is not modified" in str(error).lower()
 
 
 async def on_error(update, context) -> None:
     """Log unhandled handler errors and tell the user the action failed."""
 
     error = context.error
+    if _is_message_not_modified(error):
+        # Double clicks / repeated progress edits: nothing failed for the user.
+        logging.debug("Ignoring 'message is not modified': %s", error)
+        return
     logging.error("Unhandled error while processing update", exc_info=error)
 
     chat = getattr(update, "effective_chat", None)

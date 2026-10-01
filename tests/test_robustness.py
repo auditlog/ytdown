@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock, Mock
 
 import pytest
 from telegram import Chat, Message, MessageEntity, Update, User
-from telegram.error import Forbidden, NetworkError, RetryAfter, TimedOut
+from telegram.error import BadRequest, Forbidden, NetworkError, RetryAfter, TimedOut
 from telegram.ext import CommandHandler, MessageHandler
 
 import main as app_main
@@ -200,7 +200,7 @@ def test_error_handler_logs_and_notifies_user(caplog):
     assert context.bot.send_message.await_args.kwargs["chat_id"] == 99
     assert context.bot.send_message.await_args.kwargs["text"] == (
         "⚠️ Nie udało się obsłużyć tej akcji z powodu błędu po stronie bota. "
-        "Spróbuj ponownie — jeśli to się powtórzy, wyślij link jeszcze raz."
+        "Spróbuj ponownie — jeśli to się powtórzy, wyślij link lub plik jeszcze raz."
     )
 
 
@@ -211,6 +211,27 @@ def test_error_handler_stays_silent_for_transient_errors(error):
     context = _error_context(error)
     asyncio.run(app_main.on_error(_chat_update(), context))
     context.bot.send_message.assert_not_called()
+
+
+def test_error_handler_ignores_message_not_modified(caplog):
+    error = BadRequest("Message is not modified: specified new message content is the same")
+    context = _error_context(error)
+    with caplog.at_level(logging.DEBUG):
+        asyncio.run(app_main.on_error(_chat_update(), context))
+
+    context.bot.send_message.assert_not_called()
+    # A harmless repeat edit is not an error worth an ERROR log line.
+    assert not [r for r in caplog.records if r.levelno >= logging.ERROR]
+
+
+def test_error_handler_keeps_other_bad_requests_silent_but_logged(caplog):
+    # BadRequest subclasses NetworkError in PTB, so it stays in the silent group.
+    context = _error_context(BadRequest("Chat not found"))
+    with caplog.at_level(logging.ERROR):
+        asyncio.run(app_main.on_error(_chat_update(), context))
+
+    context.bot.send_message.assert_not_called()
+    assert [r for r in caplog.records if r.levelno >= logging.ERROR]
 
 
 def test_error_handler_without_chat_does_not_notify():
