@@ -160,6 +160,8 @@ class TestStatusAndStatsCommands:
         (tmp_path / "b.mp4").write_bytes(b"b" * 2048)
 
         _set_authorized_users(monkeypatch, {111})
+        # /status is admin-only; pin the admin so the host's ADMIN_CHAT_ID cannot leak in.
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
         monkeypatch.setattr(tc, "DOWNLOAD_PATH", str(tmp_path))
         monkeypatch.setattr(tc, "get_disk_usage", lambda: (80.0, 20.0, 100.0, 80.0))
 
@@ -313,6 +315,8 @@ class TestStatusAndStatsCommands:
         context = _make_context()
 
         _set_authorized_users(monkeypatch, {111})
+        # /cleanup is admin-only; pin the admin so the host's ADMIN_CHAT_ID cannot leak in.
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
         monkeypatch.setattr(tc, "cleanup_old_files", lambda *_args, **_kwargs: 0)
         monkeypatch.setattr(tc, "get_disk_usage", lambda: (80.0, 20.0, 100.0, 80.0))
 
