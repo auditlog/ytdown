@@ -219,6 +219,22 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def _set_pre_download_range(update, context, chat_id, current_url, message_text) -> None:
     """Validate a typed range for the pre-download ✂️ flow (yt-dlp sections)."""
 
+    async def reply_range_error(exc: TimeRangeError) -> None:
+        # No parse_mode: the message echoes user input.
+        await update.message.reply_text(f"❌ Nieprawidłowy zakres!\n\n{exc}")
+
+    # Syntax first: a typo or several ranges are answered without a yt-dlp call.
+    try:
+        specs = parse_time_ranges(message_text)
+        if len(specs) > 1:
+            raise TimeRangeError(
+                "Przed pobraniem ustawisz jeden zakres. Kilka fragmentów wytniesz "
+                "przyciskiem ✂️ Przytnij pod pobranym plikiem."
+            )
+    except TimeRangeError as exc:
+        await reply_range_error(exc)
+        return
+
     info = get_video_info(current_url)
     if not info:
         await update.message.reply_text(
@@ -229,12 +245,6 @@ async def _set_pre_download_range(update, context, chat_id, current_url, message
     title = info.get("title", "Nieznany tytuł")
 
     try:
-        specs = parse_time_ranges(message_text)
-        if len(specs) > 1:
-            raise TimeRangeError(
-                "Przed pobraniem ustawisz jeden zakres. Kilka fragmentów wytniesz "
-                "przyciskiem ✂️ Przytnij pod pobranym plikiem."
-            )
         if duration:
             fragment = resolve_ranges(specs, duration)[0]
             start_sec, end_sec = fragment.start_sec, fragment.end_sec
@@ -245,8 +255,7 @@ async def _set_pre_download_range(update, context, chat_id, current_url, message
         else:
             start_sec, end_sec = specs[0].start_sec or 0, specs[0].end_sec
     except TimeRangeError as exc:
-        # No parse_mode: the message echoes user input.
-        await update.message.reply_text(f"❌ Nieprawidłowy zakres!\n\n{exc}")
+        await reply_range_error(exc)
         return
 
     time_range = range_to_session_dict(start_sec, end_sec)

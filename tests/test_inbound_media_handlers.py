@@ -340,6 +340,25 @@ class TestHandleYoutubeLinkTimeRange:
         assert "Przed pobraniem ustawisz jeden zakres" in update.message.reply_text.await_args.args[0]
         assert tc.user_time_ranges.get(333) is None
 
+    def test_range_syntax_is_checked_before_fetching_video_info(self, monkeypatch):
+        cases = {
+            "0:10-0:20, 1:00-2:00": "Przed pobraniem ustawisz jeden zakres",
+            "5:00-2:00": "początek musi być wcześniej niż koniec",
+        }
+        for text, expected in cases.items():
+            update, context = self._setup(monkeypatch, text=text)
+            video_info = Mock(return_value={"duration": 360, "title": "Clip"})
+            monkeypatch.setattr(tc, "get_video_info", video_info)
+
+            _async(tc.handle_youtube_link(update, context))
+
+            reply = update.message.reply_text.await_args
+            assert reply.args[0].startswith("❌ Nieprawidłowy zakres!\n\n")
+            assert expected in reply.args[0]
+            assert "parse_mode" not in reply.kwargs
+            video_info.assert_not_called()
+            assert tc.user_time_ranges.get(333) is None
+
     def test_open_range_needs_known_duration(self, monkeypatch):
         update, context = self._setup(monkeypatch, text="2:15-", duration=0)
         _async(tc.handle_youtube_link(update, context))
