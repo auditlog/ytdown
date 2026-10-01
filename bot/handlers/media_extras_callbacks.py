@@ -20,7 +20,7 @@ from bot.handlers.common_ui import escape_md, safe_edit_message
 from bot.runtime import record_download_for
 from bot.security_policy import get_media_label
 from bot.session_context import (
-    clear_session_context_value as _clear_session_context_value,
+    clear_session_context_value_if as _clear_session_context_value_if,
     get_session_context_value as _get_session_context_value,
     get_session_value as _get_session_value,
 )
@@ -85,14 +85,14 @@ async def _handle_instagram_download(update: Update, context: ContextTypes.DEFAU
     videos = carousel.get("videos", [])
 
     if callback_data == "dl_ig_photos":
-        await _download_and_send_ig_photos(update, context, photos, title, chat_download_path)
+        await _download_and_send_ig_photos(update, context, photos, title, chat_download_path, url=url, carousel=carousel)
     elif callback_data == "dl_ig_videos":
-        await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path)
+        await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path, carousel=carousel)
     elif callback_data == "dl_ig_all":
         if photos:
-            await _download_and_send_ig_photos(update, context, photos, title, chat_download_path)
+            await _download_and_send_ig_photos(update, context, photos, title, chat_download_path, url=url, carousel=carousel)
         if videos:
-            await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path)
+            await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path, carousel=carousel)
 
 
 async def _download_and_send_ig_photos(
@@ -101,6 +101,8 @@ async def _download_and_send_ig_photos(
     photo_entries: list,
     title: str,
     download_path: str,
+    url: str = "",
+    carousel=None,
 ):
     query = update.callback_query
     chat_id = update.effective_chat.id
@@ -173,7 +175,7 @@ async def _download_and_send_ig_photos(
             context,
             chat_id,
             title,
-            _get_session_value(context, chat_id, "current_url", user_urls) or "",
+            url,  # captured at job start; the session URL may change meanwhile
             "photo",
             total_size,
         )
@@ -182,7 +184,9 @@ async def _download_and_send_ig_photos(
         logging.error("Error sending Instagram photos: %s", exc)
         await safe_edit_message(query, "Błąd podczas wysyłania zdjęć.")
     finally:
-        _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
+        _clear_session_context_value_if(
+            context, chat_id, "instagram_carousel", carousel, legacy_key="ig_carousel"
+        )
         for path in downloaded_paths:
             try:
                 os.remove(path)
@@ -197,6 +201,7 @@ async def _download_and_send_ig_videos(
     title: str,
     url: str,
     download_path: str,
+    carousel=None,
 ):
     query = update.callback_query
     chat_id = update.effective_chat.id
@@ -265,7 +270,9 @@ async def _download_and_send_ig_videos(
                     except OSError:
                         pass
 
-    _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
+    _clear_session_context_value_if(
+        context, chat_id, "instagram_carousel", carousel, legacy_key="ig_carousel"
+    )
     if sent_count:
         await safe_edit_message(query, f"Wysłano {sent_count} filmów!")
     else:

@@ -163,8 +163,10 @@ async def extracted_process_audio_file(
         ext = mime_to_ext.get(audio_info["mime_type"], ".ogg")
         title = audio_info["title"]
         safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title)[:80]
+        # message_id keeps names unique when several uploads arrive in the same
+        # second (e.g. forwarded voice notes with identical titles).
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        raw_path = os.path.join(chat_download_path, f"{timestamp}_{safe_title}{ext}")
+        raw_path = os.path.join(chat_download_path, f"{timestamp}_{message.message_id}_{safe_title}{ext}")
 
         if use_mtproto:
             from bot.mtproto import download_file_mtproto

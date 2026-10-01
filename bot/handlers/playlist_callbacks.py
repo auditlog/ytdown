@@ -28,6 +28,7 @@ from bot.jobs import JobDescriptor, job_registry
 from bot.runtime import get_app_runtime, record_download_for
 from bot.session_context import (
     clear_session_value as _clear_session_value,
+    clear_session_value_if as _clear_session_value_if,
     get_session_context_value as _get_session_context_value,
     get_session_value as _get_session_value,
     set_session_value as _set_session_value,
@@ -197,7 +198,7 @@ async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, 
                 summary += f"  - {title[:40]}\n"
 
         await context.bot.send_message(chat_id=chat_id, text=summary)
-        _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
+        _clear_session_value_if(context, chat_id, "playlist_data", user_playlist_data, playlist)
     finally:
         job_registry.unregister(cancellation.job_id)
 
@@ -310,4 +311,4 @@ async def _dispatch_archive_playlist(
         format_choice=choice.format_choice,
         executor=_executor,
     )
-    _clear_session_value(context, chat_id, "playlist_data", user_playlist_data)
+    _clear_session_value_if(context, chat_id, "playlist_data", user_playlist_data, playlist)

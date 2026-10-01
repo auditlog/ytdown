@@ -136,3 +136,46 @@ def test_rate_limited_work_callback_does_not_mark_chat_busy(monkeypatch):
     asyncio.run(tcb.handle_callback(update, Mock()))
 
     assert tcb._BUSY_WORK_CHATS == set()
+
+
+def test_handler_blocking_flags_are_pinned():
+    """Long jobs must not block the update loop; text and commands keep ordering."""
+
+    import main as app_main
+    from telegram.ext import CallbackQueryHandler, CommandHandler, MessageHandler
+
+    app = Mock()
+    app_main.register_handlers(app)
+    handlers = [call.args[0] for call in app.add_handler.call_args_list]
+
+    callbacks = [h for h in handlers if isinstance(h, CallbackQueryHandler)]
+    commands = [h for h in handlers if isinstance(h, CommandHandler)]
+    messages = [h for h in handlers if isinstance(h, MessageHandler)]
+    uploads = [h for h in messages if h.callback.__name__ in ("handle_audio_upload", "handle_video_upload")]
+    texts = [h for h in messages if h not in uploads]
+
+    assert len(callbacks) == 1 and bool(callbacks[0].block) is False
+    assert len(uploads) == 4 and all(bool(h.block) is False for h in uploads)
+    # Unset block resolves to PTB's DEFAULT_TRUE sentinel, which is truthy.
+    assert texts and all(bool(h.block) is True for h in texts)
+    assert commands and all(bool(h.block) is True for h in commands)
+
+
+def test_busy_click_does_not_consume_rate_limit(monkeypatch):
+    gate, started = _gated_router(monkeypatch)
+    calls = []
+    monkeypatch.setattr(tcb, "check_rate_limit", lambda *a: calls.append(a) or True)
+    first = _make_update("dl_video_best", chat_id=10)
+    second = _make_update("dl_audio_mp3", chat_id=10)
+
+    async def scenario():
+        task = asyncio.create_task(tcb.handle_callback(first, Mock()))
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        await tcb.handle_callback(second, Mock())
+        gate.set()
+        await task
+
+    asyncio.run(scenario())
+
+    assert len(calls) == 1  # only the first click was counted

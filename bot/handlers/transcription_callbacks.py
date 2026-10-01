@@ -96,7 +96,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
     if not mp3_path or not os.path.exists(mp3_path):
-        _clear_uploaded_audio_state(context, chat_id)
+        _clear_uploaded_audio_state(context, chat_id, mp3_path)
         await query.edit_message_text("Plik audio nie został znaleziony. Wyślij go ponownie.")
         return
 
@@ -152,7 +152,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                     write_timeout=60,
                 )
             record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
-            _clear_uploaded_audio_state(context, chat_id)
+            _clear_uploaded_audio_state(context, chat_id, mp3_path)
             await offer_custom_transcript_prompt(
                 context,
                 chat_id=chat_id,
@@ -204,7 +204,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             file_size_mb,
             None,
         )
-        _clear_uploaded_audio_state(context, chat_id)
+        _clear_uploaded_audio_state(context, chat_id, mp3_path)
         await update_status("Transkrypcja i podsumowanie zostały wysłane!")
         await offer_custom_transcript_prompt(
             context,
@@ -251,7 +251,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         logging.error("Error deleting audio files: %s", exc)
 
     record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
-    _clear_uploaded_audio_state(context, chat_id)
+    _clear_uploaded_audio_state(context, chat_id, mp3_path)
     await update_status("Transkrypcja została wysłana!")
     await offer_custom_transcript_prompt(
         context,

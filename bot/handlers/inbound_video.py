@@ -150,8 +150,10 @@ async def extracted_process_video_file(
         title = video_info["title"]
         ext = video_info["ext"]
         safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title)[:80]
+        # message_id keeps names unique when several uploads arrive in the same
+        # second (e.g. forwarded voice notes with identical titles).
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        video_path = os.path.join(chat_download_path, f"{timestamp}_{safe_title}{ext}")
+        video_path = os.path.join(chat_download_path, f"{timestamp}_{message.message_id}_{safe_title}{ext}")
 
         if use_mtproto:
             from bot.mtproto import download_file_mtproto

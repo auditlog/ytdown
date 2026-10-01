@@ -39,7 +39,7 @@ from bot.services.transcription_service import (
     transcript_too_long_for_summary,
 )
 from bot.session_context import (
-    clear_session_context_value as _clear_session_context_value,
+    clear_session_context_value_if as _clear_session_context_value_if,
     get_session_value as _get_session_value,
 )
 from bot.session_store import user_urls
@@ -233,6 +233,8 @@ async def download_spotify_resolved(
     title = resolved.get("title", "Spotify audio")
     artist = resolved.get("artist", "")
     is_music_track = bool(artist or resolved.get("spotify_url"))
+    # Captured up front: a newer link may replace the session URL while this job runs.
+    job_url = _get_session_value(context, chat_id, "current_url", user_urls) or ""
 
     async def update_status(text):
         await safe_edit_message(query, text)
@@ -269,6 +271,7 @@ async def download_spotify_resolved(
                 update, context, chat_id, title, downloaded_file_path,
                 file_size_mb, chat_download_path, summary, summary_type,
                 update_status,
+                resolved=resolved, job_url=job_url,
             )
             downloaded_file_path = None
         elif trim_after:
@@ -286,7 +289,7 @@ async def download_spotify_resolved(
                     context,
                     chat_id,
                     title,
-                    _get_session_value(context, chat_id, "current_url", user_urls) or "",
+                    job_url,
                     "spotify_trim_source",
                     file_size_mb,
                 )
@@ -305,11 +308,13 @@ async def download_spotify_resolved(
                 context,
                 chat_id,
                 title,
-                _get_session_value(context, chat_id, "current_url", user_urls) or "",
+                job_url,
                 f"spotify_audio_{audio_format}",
                 file_size_mb,
             )
-            _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+            _clear_session_context_value_if(
+                context, chat_id, "spotify_resolved", resolved, legacy_key="spotify_resolved"
+            )
             if trim_source is not None:
                 await update_status(f"Gotowe: {title}\n\n{TRIM_AVAILABLE_HINT}")
                 return True
@@ -348,6 +353,8 @@ async def download_spotify_video(
     query = update.callback_query
     chat_id = update.effective_chat.id
     title = session_data.get("title", "Spotify episode")
+    # Captured up front: a newer link may replace the session URL while this job runs.
+    job_url = _get_session_value(context, chat_id, "current_url", user_urls) or ""
 
     async def update_status(text):
         await safe_edit_message(query, text)
@@ -442,11 +449,13 @@ async def download_spotify_video(
             context,
             chat_id,
             title,
-            _get_session_value(context, chat_id, "current_url", user_urls) or "",
+            job_url,
             f"spotify_native_{'audio' if height is None else str(height) + 'p'}",
             file_size_mb,
         )
-        _clear_session_context_value(context, chat_id, "spotify_video", legacy_key="spotify_video")
+        _clear_session_context_value_if(
+            context, chat_id, "spotify_video", session_data, legacy_key="spotify_video"
+        )
         if trim_source is not None:
             await update_status(f"Gotowe: {title}\n\n{TRIM_AVAILABLE_HINT}")
         else:
@@ -496,6 +505,8 @@ async def transcribe_spotify_video(
     query = update.callback_query
     chat_id = update.effective_chat.id
     title = session_data.get("title", "Spotify episode")
+    # Captured up front: a newer link may replace the session URL while this job runs.
+    job_url = _get_session_value(context, chat_id, "current_url", user_urls) or ""
 
     async def update_status(text):
         await safe_edit_message(query, text)
@@ -629,11 +640,13 @@ async def transcribe_spotify_video(
             context,
             chat_id,
             title,
-            _get_session_value(context, chat_id, "current_url", user_urls) or "",
+            job_url,
             "spotify_transcribe",
             record_size_mb,
         )
-        _clear_session_context_value(context, chat_id, "spotify_video", legacy_key="spotify_video")
+        _clear_session_context_value_if(
+            context, chat_id, "spotify_video", session_data, legacy_key="spotify_video"
+        )
 
         if downloaded_file_path:
             cleanup_transcription_artifacts(
@@ -674,6 +687,7 @@ async def transcribe_spotify_video(
 async def _handle_transcription(
     update, context, chat_id, title, downloaded_file_path,
     file_size_mb, chat_download_path, summary, summary_type, update_status,
+    resolved=None, job_url="",
 ):
     """Transcribe and optionally summarise a downloaded Spotify episode."""
 
@@ -722,11 +736,13 @@ async def _handle_transcription(
         context,
         chat_id,
         title,
-        _get_session_value(context, chat_id, "current_url", user_urls) or "",
+        job_url,
         "spotify_transcribe",
         file_size_mb,
     )
-    _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+    _clear_session_context_value_if(
+        context, chat_id, "spotify_resolved", resolved, legacy_key="spotify_resolved"
+    )
     cleanup_transcription_artifacts(
         source_media_path=downloaded_file_path,
         output_dir=chat_download_path,

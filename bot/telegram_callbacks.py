@@ -123,14 +123,15 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     # Only work-starting buttons are rate limited; navigation stays free.
     # Exactly one query.answer() per callback: toast when limited/busy, else plain.
     is_work = is_work_callback(data)
-    if is_work and not check_rate_limit(user_id):
-        await query.answer(RATE_LIMIT_TOAST, show_alert=True)
-        return
     if is_work:
+        # Busy is checked before the rate limit so rejected clicks cost no quota.
         if chat_id in _BUSY_WORK_CHATS:
             await query.answer(BUSY_CHAT_TOAST, show_alert=True)
             return
-        # No await between the check above and this add.
+        if not check_rate_limit(user_id):
+            await query.answer(RATE_LIMIT_TOAST, show_alert=True)
+            return
+        # No await between the busy check above and this add.
         _BUSY_WORK_CHATS.add(chat_id)
         try:
             await query.answer()
