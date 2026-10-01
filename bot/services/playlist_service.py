@@ -63,25 +63,37 @@ def build_playlist_message(
         dur_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
         msg += f"{i}. {title} ({dur_str})\n"
 
+    # Only the loaded entries are downloaded, so when the list is truncated the
+    # buttons must not promise "all" (see pl_more in playlist_callbacks.py).
+    truncated = total > len(entries)
+    can_expand = truncated and len(entries) < MAX_PLAYLIST_ITEMS_EXPANDED
+    more_count = min(total, MAX_PLAYLIST_ITEMS_EXPANDED)
+    if truncated:
+        msg += f"\nPobiorę pozycje widoczne na liście ({len(entries)} z {total})."
+        if can_expand:
+            msg += f" „Pokaż więcej” rozszerza listę do {more_count}."
+        msg += "\n"
+        scope = str(len(entries))
+    else:
+        scope = "wszystkie"
+
     options = [
-        ("Pobierz wszystkie — Audio MP3", "pl_dl_audio_mp3", "pl_zip_dl_audio_mp3"),
-        ("Pobierz wszystkie — Audio M4A", "pl_dl_audio_m4a", "pl_zip_dl_audio_m4a"),
-        ("Pobierz wszystkie — Video (najlepsza)", "pl_dl_video_best", "pl_zip_dl_video_best"),
-        ("Pobierz wszystkie — Video 720p", "pl_dl_video_720p", "pl_zip_dl_video_720p"),
+        (f"Pobierz {scope} — Audio MP3", "pl_dl_audio_mp3", "pl_zip_dl_audio_mp3"),
+        (f"Pobierz {scope} — Audio M4A", "pl_dl_audio_m4a", "pl_zip_dl_audio_m4a"),
+        (f"Pobierz {scope} — Video (najlepsza)", "pl_dl_video_best", "pl_zip_dl_video_best"),
+        (f"Pobierz {scope} — Video 720p", "pl_dl_video_720p", "pl_zip_dl_video_720p"),
     ]
     keyboard: list[list[InlineKeyboardButton]] = []
+    if can_expand:
+        keyboard.append([InlineKeyboardButton(
+            f"Pokaż więcej (do {more_count})", callback_data="pl_more"
+        )])
     for label, plain, archive_cb in options:
         keyboard.append([InlineKeyboardButton(label, callback_data=plain)])
         if archive_available:
             keyboard.append([
                 InlineKeyboardButton(f"{label} jako 7z", callback_data=archive_cb)
             ])
-
-    if total > len(entries) and len(entries) < MAX_PLAYLIST_ITEMS_EXPANDED:
-        more_count = min(total, MAX_PLAYLIST_ITEMS_EXPANDED)
-        keyboard.append([InlineKeyboardButton(
-            f"Pokaż więcej (do {more_count})", callback_data="pl_more"
-        )])
 
     keyboard.append([InlineKeyboardButton("Anuluj", callback_data="pl_cancel")])
     return msg, InlineKeyboardMarkup(keyboard)

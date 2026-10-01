@@ -446,6 +446,11 @@ def test_execute_playlist_archive_flow_happy_path(tmp_path, monkeypatch):
 
     # One volume produced and shipped.
     assert len(sent_volumes) == 1
+    texts = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert archive_service.ARCHIVE_UNPACK_HINT in texts[-1]
+    assert not any("vol_size" in t or "Pakowanie OK" in t for t in texts)
+    assert any(t.startswith("Pakuję do 7z w częściach po ") for t in texts)
+    assert any(t.startswith("Spakowano: 1 części.") for t in texts)
     # Workspace persists for retention.
     assert any(p.name.startswith("pl_") for p in (tmp_path / "99").iterdir())
     session_store.reset()
@@ -736,6 +741,9 @@ def test_execute_single_file_archive_flow_consumes_pending_job(tmp_path, monkeyp
     assert pending_archive_jobs.get(33, {}).get(token) is None
     # File migrated into workspace and a volume produced + sent.
     assert len(sent) == 1
+    final_text = update.callback_query.edit_message_text.await_args.args[0]
+    assert archive_service.ARCHIVE_UNPACK_HINT in final_text
+    assert "Plik wysłany" in final_text
     session_store.reset()
 
 
@@ -787,6 +795,26 @@ def test_execute_partial_archive_flow_packs_remaining(tmp_path, monkeypatch):
 
     pack_called.assert_awaited_once()
     send_called.assert_awaited_once()
+    final_text = update.callback_query.edit_message_text.await_args.args[0]
+    assert archive_service.ARCHIVE_UNPACK_HINT in final_text
     # Partial state consumed.
     assert partial_archive_workspaces.get(44, {}).get("tok") is None
     session_store.reset()
+
+
+def test_user_facing_archive_texts_have_no_jargon():
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "bot"
+    offenders = []
+    for path in list(root.glob("services/*archive*.py")) + [
+        root / "handlers" / "download_callbacks.py",
+        root / "handlers" / "common_ui.py",
+    ]:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if re.search(r"logging\.|logger\.", line) or line.lstrip().startswith("#"):
+                continue
+            if "vol_size" in line or "Pakowanie OK" in line or "olumen" in line:
+                offenders.append(f"{path.name}: {line.strip()}")
+    assert not offenders, offenders

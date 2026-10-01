@@ -89,3 +89,45 @@ def test_build_playlist_message_hides_zip_buttons_when_archive_unavailable():
     callback_data = [btn.callback_data for row in kb.inline_keyboard for btn in row]
     assert "pl_dl_audio_mp3" in callback_data
     assert not any(cd.startswith("pl_zip_dl_") for cd in callback_data)
+
+
+def _labels(markup):
+    return [btn.text for row in markup.inline_keyboard for btn in row]
+
+
+def _playlist(shown, total):
+    return {
+        "title": "X",
+        "playlist_count": total,
+        "entries": [{"title": f"s{i}", "duration": 60} for i in range(shown)],
+    }
+
+
+def test_truncated_playlist_buttons_state_the_number_and_offer_more_first():
+    msg, kb = ps.build_playlist_message(_playlist(10, 120))
+
+    labels = _labels(kb)
+    assert "Pobierz 10 — Audio MP3" in labels
+    assert not any("wszystkie" in label for label in labels)
+    # "Show more" is the first row, above the format buttons.
+    assert kb.inline_keyboard[0][0].callback_data == "pl_more"
+    assert kb.inline_keyboard[0][0].text == "Pokaż więcej (do 50)"
+    assert "Pobiorę pozycje widoczne na liście (10 z 120)." in msg
+    assert "„Pokaż więcej” rozszerza listę do 50." in msg
+
+
+def test_truncated_expanded_playlist_has_no_more_button_or_hint():
+    msg, kb = ps.build_playlist_message(_playlist(50, 120))
+
+    assert "Pobierz 50 — Audio MP3" in _labels(kb)
+    assert not any(b.callback_data == "pl_more" for r in kb.inline_keyboard for b in r)
+    assert "(50 z 120)" in msg
+    assert "rozszerza" not in msg
+
+
+def test_full_playlist_keeps_download_all_labels():
+    msg, kb = ps.build_playlist_message(_playlist(5, 5))
+
+    assert "Pobierz wszystkie — Audio MP3" in _labels(kb)
+    assert "Pobiorę pozycje" not in msg
+    assert not any(b.callback_data == "pl_more" for r in kb.inline_keyboard for b in r)

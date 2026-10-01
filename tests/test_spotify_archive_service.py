@@ -266,7 +266,9 @@ def test_spotify_archive_sends_complete_failure_report(
     assert "Nieudane utwory: 6" in summary
     assert "oraz 1 kolejnych" in summary
     assert "Pełna lista z przyczynami została wysłana jako plik TXT" in summary
-    assert "Każde archiwum zaczyna numerację wolumenów od .7z.001" in summary
+    assert "Każde archiwum ma własną numerację części, od .7z.001" in summary
+    assert archive_service.ARCHIVE_UNPACK_HINT in summary
+    assert len(summary) < 4096
     session_store.reset()
 
 

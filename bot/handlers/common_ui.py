@@ -276,7 +276,7 @@ def build_spotify_archive_batch_view(
         f"*Spotify → {format_label} → 7z*\n"
         f"Zaznaczono: {selected_count}\n\n"
         "Ile utworów ma zawierać jedno archiwum?\n"
-        "Archiwa większe niż około 1 GB zostaną dodatkowo podzielone na wolumeny."
+        "Archiwa większe niż około 1 GB zostaną dodatkowo podzielone na części."
     )
     prefix = f"spc_pack_{audio_format}"
     keyboard = [

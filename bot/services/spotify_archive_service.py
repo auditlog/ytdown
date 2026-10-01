@@ -29,6 +29,7 @@ from bot.security_limits import (
     SPOTIFY_ARCHIVE_VOLUME_SIZE_MB,
 )
 from bot.services.archive_service import (
+    ARCHIVE_UNPACK_HINT,
     prepare_playlist_workspace,
     register_archived_delivery,
     save_partial_archive_after_cancel,
@@ -455,7 +456,7 @@ async def execute_spotify_collection_archive_flow(
             await _safe_status_edit(
                 update,
                 f"Pakowanie archiwum {group_index}/{archive_count} "
-                f"({len(group)} utworów, wolumeny do {volume_size_mb} MB)...",
+                f"({len(group)} utworów, części po {volume_size_mb} MB)...",
                 reply_markup=progress_stop_markup(cancellation),
             )
             packed_volumes.extend(
@@ -543,11 +544,13 @@ async def execute_spotify_collection_archive_flow(
             "⏹ Wysyłka zatrzymana." if cancelled else "Spotify: archiwa gotowe.",
             f"Pobrano: {len(downloaded)}/{len(selected)} utworów",
             f"Logiczne archiwa 7z: {archive_count}",
-            f"Wolumeny wysłane do Telegrama: {len(packed_volumes)}",
+            f"Części wysłane do Telegrama: {len(packed_volumes)}",
             f"Rozmiar grupy: {batch_label}",
-            "Każde archiwum zaczyna numerację wolumenów od .7z.001.",
+            "Każde archiwum ma własną numerację części, od .7z.001.",
             f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
         ]
+        if not cancelled:
+            summary.append(ARCHIVE_UNPACK_HINT)
         if failures:
             summary.extend(["", f"Nieudane utwory: {len(failures)}"])
             summary.extend(f"- {failure.label[:70]}" for failure in failures[:5])

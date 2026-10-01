@@ -54,6 +54,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 _SLUG_MAX_LEN = 60
 
 
+ARCHIVE_UNPACK_HINT = (
+    "📦 Jak otworzyć: zapisz wszystkie części (.7z.001, .7z.002…) w jednym "
+    "folderze, nie zmieniaj nazw i otwórz plik .7z.001 w 7-Zip (Windows), "
+    "Keka (macOS) lub ZArchiver (Android)."
+)
+
 ARCHIVE_EXPIRED_TEXT = (
     "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. "
     "Pobierz plik ponownie."
@@ -271,7 +277,7 @@ async def send_volumes(
             reason = mtproto_unavailability_reason()
             if reason is not None:
                 raise RuntimeError(
-                    f"Wolumen {volume.name} przekracza Bot API ({size_mb:.0f} MB), "
+                    f"Część {volume.name} przekracza Bot API ({size_mb:.0f} MB), "
                     f"a MTProto jest niedostępny: {reason}"
                 )
             ok = await send_document_mtproto(
@@ -389,7 +395,7 @@ async def execute_playlist_archive_flow(
             cancellation.job_id,
             f"Playlist 7z ({media_type} {format_choice}) — pakowanie",
         )
-        await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
+        await status(f"Pakuję do 7z w częściach po {volume_size_mb} MB…")
         slug = _build_slug(title)
         dest_basename = workspace / compute_archive_basename(
             f"{slug}_{media_type}_{format_choice}", datetime.now()
@@ -412,7 +418,7 @@ async def execute_playlist_archive_flow(
             cancellation.job_id,
             f"Playlist 7z ({media_type} {format_choice}) — wysyłka [0/{len(volumes)}]",
         )
-        await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
+        await status(f"Spakowano: {len(volumes)} części. Wysyłam…")
         await send_volumes(
             context.bot,
             chat_id=chat_id,
@@ -445,6 +451,8 @@ async def execute_playlist_archive_flow(
         summary_lines.append(
             f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min."
         )
+        if not was_cancelled_in_send:
+            summary_lines.append(ARCHIVE_UNPACK_HINT)
         if failed:
             summary_lines.append("")
             summary_lines.append("Nieudane elementy:")
@@ -582,7 +590,7 @@ async def execute_partial_archive_flow(
         await _safe_status_edit(update, text)
 
     try:
-        await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
+        await status(f"Pakuję do 7z w częściach po {volume_size_mb} MB…")
         slug = _build_slug(state.title)
         dest_basename = state.workspace / compute_archive_basename(
             f"{slug}_{state.media_type}_{state.format_choice}", datetime.now()
@@ -617,7 +625,7 @@ async def execute_partial_archive_flow(
             cancellation.job_id,
             f"Wysyłka częściowej playlisty [0/{len(volumes)}]",
         )
-        await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
+        await status(f"Spakowano: {len(volumes)} części. Wysyłam…")
         await send_volumes(
             context.bot, chat_id=chat_id, volumes=volumes,
             caption_prefix=caption_prefix, use_mtproto=use_mtproto,
@@ -642,7 +650,8 @@ async def execute_partial_archive_flow(
             )],
         ])
         await update.callback_query.edit_message_text(
-            f"Częściowa playlista wysłana w {len(volumes)} paczkach.",
+            f"Częściowa playlista wysłana w {len(volumes)} paczkach.\n\n"
+            f"{ARCHIVE_UNPACK_HINT}",
             reply_markup=keyboard,
         )
     except Exception as exc:
@@ -702,14 +711,14 @@ async def execute_single_file_archive_flow(
     async def status(text: str) -> None:
         await _safe_status_edit(update, text)
 
-    await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
+    await status(f"Pakuję do 7z w częściach po {volume_size_mb} MB…")
     try:
         slug = _build_slug(state.title)
         dest_basename = workspace / compute_archive_basename(slug, datetime.now())
         volumes = await pack_to_volumes([moved_path], dest_basename, volume_size_mb)
 
         caption_prefix = state.title
-        await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
+        await status(f"Spakowano: {len(volumes)} części. Wysyłam…")
         await send_volumes(
             context.bot,
             chat_id=chat_id,
@@ -740,7 +749,9 @@ async def execute_single_file_archive_flow(
         ])
         try:
             await update.callback_query.edit_message_text(
-                f"Plik wysłany w {len(volumes)} paczkach. Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
+                f"Plik wysłany w {len(volumes)} paczkach. "
+                f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.\n\n"
+                f"{ARCHIVE_UNPACK_HINT}",
                 reply_markup=keyboard,
             )
         except Exception as exc:
