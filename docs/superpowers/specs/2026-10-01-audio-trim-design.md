@@ -68,17 +68,18 @@ pełnej sekundy (ta sama wartość jest wyświetlana).
 
 | Sytuacja | Komunikat |
 |---|---|
-| Nieczytelny fragment | „Nie rozumiem zakresu „{fragment}”. Przykłady: `1:30-4:45` · `2:15-` · `-5:00` · `1:00-2:00, 5:30-7:00`” |
+| Nieczytelny fragment | „Nie rozumiem zakresu „{fragment}”. Przykłady: 1:30-4:45 · 2:15- · -5:00 · 1:00-2:00, 5:30-7:00” |
 | Sam myślnik | „Zakres „-” musi mieć początek albo koniec.” |
 | Sekundy/minuty ≥ 60 | „„{znacznik}” nie jest poprawnym czasem — minuty i sekundy muszą być mniejsze niż 60.” |
 | Początek ≥ koniec | „W zakresie {a}-{b} początek musi być wcześniej niż koniec.” |
 | Początek poza plikiem | „Początek {a} jest poza plikiem (długość {d}).” |
-| Koniec poza plikiem | „Koniec {b} jest poza plikiem (długość {d}). Wpisz `{a}-`, żeby ciąć do końca.” |
+| Koniec poza plikiem | „Koniec {b} jest poza plikiem (długość {d}). Wpisz „{a}-”, żeby ciąć do końca.” |
 | Zakres = cały plik | „Zakres {a}-{b} obejmuje cały plik — nie ma czego ciąć.” |
 | Za dużo zakresów | „Możesz podać maksymalnie 10 fragmentów naraz (podano {n}).” |
 
 Pierwszy napotkany błąd przerywa całe zlecenie — nic nie jest cięte, dopóki
-wszystkie zakresy nie są poprawne.
+wszystkie zakresy nie są poprawne. Komunikaty są wysyłane **bez** `parse_mode`:
+zawierają tekst wpisany przez użytkownika, a znaki `_`/`*` złamałyby Markdown.
 
 ### 3.3 Przed pobraniem (YouTube, Vimeo, Instagram, LinkedIn)
 
@@ -135,7 +136,8 @@ async def cut_fragment(
     source: Path, fragment: ResolvedRange, dest: Path,
     *, title_tag: str, cancellation: JobCancellation | None = None,
 ) -> Path
-def fragment_filename(title: str, start_sec: int, end_sec: int, ext: str) -> str
+def fragment_label(fragment: ResolvedRange) -> str      # "12:00–15:30"
+def fragment_filename(title: str, fragment: ResolvedRange, ext: str) -> str
 ```
 
 - Polecenie: `ffmpeg -v error -y -ss START -i SRC [-t DŁUGOŚĆ] -map 0:a:0 -map 0:v:0? -c copy -map_metadata 0 -metadata title=… DEST`.
@@ -215,10 +217,17 @@ async def send_audio_with_trim(
 **`bot/handlers/trim_callbacks.py`** — przepływ cięcia:
 
 ```python
-async def handle_trim_callback(update, context, data: str) -> None
+async def handle_trim_callback(update, context, data: str) -> None   # trim_src_*, trim_upload, trim_cancel
+async def ensure_trim_authorized(update, context) -> bool
 async def handle_pending_trim_input(update, context) -> bool
-async def start_trim_prompt(context, chat_id, requester_id, source, *, message=None) -> None
+async def start_trim_prompt(context, *, chat_id, requester_id, source, query=None, intro="") -> None
+async def offer_trim_after_download(context, *, chat_id, requester_id, file_path, title, performer, query) -> bool
+async def run_trim_job(context, *, chat_id, requester_id, source, ranges, status_message) -> None
 ```
+
+`trim_dl` jest obsługiwany w `bot/telegram_callbacks.py` (`_handle_trim_download`),
+bo wywołuje `download_file`/`download_spotify_resolved`, a te importują
+`trim_callbacks` — routing w `trim_callbacks` dałby cykl importów.
 
 ### 4.2 Modyfikacje istniejących modułów
 
@@ -234,7 +243,8 @@ async def start_trim_prompt(context, chat_id, requester_id, source, *, message=N
 | `bot/handlers/inbound_audio.py` | `[✂️ Przytnij]` (`trim_upload`) obok „Transkrypcja”. |
 | `bot/handlers/inbound_media.py` | Wywołanie `handle_pending_trim_input` zaraz po `handle_pending_transcript_prompt`, **przed** parsowaniem zakresu dla `current_url`. Parsowanie zakresu przed pobraniem przez `parse_time_ranges` + `resolve_ranges` (sekcja 3.3). |
 | `bot/handlers/time_range_callbacks.py` | Nowe przykłady w podpowiedzi menu ✂️. |
-| `bot/telegram_callbacks.py` | Routing `data.startswith("trim_")` → `handle_trim_callback`. |
+| `bot/telegram_callbacks.py` | `trim_src_*`/`trim_upload`/`trim_cancel` → `handle_trim_callback` (przed sprawdzeniem `current_url`); `trim_dl` → `_handle_trim_download` (obok `dl_`, po normalizacji URL Castbox). Wrappery `download_file` i `download_spotify_resolved` przekazują `trim_after`. |
+| `bot/handlers/transcript_prompt_handlers.py` | Ustawienie oczekującego polecenia transkrypcji czyści `pending_trim`. |
 | `bot/cleanup.py` | Wywołanie `purge_expired_sources` obok `_purge_archive_workspaces`. |
 | `README.md` | Sekcja „Przycinanie audio” (po polsku). |
 
@@ -244,7 +254,8 @@ async def start_trim_prompt(context, chat_id, requester_id, source, *, message=N
 
 1. Pobieranie kończy się jak dziś; `send_audio_with_trim` wysyła audio
    z przyciskiem `[✂️ Przytnij]`.
-2. Klik `trim_src_<token>` → `load_source`. Brak/wygasł: edycja odpowiedzi
+2. Klik `trim_src_<token>` → `load_source`. Brak/wygasł: nowa wiadomość
+   (przycisk bywa pod audio, którego tekstu nie da się edytować)
    „Plik wygasł (minęły 24 h) albo został usunięty. Wyślij to MP3 do bota,
    żeby je przyciąć.” i koniec.
 3. `start_trim_prompt` wysyła nową wiadomość (nie edytuje audio):
@@ -278,12 +289,14 @@ async def start_trim_prompt(context, chat_id, requester_id, source, *, message=N
    - w czacie trwa już zadanie `trim` → „Poczekaj, aż skończę poprzednie
      cięcie, albo przerwij je komendą /stop.”
 5. Poprawne zakresy: `pending_trim` czyszczony, rejestracja zadania `trim`
-   w `job_registry`. Wiadomość z promptem jest edytowana w status (przycisk
-   `[Anuluj]` znika): „✂️ Tnę fragment 1/2…” / „Wysyłam fragment 1/2…”.
-   Każdy fragment: `cut_fragment` do `trim_<token>/out_<n>.<ext>` →
+   w `job_registry`. Status to **nowa odpowiedź** pod wiadomością użytkownika
+   (prompt bywa już wyżej w czacie): „✂️ Tnę fragment 1/2 (12:00–15:30)…” /
+   „✂️ Wysyłam fragment 1/2…”. `[Anuluj]` na starym prompcie odpowiada
+   wtedy „Ta prośba nie jest już aktywna.”
+   Każdy fragment: `cut_fragment` do `trim_<token>/<fragment_filename>` →
    `send_audio_file` (podpis `{tytuł} [12:00–15:30]`, bez przycisku) →
    usunięcie pliku fragmentu w `finally`.
-6. Ta sama wiadomość jako status końcowy: „Gotowe: 2 fragmenty.” +
+6. Ta sama wiadomość statusu na koniec: „Gotowe: 2 fragmenty.” +
    `[✂️ Tnij dalej]` (`trim_src_<token>`).
 
 ### 5.2 ✂️ Pobierz i przytnij (podcasty, Spotify)
@@ -294,8 +307,9 @@ async def start_trim_prompt(context, chat_id, requester_id, source, *, message=N
 2. Platforma `spotify` → `download_spotify_resolved(..., "mp3", trim_after=True)`;
    pozostałe (Castbox) → `download_file(..., "audio", "mp3", url, trim_after=True)`.
    Zakres z sesji (`time_range`) jest ignorowany przy `trim_after`.
-3. Po pobraniu: status „Pobrano całość ({d}). Plik nie zostanie wysłany —
-   wytnij z niego fragmenty.”, `retain_source`, `start_trim_prompt`.
+3. Po pobraniu: `offer_trim_after_download` → `retain_source` →
+   `start_trim_prompt` edytuje wiadomość statusu pobierania, z dopiskiem
+   „Pobrano całość — plik nie zostanie wysłany, wytnij z niego fragmenty.”
    Dalej jak w 5.1 od kroku 4.
 
 ### 5.3 Plik wysłany do bota
