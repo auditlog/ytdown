@@ -62,6 +62,17 @@ MISSING_CLAUDE_KEY_TEXT = (
     "Podsumowanie jest niedostępne — brak klucza API Claude. "
     "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
 )
+# Variants of MISSING_CLAUDE_KEY_TEXT for places where "pick transcript only"
+# does not fit: the transcript is already on its way (summary skipped after
+# transcription) or there is no summary choice at all (custom prompt).
+MISSING_CLAUDE_KEY_KEEP_TRANSCRIPT_TEXT = (
+    "Transkrypcja gotowa, ale podsumowanie jest niedostępne — brak klucza API Claude. "
+    "Wysyłam samą transkrypcję."
+)
+MISSING_CLAUDE_KEY_ADMIN_TEXT = (
+    "Funkcja niedostępna — brak klucza API Claude. "
+    "Skontaktuj się z administratorem."
+)
 SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT = (
     "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
     "Wysyłam samą transkrypcję."

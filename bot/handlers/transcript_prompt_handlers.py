@@ -16,6 +16,7 @@ from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_messa
 from bot.runtime import get_config_value_for, record_download_for
 from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.transcription_service import (
+    MISSING_CLAUDE_KEY_ADMIN_TEXT,
     generate_custom_analysis_artifact,
     load_transcript_result,
 )
@@ -312,10 +313,7 @@ async def handle_pending_transcript_prompt(
 
     claude_api_key = get_config_value_for(context, "CLAUDE_API_KEY", "")
     if not claude_api_key:
-        await update.message.reply_text(
-            "Funkcja niedostępna — brak klucza CLAUDE_API_KEY. "
-            "Skontaktuj się z administratorem."
-        )
+        await update.message.reply_text(MISSING_CLAUDE_KEY_ADMIN_TEXT)
         return True
 
     try:

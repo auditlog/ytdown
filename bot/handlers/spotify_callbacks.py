@@ -32,6 +32,7 @@ from bot.services.spotify_video_service import (
     transcript_from_subtitles,
 )
 from bot.services.transcription_service import (
+    MISSING_CLAUDE_KEY_KEEP_TRANSCRIPT_TEXT,
     MISSING_CLAUDE_KEY_TEXT,
     MISSING_GROQ_KEY_TEXT,
     SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
@@ -803,7 +804,7 @@ async def _maybe_generate_summary(
     """
 
     if not get_runtime_value("CLAUDE_API_KEY", ""):
-        notice = "Transkrypcja zakończona.\n\nPodsumowanie niedostępne — brak klucza CLAUDE_API_KEY.\nWysyłam samą transkrypcję."
+        notice = MISSING_CLAUDE_KEY_KEEP_TRANSCRIPT_TEXT
         await update_status(notice)
         return notice
     if transcript_too_long_for_summary(transcript_text):

@@ -192,6 +192,34 @@ def test_pending_prompt_generates_message_and_markdown_result(tmp_path, monkeypa
     assert final_markup.inline_keyboard[0][0].callback_data == f"tr_prompt_{token}"
 
 
+def test_pending_prompt_without_claude_key_explains_without_variable_name(tmp_path, monkeypatch):
+    transcript = tmp_path / "sample_transcript.md"
+    transcript.write_text("# Sample\n\nTranscript body", encoding="utf-8")
+    context = _make_context()
+    runtime = _attach_runtime(context)
+    token = handlers.register_transcript_context(
+        context,
+        chat_id=10,
+        requester_id=20,
+        transcript_path=str(transcript),
+        title="Sample",
+    )
+    runtime.session_store.set_field(
+        10,
+        "pending_transcript_prompt",
+        handlers.PendingTranscriptPrompt(token, 20),
+    )
+    monkeypatch.setattr(handlers, "check_rate_limit", lambda _user_id: True)
+    update = _make_text_update("List decisions", chat_id=10, user_id=20)
+
+    handled = asyncio.run(handlers.handle_pending_transcript_prompt(update, context))
+
+    assert handled is True
+    update.message.reply_text.assert_awaited_once_with(
+        "Funkcja niedostępna — brak klucza API Claude. Skontaktuj się z administratorem."
+    )
+
+
 def test_prompt_too_long_keeps_pending_state(tmp_path, monkeypatch):
     transcript = tmp_path / "sample_transcript.md"
     transcript.write_text("Body", encoding="utf-8")

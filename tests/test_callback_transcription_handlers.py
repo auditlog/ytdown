@@ -2082,3 +2082,22 @@ def test_subtitle_summary_exception_still_sends_transcript(tmp_path, monkeypatch
 
     context.bot.send_document.assert_awaited_once()
     offer.assert_awaited_once()
+
+
+def test_spotify_summary_without_claude_key_names_no_variable(monkeypatch):
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
+    statuses = []
+
+    async def update_status(text):
+        statuses.append(text)
+
+    notice = asyncio.run(sc._maybe_generate_summary(
+        _make_context(), 123, "Ep", "text", "ep", "/tmp", update_status, summary_type=1,
+    ))
+
+    assert notice == (
+        "Transkrypcja gotowa, ale podsumowanie jest niedostępne — brak klucza API Claude. "
+        "Wysyłam samą transkrypcję."
+    )
+    assert statuses == [notice]
+    assert "CLAUDE_API_KEY" not in notice
