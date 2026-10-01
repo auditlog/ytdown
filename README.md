@@ -506,8 +506,9 @@ Bot wycina fragmenty audio bez utraty jakości (MP3 i M4A bez ponownego kodowani
 - **Podcasty (Spotify, Castbox) i utwory Spotify:** **✂️ Pobierz i przytnij** pobiera całość
   bez wysyłania i od razu pyta o zakres.
 - **Własny plik:** wyślij MP3 lub wiadomość głosową i wybierz **✂️ Przytnij**.
-- **YouTube, Vimeo, Instagram, LinkedIn:** **✂️ Zakres czasowy** przed pobraniem pobiera tylko
-  jeden wskazany fragment.
+- **YouTube, Vimeo, Instagram, LinkedIn:** **✂️ Zakres czasowy** przed pobraniem ustawia jeden
+  fragment. Wideo pobiera się od razu jako wycinek; audio bot pobiera w całości i sam wycina
+  fragment, więc **✂️ Przytnij** pod wycinkiem tnie pełny oryginał.
 
 Zapis zakresów:
 

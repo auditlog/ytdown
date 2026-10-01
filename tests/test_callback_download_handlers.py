@@ -633,3 +633,42 @@ def test_time_range_menu_lists_open_range_examples(monkeypatch):
     text = update.callback_query.edit_message_text.await_args.args[0]
     assert "`2:15-` (do końca)" in text
     assert "`-5:00` (od początku)" in text
+
+
+_SESSION_RANGE = {"start": "0:11", "end": "0:41", "start_sec": 11, "end_sec": 41}
+
+
+def test_download_file_audio_with_range_downloads_whole_and_cuts_locally(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    dc, plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: dict(_SESSION_RANGE))
+    range_sender = mock.AsyncMock(return_value=SimpleNamespace(token="AAAAAAAAAAA"))
+    full_sender = mock.AsyncMock()
+    monkeypatch.setattr(dc, "send_audio_range_with_trim", range_sender)
+    monkeypatch.setattr(dc, "send_audio_with_trim", full_sender)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    # yt-dlp fetches the whole track so ✂️ under the fragment can trim the original.
+    assert plan.kwargs["time_range"] is None
+    kwargs = range_sender.await_args.kwargs
+    assert (kwargs["start_sec"], kwargs["end_sec"], kwargs["title"]) == (11, 41, "Song")
+    full_sender.assert_not_awaited()
+    final = update.callback_query.edit_message_text.await_args.args[0]
+    assert "tnie pełny oryginał" in final
+    assert dc.record_download_for.call_args.args[6] == _SESSION_RANGE
+
+
+def test_download_file_video_with_range_keeps_ytdlp_sections(tmp_path, monkeypatch):
+    dc, plan = _patch_single_download(monkeypatch, tmp_path, filename="clip.mp4")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: dict(_SESSION_RANGE))
+    range_sender = mock.AsyncMock()
+    monkeypatch.setattr(dc, "send_audio_range_with_trim", range_sender)
+    update, context = _make_update("dl_video_720p"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "video", "720p", "https://youtube.com/"))
+
+    assert plan.kwargs["time_range"] == _SESSION_RANGE
+    range_sender.assert_not_awaited()

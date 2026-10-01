@@ -170,3 +170,111 @@ def test_send_audio_with_trim_discards_source_when_send_fails(tmp_path, monkeypa
     with pytest.raises(RuntimeError):
         asyncio.run(audio_delivery.send_audio_with_trim(context, 5, original, title="Ep"))
     discard.assert_called_once()
+
+
+# --- pre-download range: download whole, cut locally, keep the original ------------
+
+needs_ffmpeg = pytest.mark.skipif(
+    __import__("shutil").which("ffmpeg") is None or __import__("shutil").which("ffprobe") is None,
+    reason="ffmpeg/ffprobe not installed",
+)
+
+
+@pytest.fixture
+def trim_store_root(tmp_path, monkeypatch):
+    from collections import namedtuple
+
+    from bot.services import trim_store
+
+    usage = namedtuple("usage", "total used free")
+    root = tmp_path / "downloads"
+    root.mkdir()
+    monkeypatch.setattr(trim_store, "DOWNLOAD_PATH", str(root))
+    monkeypatch.setattr(trim_store.shutil, "disk_usage", lambda _p: usage(100 * 1024**3, 0, 50 * 1024**3))
+    return root
+
+
+def _tone(path: Path, seconds: int = 10) -> Path:
+    import subprocess
+
+    subprocess.run(
+        ["ffmpeg", "-v", "error", "-y", "-f", "lavfi", "-i", f"sine=f=440:d={seconds}",
+         "-c:a", "libmp3lame", "-q:a", "5", str(path)],
+        check=True,
+    )
+    return path
+
+
+@needs_ffmpeg
+def test_send_audio_range_with_trim_sends_fragment_and_keeps_original(tmp_path, trim_store_root):
+    context = _make_context()
+    download = _tone(tmp_path / "Tone.mp3")
+
+    source = asyncio.run(audio_delivery.send_audio_range_with_trim(
+        context, 5, download, title="Tone", start_sec=2, end_sec=5,
+    ))
+
+    # The trim source is the whole download, not the fragment.
+    assert source is not None
+    assert source.duration_sec == 10
+    assert asyncio.run(audio_delivery.probe_duration(source.path)) == pytest.approx(10.0, abs=0.15)
+    kwargs = context.bot.send_audio.await_args.kwargs
+    assert kwargs["title"] == "Tone [0:02–0:05]"
+    assert kwargs["reply_markup"].inline_keyboard[0][0].callback_data == f"trim_src_{source.token}"
+    # The sent fragment is removed; only the original and its metadata stay.
+    assert sorted(p.name for p in source.workspace.iterdir()) == ["meta.json", "source.mp3"]
+
+
+@needs_ffmpeg
+def test_send_audio_range_with_trim_cuts_to_eof_when_range_overshoots(tmp_path, trim_store_root):
+    context = _make_context()
+    download = _tone(tmp_path / "Tone.mp3")
+
+    asyncio.run(audio_delivery.send_audio_range_with_trim(
+        context, 5, download, title="Tone", start_sec=7, end_sec=12,
+    ))
+
+    assert context.bot.send_audio.await_args.kwargs["title"] == "Tone [0:07–0:10]"
+
+
+@needs_ffmpeg
+def test_send_audio_range_with_trim_rejects_start_past_the_file(tmp_path, trim_store_root):
+    download = _tone(tmp_path / "Tone.mp3")
+
+    with pytest.raises(audio_delivery.AudioDeliveryError) as exc_info:
+        asyncio.run(audio_delivery.send_audio_range_with_trim(
+            _make_context(), 5, download, title="Tone", start_sec=20, end_sec=30,
+        ))
+
+    assert str(exc_info.value) == "Początek zakresu 0:20 jest poza pobranym plikiem (długość 0:10)."
+
+
+@needs_ffmpeg
+def test_send_audio_range_with_trim_sends_plain_fragment_when_store_refuses(tmp_path, trim_store_root, monkeypatch):
+    context = _make_context()
+    download = _tone(tmp_path / "Tone.mp3")
+    monkeypatch.setattr(audio_delivery, "retain_source", lambda *a, **k: None)
+
+    source = asyncio.run(audio_delivery.send_audio_range_with_trim(
+        context, 5, download, title="Tone", start_sec=2, end_sec=5,
+    ))
+
+    assert source is None
+    kwargs = context.bot.send_audio.await_args.kwargs
+    assert kwargs["title"] == "Tone [0:02–0:05]"
+    assert kwargs["reply_markup"] is None
+    assert [p.name for p in tmp_path.iterdir() if p.suffix == ".mp3"] == ["Tone.mp3"]
+
+
+@needs_ffmpeg
+def test_send_audio_range_with_trim_discards_source_when_send_fails(tmp_path, trim_store_root):
+    context = _make_context()
+    context.bot.send_audio = AsyncMock(side_effect=RuntimeError("telegram down"))
+    download = _tone(tmp_path / "Tone.mp3")
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(audio_delivery.send_audio_range_with_trim(
+            context, 5, download, title="Tone", start_sec=2, end_sec=5,
+        ))
+
+    assert list(trim_store_root.glob("5/trim_*")) == []

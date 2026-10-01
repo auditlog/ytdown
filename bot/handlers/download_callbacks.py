@@ -28,7 +28,13 @@ from bot.handlers.common_ui import (
 from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.download_budget import DownloadLimitError
 from bot.handlers.trim_callbacks import offer_trim_after_download
-from bot.handlers.audio_delivery import AudioDeliveryError, TRIM_AVAILABLE_HINT, send_audio_with_trim
+from bot.handlers.audio_delivery import (
+    AudioDeliveryError,
+    FRAGMENT_TRIM_HINT,
+    TRIM_AVAILABLE_HINT,
+    send_audio_range_with_trim,
+    send_audio_with_trim,
+)
 from bot.security_policy import get_media_label, normalize_url
 from bot.session_context import (
     clear_session_context_value as _clear_session_context_value,
@@ -372,7 +378,13 @@ async def download_file(
             chat_download_path = download_workspace
 
         # "✂️ Pobierz i przytnij" always fetches the whole file; ranges come later.
-        time_range = None if trim_after else _get_session_value(context, chat_id, "time_range", user_time_ranges)
+        session_range = None if trim_after else _get_session_value(context, chat_id, "time_range", user_time_ranges)
+        # Audio with a pre-download range is fetched whole and cut locally, so
+        # the ✂️ button under the fragment trims the original rather than the
+        # fragment (see audio_delivery.send_audio_range_with_trim). Video and
+        # transcription keep yt-dlp download_sections and fetch only the range.
+        cut_range_locally = bool(session_range) and media_type == "audio" and not transcribe
+        time_range = None if cut_range_locally else session_range
         try:
             plan = prepare_download_plan(
                 url=url,
@@ -412,8 +424,8 @@ async def download_file(
                 return
 
             time_range_info = ""
-            if time_range:
-                time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
+            if session_range:
+                time_range_info = f"\n✂️ Zakres: {session_range['start']} - {session_range['end']}"
             await update_status(f"Rozpoczynam pobieranie...\nCzas trwania: {duration_str}{time_range_info}")
             download_result = await execute_download(
                 plan,
@@ -603,7 +615,9 @@ async def download_file(
                 transport_limit_mb = volume_size_for(
                     use_mtproto=_mtproto_unavailability_reason() is None
                 )
-                if file_size_mb > transport_limit_mb and is_7z_available():
+                # A locally cut range sends only the fragment, so the size of the
+                # whole download does not decide the transport.
+                if file_size_mb > transport_limit_mb and is_7z_available() and not cut_range_locally:
                     await _offer_archive_or_cancel(
                         update,
                         context,
@@ -623,8 +637,21 @@ async def download_file(
                 await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie pliku do Telegram...{method_label}")
                 thumb_path = await asyncio.get_event_loop().run_in_executor(_executor, download_thumbnail, info, chat_download_path, True)
                 trim_source = None
+                trim_hint = TRIM_AVAILABLE_HINT
                 try:
-                    if media_type == "audio":
+                    if cut_range_locally:
+                        trim_source = await send_audio_range_with_trim(
+                            context,
+                            chat_id,
+                            downloaded_file_path,
+                            title=title,
+                            start_sec=session_range["start_sec"],
+                            end_sec=session_range["end_sec"],
+                            thumb_path=thumb_path,
+                            cancellation=cancellation,
+                        )
+                        trim_hint = FRAGMENT_TRIM_HINT
+                    elif media_type == "audio":
                         # Moves the file into the trim store when it can be kept,
                         # so the ✂️ button under the audio works for 24 h.
                         trim_source = await send_audio_with_trim(
@@ -674,10 +701,10 @@ async def download_file(
                     os.remove(downloaded_file_path)
                 except OSError:
                     pass
-                record_download_for(context, chat_id, title, url, f"{media_type}_{format}", file_size_mb, time_range, selected_format=format)
+                record_download_for(context, chat_id, title, url, f"{media_type}_{format}", file_size_mb, session_range, selected_format=format)
                 success_recorded = True
                 if trim_source is not None:
-                    await update_status(f"Plik został wysłany!\n\n{TRIM_AVAILABLE_HINT}")
+                    await update_status(f"Plik został wysłany!\n\n{trim_hint}")
                 else:
                     await update_status("Plik został wysłany!")
         except Exception as exc:

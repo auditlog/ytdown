@@ -13,13 +13,21 @@ from pathlib import Path
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 from bot.archive import volume_size_for
+from bot.handlers.time_range import ResolvedRange, format_timestamp
 from bot.mtproto import mtproto_unavailability_reason, send_audio_mtproto
 from bot.security_limits import TELEGRAM_UPLOAD_LIMIT_MB
-from bot.services.audio_trim_service import AudioTrimError, probe_duration
+from bot.services.audio_trim_service import (
+    AudioTrimError,
+    cut_fragment,
+    fragment_filename,
+    fragment_label,
+    probe_duration,
+)
 from bot.services.trim_store import SUPPORTED_EXTENSIONS, TrimSource, discard_source, retain_source
 
 TRIM_BUTTON_LABEL = "✂️ Przytnij"
 TRIM_AVAILABLE_HINT = "✂️ Pod plikiem jest przycisk „Przytnij” — działa przez 24 h."
+FRAGMENT_TRIM_HINT = "✂️ Przycisk „Przytnij” pod wycinkiem tnie pełny oryginał — działa przez 24 h."
 
 
 class AudioDeliveryError(RuntimeError):
@@ -152,4 +160,68 @@ async def send_audio_with_trim(
     except BaseException:
         discard_source(source)
         raise
+    return source
+
+
+async def send_audio_range_with_trim(
+    context,
+    chat_id: int,
+    path,
+    *,
+    title: str,
+    start_sec: int,
+    end_sec: int,
+    thumb_path: str | None = None,
+    cancellation=None,
+) -> TrimSource | None:
+    """Send only [start_sec, end_sec] of a full download and keep the whole file.
+
+    Used for audio downloads with a pre-download time range: the caller fetches
+    the whole track, so the ✂️ button under the fragment trims the original
+    instead of the fragment. When the original cannot be kept (format, low
+    disk) the fragment is cut in place and sent without the button. When a
+    TrimSource is returned the download has moved into the store.
+    """
+
+    original = Path(path)
+    try:
+        duration_sec = round(await probe_duration(original))
+    except AudioTrimError as exc:
+        logging.error("Cannot probe downloaded audio %s: %s", original.name, exc)
+        raise AudioDeliveryError("Nie udało się odczytać pobranego pliku audio. Spróbuj ponownie.") from exc
+    if start_sec >= duration_sec:
+        raise AudioDeliveryError(
+            f"Początek zakresu {format_timestamp(start_sec)} jest poza pobranym plikiem "
+            f"(długość {format_timestamp(duration_sec)})."
+        )
+    # The range was validated against yt-dlp metadata, which can differ from
+    # the real file by a second or two; cut to EOF instead of failing.
+    open_end = end_sec >= duration_sec
+    fragment = ResolvedRange(start_sec, min(end_sec, duration_sec), open_end)
+    label = fragment_label(fragment)
+    fragment_title = f"{title} [{label}]"
+
+    source = None
+    if original.suffix.lower() in SUPPORTED_EXTENSIONS:
+        source = retain_source(chat_id, original, title=title, performer=None, duration_sec=duration_sec)
+    source_path = source.path if source else original
+    dest = source_path.parent / fragment_filename(title, fragment, original.suffix)
+
+    try:
+        try:
+            await cut_fragment(source_path, fragment, dest, title_tag=fragment_title, cancellation=cancellation)
+        except AudioTrimError as exc:
+            logging.error("Cutting %s from %s failed: %s", label, original.name, exc)
+            raise AudioDeliveryError(f"Nie udało się wyciąć fragmentu {label}.") from exc
+        await send_audio_file(
+            context, chat_id, dest, title=fragment_title, caption=fragment_title[:200],
+            thumb_path=thumb_path, buttons=[trim_button(source.token)] if source else None,
+            cancellation=cancellation,
+        )
+    except BaseException:
+        if source is not None:
+            discard_source(source)
+        raise
+    finally:
+        dest.unlink(missing_ok=True)
     return source
