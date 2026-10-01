@@ -19,6 +19,8 @@ from bot.downloader_validation import sanitize_filename
 from bot.handlers.time_range import ResolvedRange, format_timestamp
 from bot.security_limits import FFMPEG_TIMEOUT
 
+_MAX_STEM_BYTES = 200
+
 
 class AudioTrimError(RuntimeError):
     """ffmpeg/ffprobe failure; the message is technical and meant for logs."""
@@ -89,9 +91,18 @@ def fragment_label(fragment: ResolvedRange) -> str:
 
 
 def fragment_filename(title: str, fragment: ResolvedRange, ext: str) -> str:
-    """Filesystem-safe fragment name; sanitize_filename caps the stem at 200 chars."""
+    """Filesystem-safe fragment name with a stem of at most 200 UTF-8 bytes.
 
-    return sanitize_filename(f"{title} [{fragment_label(fragment)}]") + ext
+    sanitize_filename caps the stem at 200 characters, but ext4 limits a name
+    to 255 bytes, so a long Cyrillic, CJK or emoji title would make ffmpeg fail
+    with ENAMETOOLONG. A long title may lose the range label here; the label
+    stays in the audio title tag (see run_trim_job in bot/handlers/trim_callbacks.py).
+    """
+
+    stem = sanitize_filename(f"{title} [{fragment_label(fragment)}]")
+    # errors="ignore" drops a character split by the byte cut.
+    stem = stem.encode("utf-8")[:_MAX_STEM_BYTES].decode("utf-8", errors="ignore").strip()
+    return stem + ext
 
 
 async def cut_fragment(

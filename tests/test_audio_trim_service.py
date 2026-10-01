@@ -54,6 +54,14 @@ def test_fragment_filename_caps_long_titles():
     assert len(name) <= 204
 
 
+def test_fragment_filename_caps_multibyte_titles_in_bytes():
+    # ext4 limits names to 255 bytes; 200 Cyrillic characters are 400 bytes.
+    title = ("Подкаст " * 40)[:300]
+    name = trim.fragment_filename(title, ResolvedRange(0, 5, False), ".mp3")
+    assert name.endswith(".mp3")
+    assert len(name.encode("utf-8")) <= 205
+
+
 def test_probe_duration_reports_missing_binary(monkeypatch, tmp_path):
     async def missing(*args, **kwargs):
         raise FileNotFoundError("ffprobe")
