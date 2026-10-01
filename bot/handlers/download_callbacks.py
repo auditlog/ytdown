@@ -339,6 +339,7 @@ async def _download_and_send_ig_videos(
 
 
 STOPPED_TEXT = "⏹ Zatrzymano pobieranie."
+STOPPED_TRANSCRIPTION_TEXT = "⏹ Zatrzymano transkrypcję."
 
 
 async def download_file(
@@ -361,6 +362,8 @@ async def download_file(
     success_recorded = False
     download_workspace = None
     archive_owns_workspace = False
+    # Switched once the transcription phase starts, so a stop says what stopped.
+    stopped_text = STOPPED_TEXT
 
     descriptor = JobDescriptor(
         job_id="",
@@ -469,6 +472,7 @@ async def download_file(
                     f"Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut."
                 )
 
+                stopped_text = STOPPED_TRANSCRIPTION_TEXT
                 transcript_path = await run_transcription_with_progress(
                     source_path=downloaded_file_path,
                     output_dir=chat_download_path,
@@ -478,7 +482,7 @@ async def download_file(
                 )
 
                 if cancellation.event.is_set():
-                    await finish_status(STOPPED_TEXT)
+                    await finish_status(stopped_text)
                     return
 
                 if not transcript_path or not os.path.exists(transcript_path):
@@ -746,7 +750,7 @@ async def download_file(
                 # A user stop surfaces as an exception from the download layer;
                 # report it as a stop, not as a failure.
                 logging.info("download_file stopped by user: %s", exc)
-                await finish_status(STOPPED_TEXT)
+                await finish_status(stopped_text)
                 return
             if not success_recorded:
                 record_download_for(

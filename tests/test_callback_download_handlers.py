@@ -732,6 +732,38 @@ def test_download_file_stopped_mid_download_reports_stop_not_failure(tmp_path, m
     dc.record_download_for.assert_not_called()
 
 
+def _patch_transcription_stop(monkeypatch, dc, *, raise_on_stop):
+    from bot.jobs import JobRegistry
+
+    monkeypatch.setattr(dc, "job_registry", JobRegistry())
+    monkeypatch.setattr(dc, "missing_transcription_key_message", lambda *a, **k: None)
+
+    async def stopped_transcription(**kwargs):
+        kwargs["cancellation"].event.set()
+        if raise_on_stop:
+            raise RuntimeError("cancelled by user")
+        return None
+
+    monkeypatch.setattr(dc, "run_transcription_with_progress", stopped_transcription)
+
+
+@pytest.mark.parametrize("raise_on_stop", [False, True], ids=["returns", "raises"])
+def test_download_file_stopped_during_transcription_says_transcription(
+    tmp_path, monkeypatch, raise_on_stop
+):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    _patch_transcription_stop(monkeypatch, dc, raise_on_stop=raise_on_stop)
+    update, context = _make_update("transcribe"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/", transcribe=True,
+    ))
+
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0] == "⏹ Zatrzymano transkrypcję."
+    assert _markup_of(last) is None
+
+
 def test_download_error_without_stop_still_records_failure(tmp_path, monkeypatch):
     import yt_dlp
 
