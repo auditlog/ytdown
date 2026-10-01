@@ -24,6 +24,31 @@ def test_stop_command_returns_empty_message_when_no_jobs():
     assert "Brak aktywnych operacji" in text
 
 
+def test_stop_command_explains_a_busy_chat_without_stoppable_jobs():
+    import asyncio
+    from bot import telegram_commands
+    from bot.jobs import JobRegistry, busy_chats
+
+    registry = JobRegistry()
+    update = mock.MagicMock()
+    update.effective_chat.id = 3
+    update.effective_user.id = 3
+    update.effective_message.reply_text = mock.AsyncMock()
+    context = mock.MagicMock()
+
+    busy_chats.add(3)
+    try:
+        with mock.patch("bot.telegram_commands.job_registry", registry), \
+             mock.patch("bot.telegram_commands._is_authorized", return_value=True):
+            asyncio.run(telegram_commands.stop_command(update, context))
+    finally:
+        busy_chats.discard(3)
+
+    update.effective_message.reply_text.assert_awaited_once_with(
+        "Trwa operacja, której nie da się przerwać — poczekaj, aż się zakończy."
+    )
+
+
 def test_stop_command_lists_active_jobs():
     import asyncio
     from datetime import datetime

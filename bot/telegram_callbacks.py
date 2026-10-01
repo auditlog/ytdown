@@ -56,6 +56,7 @@ from bot.handlers.spotify_callbacks import download_spotify_video, transcribe_sp
 from bot.handlers.spotify_collection_callbacks import handle_spotify_collection_callback
 from bot.handlers.transcript_prompt_handlers import handle_transcript_prompt_callback
 from bot.handlers.trim_callbacks import NO_ROOM_TEXT, ensure_trim_authorized, handle_trim_callback
+from bot.jobs import busy_chats, is_chat_busy, job_registry
 from bot.services.trim_store import has_room_for_sources
 from bot.handlers.transcription_callbacks import (
     _handle_subtitle_callback as _extracted_handle_subtitle_callback,
@@ -104,11 +105,13 @@ def _build_playlist_message(playlist_info: dict, context=None) -> tuple[str, Inl
     return build_playlist_message(playlist_info, archive_available=archive_available)
 
 
-# Chats currently running a work callback (download, playlist, transcription...).
-# Check-and-add happens without an await in between, so the asyncio event loop
-# cannot interleave two callbacks of one chat. See also: main.py (block=False).
-_BUSY_WORK_CHATS: set[int] = set()
+# The busy-chat set lives in bot/jobs.py (shared with /stop). Check-and-add
+# happens without an await in between, so the asyncio event loop cannot
+# interleave two callbacks of one chat. See also: main.py (block=False).
 BUSY_CHAT_TOAST = "Trwa już inna operacja w tym czacie. Poczekaj albo przerwij ją komendą /stop."
+# Many guarded flows (uploads, subtitles, single Spotify, ...) are not in
+# job_registry, so pointing users at /stop would lead nowhere.
+BUSY_CHAT_UNSTOPPABLE_TOAST = "Trwa już inna operacja w tym czacie. Poczekaj, aż się zakończy."
 
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -125,19 +128,24 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_work = is_work_callback(data)
     if is_work:
         # Busy is checked before the rate limit so rejected clicks cost no quota.
-        if chat_id in _BUSY_WORK_CHATS:
-            await query.answer(BUSY_CHAT_TOAST, show_alert=True)
+        if is_chat_busy(chat_id):
+            toast = (
+                BUSY_CHAT_TOAST
+                if job_registry.list_for_chat(chat_id)
+                else BUSY_CHAT_UNSTOPPABLE_TOAST
+            )
+            await query.answer(toast, show_alert=True)
             return
         if not check_rate_limit(user_id):
             await query.answer(RATE_LIMIT_TOAST, show_alert=True)
             return
         # No await between the busy check above and this add.
-        _BUSY_WORK_CHATS.add(chat_id)
+        busy_chats.add(chat_id)
         try:
             await query.answer()
             await _route_callback(update, context, data)
         finally:
-            _BUSY_WORK_CHATS.discard(chat_id)
+            busy_chats.discard(chat_id)
         return
 
     await query.answer()

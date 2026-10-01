@@ -182,7 +182,7 @@ def register_handlers(application) -> None:
     # and other chats) while PTB processes updates one at a time. Text and command
     # handlers stay blocking to keep their ordering. Same idea as the trim job in
     # bot/handlers/trim_callbacks.py; the one-job-per-chat guard for callbacks
-    # lives in bot/telegram_callbacks.py (_BUSY_WORK_CHATS).
+    # lives in bot/telegram_callbacks.py (busy set in bot/jobs.py).
     # Handlers for audio uploads (voice messages, audio files, audio documents)
     application.add_handler(MessageHandler(filters.VOICE & NEW_MESSAGES, handle_audio_upload, block=False))
     application.add_handler(MessageHandler(filters.AUDIO & NEW_MESSAGES, handle_audio_upload, block=False))

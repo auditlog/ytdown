@@ -1,13 +1,16 @@
 """One work callback per chat at a time; navigation and stop_* are never blocked."""
 
 import asyncio
+from datetime import datetime
 from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from bot import telegram_callbacks as tcb
+from bot.jobs import JobDescriptor, JobRegistry, busy_chats
 
 BUSY_TOAST = "Trwa już inna operacja w tym czacie. Poczekaj albo przerwij ją komendą /stop."
+BUSY_UNSTOPPABLE_TOAST = "Trwa już inna operacja w tym czacie. Poczekaj, aż się zakończy."
 
 
 def _make_update(data, chat_id, user_id=1):
@@ -23,10 +26,11 @@ def _make_update(data, chat_id, user_id=1):
 
 @pytest.fixture(autouse=True)
 def _clean_state(monkeypatch):
-    tcb._BUSY_WORK_CHATS.clear()
+    busy_chats.clear()
     monkeypatch.setattr(tcb, "check_rate_limit", lambda *_: True)
+    monkeypatch.setattr(tcb, "job_registry", JobRegistry())
     yield
-    tcb._BUSY_WORK_CHATS.clear()
+    busy_chats.clear()
 
 
 def _gated_router(monkeypatch):
@@ -44,7 +48,19 @@ def _gated_router(monkeypatch):
     return gate, started
 
 
-def test_second_work_callback_in_same_chat_gets_busy_toast(monkeypatch):
+def _register_stoppable_job(chat_id):
+    tcb.job_registry.register(chat_id, JobDescriptor(
+        job_id="", chat_id=chat_id, kind="single_dl",
+        label="x", started_at=datetime.now(),
+    ))
+
+
+@pytest.mark.parametrize(
+    ("stoppable", "toast"),
+    [(True, BUSY_TOAST), (False, BUSY_UNSTOPPABLE_TOAST)],
+    ids=["registered-job-points-to-stop", "unregistered-job-says-wait"],
+)
+def test_second_work_callback_in_same_chat_gets_busy_toast(monkeypatch, stoppable, toast):
     gate, started = _gated_router(monkeypatch)
     first = _make_update("dl_video_best", chat_id=10)
     second = _make_update("dl_audio_mp3", chat_id=10)
@@ -53,16 +69,18 @@ def test_second_work_callback_in_same_chat_gets_busy_toast(monkeypatch):
         task = asyncio.create_task(tcb.handle_callback(first, Mock()))
         await asyncio.sleep(0)
         await asyncio.sleep(0)
+        if stoppable:
+            _register_stoppable_job(10)
         await tcb.handle_callback(second, Mock())
         gate.set()
         await task
 
     asyncio.run(scenario())
 
-    second.callback_query.answer.assert_awaited_once_with(BUSY_TOAST, show_alert=True)
+    second.callback_query.answer.assert_awaited_once_with(toast, show_alert=True)
     first.callback_query.answer.assert_awaited_once_with()
     assert started == [(10, "dl_video_best")]
-    assert tcb._BUSY_WORK_CHATS == set()
+    assert busy_chats == set()
 
 
 def test_other_chat_is_not_blocked(monkeypatch):
@@ -105,7 +123,7 @@ def test_chat_is_released_when_routing_raises(monkeypatch):
     with pytest.raises(RuntimeError):
         asyncio.run(tcb.handle_callback(update, Mock()))
 
-    assert tcb._BUSY_WORK_CHATS == set()
+    assert busy_chats == set()
 
 
 @pytest.mark.parametrize("data", ["stop_all", "stop_abc123", "back", "pl_cancel", "tr_prompt_tok"])
@@ -135,7 +153,7 @@ def test_rate_limited_work_callback_does_not_mark_chat_busy(monkeypatch):
 
     asyncio.run(tcb.handle_callback(update, Mock()))
 
-    assert tcb._BUSY_WORK_CHATS == set()
+    assert busy_chats == set()
 
 
 def test_handler_blocking_flags_are_pinned():
