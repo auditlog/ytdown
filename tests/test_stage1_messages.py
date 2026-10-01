@@ -22,8 +22,11 @@ def test_no_anglicism_requests_left_in_bot_package():
     assert offenders == []
 
 
-def test_expired_archive_sessions_say_what_to_do():
+def test_expired_archive_sessions_share_one_text():
+    from bot.services.archive_service import ARCHIVE_EXPIRED_TEXT
+
+    assert ARCHIVE_EXPIRED_TEXT.endswith("Pobierz plik ponownie.")
     for name in ("handlers/download_callbacks.py", "services/archive_service.py"):
         source = (BOT_DIR / name).read_text(encoding="utf-8")
         assert '"Sesja wygasła."' not in source
-        assert "Pobierz plik ponownie." in source
+        assert source.count("Paczki wygasły") <= 1  # only the constant definition

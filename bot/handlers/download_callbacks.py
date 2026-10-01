@@ -55,6 +55,7 @@ from bot.session_store import (
 from bot.archive import is_7z_available, volume_size_for
 from bot.mtproto import mtproto_unavailability_reason as _mtproto_unavailability_reason
 from bot.services.archive_service import (
+    ARCHIVE_EXPIRED_TEXT,
     execute_single_file_archive_flow,
     register_pending_archive_job,
     send_volumes,
@@ -855,9 +856,7 @@ async def _handle_arc_cancel(update, chat_id: int, token: str) -> None:
         pending_archive_jobs[chat_id] = bucket
     if state is None:
         try:
-            await update.callback_query.edit_message_text(
-                "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. Pobierz plik ponownie."
-            )
+            await update.callback_query.edit_message_text(ARCHIVE_EXPIRED_TEXT)
         except Exception as exc:
             logging.debug("arc_cancel edit failed: %s", exc)
         return
@@ -885,9 +884,7 @@ async def _handle_arc_resend(update, context, chat_id: int, data: str) -> None:
     state = bucket.get(token)
     if state is None:
         try:
-            await update.callback_query.edit_message_text(
-                "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. Pobierz plik ponownie."
-            )
+            await update.callback_query.edit_message_text(ARCHIVE_EXPIRED_TEXT)
         except Exception:
             pass
         return
@@ -922,9 +919,7 @@ async def _handle_arc_purge(update, chat_id: int, token: str) -> None:
         archived_deliveries[chat_id] = bucket
     if state is None:
         try:
-            await update.callback_query.edit_message_text(
-                "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. Pobierz plik ponownie."
-            )
+            await update.callback_query.edit_message_text(ARCHIVE_EXPIRED_TEXT)
         except Exception as exc:
             logging.debug("arc_purge edit failed: %s", exc)
         return
@@ -947,9 +942,7 @@ async def _handle_arc_purge_partial(update, chat_id: int, token: str) -> None:
         partial_archive_workspaces[chat_id] = bucket
     if state is None:
         try:
-            await update.callback_query.edit_message_text(
-                "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. Pobierz plik ponownie."
-            )
+            await update.callback_query.edit_message_text(ARCHIVE_EXPIRED_TEXT)
         except Exception:
             pass
         return

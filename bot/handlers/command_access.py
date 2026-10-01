@@ -310,7 +310,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if stats["format_counts"]:
         msg += "*Formaty:*\n"
         for fmt, count in sorted(stats["format_counts"].items(), key=lambda item: -item[1]):
-            msg += f"- {fmt}: {count}\n"
+            msg += f"- {escape_md(fmt)}: {count}\n"
         msg += "\n"
 
     if stats["recent"]:
@@ -325,7 +325,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             size = record.get("file_size_mb", 0)
             status_icon = "✅" if record.get("status", "success") == "success" else "❌"
             time_range_str = f" ✂️{record['time_range']}" if record.get("time_range") else ""
-            msg += f"- {status_icon} `{timestamp}` {title} ({fmt}, {size:.1f}MB){time_range_str}\n"
+            msg += f"- {status_icon} `{timestamp}` {title} ({escape_md(fmt)}, {size:.1f}MB){time_range_str}\n"
 
     await update.message.reply_text(msg, parse_mode="Markdown")
 

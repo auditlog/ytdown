@@ -53,6 +53,12 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 _SLUG_MAX_LEN = 60
 
 
+ARCHIVE_EXPIRED_TEXT = (
+    "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. "
+    "Pobierz plik ponownie."
+)
+
+
 def _build_slug(title: str) -> str:
     """Translit-then-sanitize playlist/file title for use in filesystem path."""
 
@@ -537,7 +543,7 @@ async def execute_partial_archive_flow(
     bucket = partial_archive_workspaces.get(chat_id) or {}
     state = bucket.get(token)
     if state is None:
-        await _safe_status_edit(update, "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. Pobierz plik ponownie.")
+        await _safe_status_edit(update, ARCHIVE_EXPIRED_TEXT)
         return
 
     if not is_7z_available():
@@ -656,7 +662,7 @@ async def execute_single_file_archive_flow(
     bucket = pending_archive_jobs.get(chat_id) or {}
     state = bucket.get(token)
     if state is None:
-        await _safe_status_edit(update, "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. Pobierz plik ponownie.")
+        await _safe_status_edit(update, ARCHIVE_EXPIRED_TEXT)
         return
 
     use_mtproto = mtproto_unavailability_reason() is None

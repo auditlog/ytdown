@@ -232,7 +232,7 @@ class TestStatusAndStatsCommands:
         text = update.message.reply_text.await_args.args[0]
         assert "📊 *Historia pobrań*" in text and "**" not in text
         assert "Łączna liczba pobrań: 1" in text
-        assert "audio_mp3: 1" in text
+        assert "audio\\_mp3: 1" in text
 
     def test_history_escapes_markdown_in_titles(self, monkeypatch):
         update = _make_update(user_id=111)
@@ -264,6 +264,39 @@ class TestStatusAndStatsCommands:
 
         text = update.message.reply_text.await_args.args[0]
         assert "a\\_b\\*c \\[x]" in text
+
+    def test_history_escapes_format_ids(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+
+        _set_authorized_users(monkeypatch, {111})
+        monkeypatch.setattr(
+            tc,
+            "get_download_stats",
+            lambda user_id=None: {
+                "total_downloads": 1,
+                "total_size_mb": 1.0,
+                "format_counts": {"audio_mp3": 1},
+                "success_count": 1,
+                "failure_count": 0,
+                "recent": [
+                    {
+                        "timestamp": "2026-01-01T12:00:00",
+                        "title": "Plain",
+                        "format": "audio_mp3",
+                        "file_size_mb": 2,
+                        "status": "success",
+                    }
+                ],
+            },
+        )
+
+        _async(tc.history_command(update, context))
+
+        text = update.message.reply_text.await_args.args[0]
+        assert "- audio\\_mp3: 1" in text
+        assert "(audio\\_mp3, 2.0MB)" in text
+        assert "audio_mp3" not in text.replace("audio\\_mp3", "")
 
     def test_cleanup_command_unauthorized(self, monkeypatch):
         update = _make_update(user_id=111)
