@@ -12,6 +12,10 @@ RATE_LIMIT_MESSAGE = (
     "Poczekaj chwilę i spróbuj ponownie."
 )
 
+# Short text for callback-query toasts (answer(..., show_alert=True)); the menu
+# message stays untouched. Telegram caps alert text at 200 characters.
+RATE_LIMIT_TOAST = "Za dużo żądań — poczekaj chwilę i spróbuj ponownie."
+
 
 def check_rate_limit(
     user_id: int,

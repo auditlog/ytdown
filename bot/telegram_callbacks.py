@@ -20,6 +20,7 @@ from bot.handlers import media_extras_callbacks as _media_extras_callbacks_modul
 from bot.handlers import playlist_callbacks as _playlist_callbacks_module
 from bot.handlers import transcription_callbacks as _transcription_callbacks_module
 from bot.handlers.callback_parsing import (
+    is_work_callback,
     parse_download_callback,
     parse_spotify_video_callback,
     parse_summary_option,
@@ -69,7 +70,7 @@ from bot.handlers.transcription_callbacks import (
 )
 from bot.runtime import get_app_runtime
 from bot.security_policy import get_media_label, normalize_url
-from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
+from bot.security_throttling import RATE_LIMIT_TOAST, check_rate_limit
 from bot.services.playlist_service import build_playlist_message, load_playlist
 from bot.services.spotify_service import download_resolved_audio
 from bot.session_context import (
@@ -107,15 +108,17 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries and route them through extracted flows."""
 
     query = update.callback_query
-    await query.answer()
     data = query.data
 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    if not check_rate_limit(user_id):
-        await query.edit_message_text(RATE_LIMIT_MESSAGE)
+    # Only work-starting buttons are rate limited; navigation stays free.
+    # Exactly one query.answer() per callback: toast when limited, else plain.
+    if is_work_callback(data) and not check_rate_limit(user_id):
+        await query.answer(RATE_LIMIT_TOAST, show_alert=True)
         return
+    await query.answer()
 
     if data.startswith("arc_"):
         await _extracted_handle_archive_callback(update, context, data)
