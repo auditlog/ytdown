@@ -43,7 +43,7 @@ class TestVideoUpload:
 
         _async(tc.handle_video_upload(update, context))
 
-        assert "Przekroczono limit requestów" in update.message.reply_text.await_args.args[0]
+        assert "Przekroczono limit żądań" in update.message.reply_text.await_args.args[0]
 
     def test_handle_video_upload_triggers_processing(self, monkeypatch):
         update = _make_update(user_id=888, chat_id=888)

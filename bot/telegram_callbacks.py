@@ -69,7 +69,7 @@ from bot.handlers.transcription_callbacks import (
 )
 from bot.runtime import get_app_runtime
 from bot.security_policy import get_media_label, normalize_url
-from bot.security_throttling import check_rate_limit
+from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.playlist_service import build_playlist_message, load_playlist
 from bot.services.spotify_service import download_resolved_audio
 from bot.session_context import (
@@ -114,7 +114,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     if not check_rate_limit(user_id):
-        await query.edit_message_text("Przekroczono limit requestów. Spróbuj ponownie za chwilę.")
+        await query.edit_message_text(RATE_LIMIT_MESSAGE)
         return
 
     if data.startswith("arc_"):

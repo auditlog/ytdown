@@ -194,7 +194,7 @@ class TestAudioUpload:
         _async(tc.handle_audio_upload(update, context))
 
         update.message.reply_text.assert_awaited_once()
-        assert "Przekroczono limit requestów" in update.message.reply_text.await_args.args[0]
+        assert "Przekroczono limit żądań" in update.message.reply_text.await_args.args[0]
 
     def test_handle_audio_upload_triggers_download_for_valid_input(self, monkeypatch):
         update = _make_update(user_id=555, chat_id=555)

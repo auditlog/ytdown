@@ -20,8 +20,6 @@ from bot.security_limits import (
     FFMPEG_TIMEOUT,
     MAX_FILE_SIZE_MB,
     MAX_PLAYLIST_ITEMS,
-    RATE_LIMIT_REQUESTS,
-    RATE_LIMIT_WINDOW,
 )
 from bot.security_pin import get_block_remaining_seconds, is_user_blocked
 from bot.security_policy import (
@@ -32,7 +30,7 @@ from bot.security_policy import (
     normalize_url,
     validate_url,
 )
-from bot.security_throttling import check_rate_limit
+from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.auth_service import store_pending_action
 from bot.runtime import get_app_runtime
 from bot.services.playlist_service import build_playlist_message, load_playlist
@@ -168,12 +166,7 @@ async def handle_audio_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not check_rate_limit(user_id):
-        await message.reply_text(
-            "Przekroczono limit requestów!\n\n"
-            f"Możesz wysłać maksymalnie {RATE_LIMIT_REQUESTS} requestów "
-            f"w ciągu {RATE_LIMIT_WINDOW} sekund.\n"
-            "Spróbuj ponownie za chwilę."
-        )
+        await message.reply_text(RATE_LIMIT_MESSAGE)
         return
 
     await process_audio_file(update, context, audio_info)
@@ -204,12 +197,7 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not check_rate_limit(user_id):
-        await message.reply_text(
-            "Przekroczono limit requestów!\n\n"
-            f"Możesz wysłać maksymalnie {RATE_LIMIT_REQUESTS} requestów "
-            f"w ciągu {RATE_LIMIT_WINDOW} sekund.\n"
-            "Spróbuj ponownie za chwilę."
-        )
+        await message.reply_text(RATE_LIMIT_MESSAGE)
         return
 
     await process_video_file(update, context, video_info)
@@ -324,12 +312,7 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not check_rate_limit(user_id):
-        await update.message.reply_text(
-            "Przekroczono limit requestów!\n\n"
-            f"Możesz wysłać maksymalnie {RATE_LIMIT_REQUESTS} requestów "
-            f"w ciągu {RATE_LIMIT_WINDOW} sekund.\n"
-            "Spróbuj ponownie za chwilę."
-        )
+        await update.message.reply_text(RATE_LIMIT_MESSAGE)
         return
 
     # Extract the first supported URL if the message contains descriptive text

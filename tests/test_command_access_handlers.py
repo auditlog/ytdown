@@ -166,7 +166,7 @@ class TestStatusAndStatsCommands:
         _async(tc.status_command(update, context))
 
         message = update.message.reply_text.await_args.args[0]
-        assert "**Status systemu**" in message
+        assert "*Status systemu*" in message and "**" not in message
         assert "Przestrzeń dyskowa" in message
         assert "Plików: 2" in message
 
@@ -230,9 +230,40 @@ class TestStatusAndStatsCommands:
         _async(tc.history_command(update, context))
 
         text = update.message.reply_text.await_args.args[0]
-        assert "📊 **Historia pobrań**" in text
+        assert "📊 *Historia pobrań*" in text and "**" not in text
         assert "Łączna liczba pobrań: 1" in text
         assert "audio_mp3: 1" in text
+
+    def test_history_escapes_markdown_in_titles(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+
+        _set_authorized_users(monkeypatch, {111})
+        monkeypatch.setattr(
+            tc,
+            "get_download_stats",
+            lambda user_id=None: {
+                "total_downloads": 1,
+                "total_size_mb": 1.0,
+                "format_counts": {},
+                "success_count": 1,
+                "failure_count": 0,
+                "recent": [
+                    {
+                        "timestamp": "2026-01-01T12:00:00",
+                        "title": "a_b*c [x]",
+                        "format": "audio_mp3",
+                        "file_size_mb": 1,
+                        "status": "success",
+                    }
+                ],
+            },
+        )
+
+        _async(tc.history_command(update, context))
+
+        text = update.message.reply_text.await_args.args[0]
+        assert "a\\_b\\*c \\[x]" in text
 
     def test_cleanup_command_unauthorized(self, monkeypatch):
         update = _make_update(user_id=111)
@@ -303,7 +334,13 @@ class TestNotifyAdminPinFailure:
 
         bot.send_message.assert_awaited_once()
         text = bot.send_message.await_args.kwargs["text"]
-        assert "[Failed PIN attempt]" in text
+        assert "⚠️ Nieudana próba podania PIN-u" in text
+        assert "ID użytkownika: 999" in text
+        assert "Nazwa użytkownika: @testuser" in text
+        assert "Imię i nazwisko: Test" in text
+        assert "Język: pl" in text
+        assert "Próba: 2/" in text
+        assert "Czas: " in text
         assert "999" in text
         assert "@testuser" in text
 
@@ -368,8 +405,8 @@ class TestNotifyAdminPinFailure:
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=3, blocked=True))
 
         text = bot.send_message.await_args.kwargs["text"]
-        assert "[BLOCKED]" in text
-        assert "n/a" in text
+        assert "🚫 Zablokowano dostęp" in text
+        assert "Nazwa użytkownika: brak" in text
 
 
 class TestHistoryWithNewFields:

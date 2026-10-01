@@ -38,7 +38,7 @@ from bot.jobs import JobCancellation, JobDescriptor, job_registry
 from bot.runtime import record_download_for
 from bot.security_limits import TRIM_PENDING_INPUT_TIMEOUT_MIN
 from bot.security_policy import extract_url_from_text
-from bot.security_throttling import check_rate_limit
+from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.audio_trim_service import (
     AudioTrimError,
     cut_fragment,
@@ -68,7 +68,7 @@ PROMPT_EXPIRED_TEXT = (
     f"Prośba o zakres wygasła (minęło {TRIM_PENDING_INPUT_TIMEOUT_MIN} minut). "
     f"Kliknij „{TRIM_BUTTON_LABEL}”, żeby przyciąć ten plik."
 )
-RATE_LIMIT_TEXT = "Przekroczono limit requestów. Spróbuj ponownie za chwilę."
+RATE_LIMIT_TEXT = RATE_LIMIT_MESSAGE
 NO_ROOM_TEXT = (
     "Na serwerze brakuje miejsca, żeby przechować plik do cięcia. "
     "Pobierz całość przyciskiem Audio (MP3)."

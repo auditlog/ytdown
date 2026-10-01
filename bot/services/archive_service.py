@@ -537,7 +537,7 @@ async def execute_partial_archive_flow(
     bucket = partial_archive_workspaces.get(chat_id) or {}
     state = bucket.get(token)
     if state is None:
-        await _safe_status_edit(update, "Sesja wygasła.")
+        await _safe_status_edit(update, "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. Pobierz plik ponownie.")
         return
 
     if not is_7z_available():
@@ -656,7 +656,7 @@ async def execute_single_file_archive_flow(
     bucket = pending_archive_jobs.get(chat_id) or {}
     state = bucket.get(token)
     if state is None:
-        await _safe_status_edit(update, "Sesja wygasła. Wyślij plik ponownie.")
+        await _safe_status_edit(update, "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. Pobierz plik ponownie.")
         return
 
     use_mtproto = mtproto_unavailability_reason() is None

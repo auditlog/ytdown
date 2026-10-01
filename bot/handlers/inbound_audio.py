@@ -12,8 +12,8 @@ from telegram.ext import ContextTypes
 
 from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.handlers.common_ui import escape_md
-from bot.security_limits import FFMPEG_TIMEOUT, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
-from bot.security_throttling import check_rate_limit
+from bot.security_limits import FFMPEG_TIMEOUT
+from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.auth_service import store_pending_action
 from bot.session_context import (
     get_auth_state as _get_auth_state,
@@ -91,12 +91,7 @@ async def handle_audio_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not check_rate_limit(user_id):
-        await message.reply_text(
-            "Przekroczono limit requestów!\n\n"
-            f"Możesz wysłać maksymalnie {RATE_LIMIT_REQUESTS} requestów "
-            f"w ciągu {RATE_LIMIT_WINDOW} sekund.\n"
-            "Spróbuj ponownie za chwilę."
-        )
+        await message.reply_text(RATE_LIMIT_MESSAGE)
         return
 
     await process_audio_file(update, context, audio_info)

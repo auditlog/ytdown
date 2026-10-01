@@ -14,7 +14,7 @@ from telegram.ext import ContextTypes
 from bot.downloader_validation import sanitize_filename
 from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_message
 from bot.runtime import get_config_value_for, record_download_for
-from bot.security_throttling import check_rate_limit
+from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.transcription_service import (
     generate_custom_analysis_artifact,
     load_transcript_result,
@@ -299,9 +299,7 @@ async def handle_pending_transcript_prompt(
         )
         return True
     if not check_rate_limit(requester_id):
-        await update.message.reply_text(
-            "Przekroczono limit requestów. Spróbuj ponownie za chwilę."
-        )
+        await update.message.reply_text(RATE_LIMIT_MESSAGE)
         return True
 
     _clear_pending_prompt(context, chat_id)
