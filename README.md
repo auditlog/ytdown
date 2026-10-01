@@ -592,6 +592,8 @@ ytdown/
 │       ├── auth_service.py         # PIN, login/logout, security state reset
 │       ├── download_service.py     # Planowanie i wykonywanie pobrań
 │       ├── archive_service.py      # Pakowanie, wysyłka i wznawianie wolumenów 7z
+│       ├── audio_trim_service.py   # Cięcie fragmentów ffmpeg (MP3/M4A bez rekodowania, FLAC bezstratnie)
+│       ├── trim_store.py           # Magazyn źródeł do przycinania (24 h, meta.json)
 │       ├── playlist_service.py     # Obsługa playlist (budowanie, pobieranie itemów)
 │       ├── spotify_service.py      # Audio Spotify/YouTube Music i kolekcje
 │       ├── spotify_archive_service.py # Grupowe archiwa 50/100/całość dla Spotify
@@ -602,9 +604,7 @@ ytdown/
 ├── docs/mcp-rpi5a.md                # Remote deployment and client configuration
 ├── requirements-mcp.txt            # Optional MCP dependencies
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-│       ├── audio_trim_service.py   # Cięcie fragmentów ffmpeg (MP3/M4A bez rekodowania, FLAC bezstratnie)
-│       ├── trim_store.py           # Magazyn źródeł do przycinania (24 h, meta.json)
-├── tests/                          # Testy (~979 testów)
+├── tests/                          # Testy (~1190 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
