@@ -19,9 +19,21 @@ from pathlib import Path
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from bot.handlers.audio_delivery import AudioDeliveryError, max_sendable_audio_mb, send_audio_file
+from bot.handlers.audio_delivery import (
+    TRIM_BUTTON_LABEL,
+    AudioDeliveryError,
+    max_sendable_audio_mb,
+    send_audio_file,
+    trim_button,
+)
 from bot.handlers.common_ui import escape_md, safe_edit_message
-from bot.handlers.time_range import TimeRangeError, format_timestamp, parse_time_ranges, resolve_ranges
+from bot.handlers.time_range import (
+    TimeRangeError,
+    format_timestamp,
+    looks_like_time_ranges,
+    parse_time_ranges,
+    resolve_ranges,
+)
 from bot.jobs import JobCancellation, JobDescriptor, job_registry
 from bot.runtime import record_download_for
 from bot.security_limits import TRIM_PENDING_INPUT_TIMEOUT_MIN
@@ -52,6 +64,10 @@ EXPIRED_TEXT = (
 AUTH_REQUIRED_TEXT = "Wymagane uwierzytelnienie — wyślij kod PIN."
 BUSY_TEXT = "Poczekaj, aż skończę poprzednie cięcie, albo przerwij je komendą /stop."
 START_FAILED_TEXT = "Nie udało się uruchomić przycinania. Spróbuj ponownie."
+PROMPT_EXPIRED_TEXT = (
+    f"Prośba o zakres wygasła (minęło {TRIM_PENDING_INPUT_TIMEOUT_MIN} minut). "
+    f"Kliknij „{TRIM_BUTTON_LABEL}”, żeby przyciąć ten plik."
+)
 RATE_LIMIT_TEXT = "Przekroczono limit requestów. Spróbuj ponownie za chwilę."
 NO_ROOM_TEXT = (
     "Na serwerze brakuje miejsca, żeby przechować plik do cięcia. "
@@ -266,6 +282,19 @@ async def handle_pending_trim_input(update: Update, context: ContextTypes.DEFAUL
     text = (update.message.text or "").strip()
     if _now() - pending.created_at > timedelta(minutes=TRIM_PENDING_INPUT_TIMEOUT_MIN):
         _clear_pending(context, chat_id)
+        # The prompt promised the file for 24 h, so a late range is still meant
+        # for it; letting it through would set a range on an old current_url
+        # instead. Offer the ✂️ button again when the source is still there.
+        if looks_like_time_ranges(text) and load_source(chat_id, pending.token) is not None:
+            # No parse_mode: plain text like every range reply.
+            label, callback_data = trim_button(pending.token)
+            await update.message.reply_text(
+                PROMPT_EXPIRED_TEXT,
+                reply_markup=InlineKeyboardMarkup(
+                    [[InlineKeyboardButton(label, callback_data=callback_data)]]
+                ),
+            )
+            return True
         return False
     if extract_url_from_text(text):
         # A new link means the user moved on; let the normal flow handle it.

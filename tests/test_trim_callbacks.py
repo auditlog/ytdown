@@ -297,10 +297,44 @@ def test_pending_input_url_cancels_and_falls_through(store, tmp_path):
 
 
 def test_pending_input_expires_after_timeout(store, tmp_path):
+    source = _source(tmp_path)
+    context = _make_context()
+    _pending(context, source, age=timedelta(minutes=11))
+    update, _ = _text_update("1:00-2:00")
+
+    # A range typed after the prompt expired must not reach the pre-download flow.
+    assert asyncio.run(tcb.handle_pending_trim_input(update, context)) is True
+
+    call = update.message.reply_text.await_args
+    assert call.args[0] == (
+        "Prośba o zakres wygasła (minęło 10 minut). "
+        "Kliknij „✂️ Przytnij”, żeby przyciąć ten plik."
+    )
+    assert "parse_mode" not in call.kwargs
+    button = call.kwargs["reply_markup"].inline_keyboard[0][0]
+    assert (button.text, button.callback_data) == ("✂️ Przytnij", f"trim_src_{source.token}")
+    assert "pending_trim" not in context.user_data
+
+
+def test_expired_pending_input_lets_plain_text_fall_through(store, tmp_path):
     context = _make_context()
     _pending(context, _source(tmp_path), age=timedelta(minutes=11))
-    update, _ = _text_update("1:00-2:00")
+    update, _ = _text_update("dzięki!")
+
     assert asyncio.run(tcb.handle_pending_trim_input(update, context)) is False
+    update.message.reply_text.assert_not_awaited()
+    assert "pending_trim" not in context.user_data
+
+
+def test_expired_pending_input_with_dead_source_falls_through(store, tmp_path):
+    source = _source(tmp_path)
+    context = _make_context()
+    _pending(context, source, age=timedelta(minutes=11))
+    source.path.unlink()
+    update, _ = _text_update("1:00-2:00")
+
+    assert asyncio.run(tcb.handle_pending_trim_input(update, context)) is False
+    update.message.reply_text.assert_not_awaited()
     assert "pending_trim" not in context.user_data
 
 
