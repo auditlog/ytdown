@@ -132,6 +132,22 @@ def test_send_audio_with_trim_falls_back_when_probe_fails(tmp_path, monkeypatch)
     assert original.exists()
 
 
+def test_send_audio_with_trim_skips_probe_for_unsupported_format(tmp_path, monkeypatch):
+    context = _make_context()
+    original = _write(tmp_path / "voice.ogg")
+    probe = AsyncMock(return_value=30.0)
+    retain = Mock()
+    monkeypatch.setattr(audio_delivery, "probe_duration", probe)
+    monkeypatch.setattr(audio_delivery, "retain_source", retain)
+
+    assert asyncio.run(audio_delivery.send_audio_with_trim(context, 5, original, title="Ep")) is None
+
+    probe.assert_not_called()
+    retain.assert_not_called()
+    assert context.bot.send_audio.await_args.kwargs["reply_markup"] is None
+    assert original.exists()
+
+
 def test_send_audio_with_trim_falls_back_when_store_refuses(tmp_path, monkeypatch):
     context = _make_context()
     original = _write(tmp_path / "episode.mp3")

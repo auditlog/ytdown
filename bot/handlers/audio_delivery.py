@@ -16,7 +16,7 @@ from bot.archive import volume_size_for
 from bot.mtproto import mtproto_unavailability_reason, send_audio_mtproto
 from bot.security_limits import TELEGRAM_UPLOAD_LIMIT_MB
 from bot.services.audio_trim_service import AudioTrimError, probe_duration
-from bot.services.trim_store import TrimSource, discard_source, retain_source
+from bot.services.trim_store import SUPPORTED_EXTENSIONS, TrimSource, discard_source, retain_source
 
 TRIM_BUTTON_LABEL = "✂️ Przytnij"
 TRIM_AVAILABLE_HINT = "✂️ Pod plikiem jest przycisk „Przytnij” — działa przez 24 h."
@@ -123,14 +123,18 @@ async def send_audio_with_trim(
 
     original = Path(path)
     source = None
-    try:
-        duration = await probe_duration(original)
-    except AudioTrimError as exc:
-        logging.warning("Not offering trim for %s: %s", original.name, exc)
+    if original.suffix.lower() not in SUPPORTED_EXTENSIONS:
+        # retain_source would refuse it anyway; skip the ffprobe run.
+        logging.info("Not offering trim for %s: unsupported format", original.name)
     else:
-        source = retain_source(
-            chat_id, original, title=title, performer=performer, duration_sec=round(duration)
-        )
+        try:
+            duration = await probe_duration(original)
+        except AudioTrimError as exc:
+            logging.warning("Not offering trim for %s: %s", original.name, exc)
+        else:
+            source = retain_source(
+                chat_id, original, title=title, performer=performer, duration_sec=round(duration)
+            )
 
     if source is None:
         await send_audio_file(
