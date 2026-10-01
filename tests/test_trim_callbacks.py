@@ -1,6 +1,7 @@
 """Tests for the ✂️ trim flow: prompt, pending input and the fragment job."""
 
 import asyncio
+import inspect
 from collections import namedtuple
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -30,6 +31,30 @@ def store(tmp_path, monkeypatch):
     monkeypatch.setattr(tcb, "_is_authorized", lambda _context, _user_id: True)
     monkeypatch.setattr(tcb, "record_download_for", lambda *a, **k: None)
     return root
+
+
+@pytest.fixture(autouse=True)
+def _clean_job_registry():
+    # job_registry is a process-wide singleton; a test that stubs run_trim_job
+    # leaves its pre-registered job behind, so drop it before the next test.
+    yield
+    for job in job_registry.list_for_chat(CHAT):
+        job_registry.unregister(job.job_id)
+
+
+def _scheduling_context():
+    """Context whose application.create_task schedules on the running loop, like PTB."""
+
+    context = _make_context()
+    tasks = []
+
+    def create_task(coroutine, update=None, **kwargs):
+        task = asyncio.get_running_loop().create_task(coroutine)
+        tasks.append(task)
+        return task
+
+    context.application.create_task = Mock(side_effect=create_task)
+    return context, tasks
 
 
 def _source(tmp_path, *, title="Podcast #120", duration=6130):
@@ -149,21 +174,95 @@ def test_fragments_phrase_uses_polish_plurals():
 
 def test_pending_input_runs_trim_job_with_resolved_ranges(store, tmp_path, monkeypatch):
     source = _source(tmp_path)
-    context = _make_context()
+    context, tasks = _scheduling_context()
     _pending(context, source)
     run = AsyncMock()
     monkeypatch.setattr(tcb, "run_trim_job", run)
     monkeypatch.setattr(tcb, "check_rate_limit", lambda *_: True)
     update, status = _text_update("12:00-15:30, 1:20:00-")
 
-    assert asyncio.run(tcb.handle_pending_trim_input(update, context)) is True
+    async def scenario():
+        handled = await tcb.handle_pending_trim_input(update, context)
+        await asyncio.gather(*tasks)
+        return handled
 
+    assert asyncio.run(scenario()) is True
+
+    # The job runs as a PTB task so /stop can be processed while it cuts.
+    assert context.application.create_task.call_args.kwargs["update"] is update
     kwargs = run.await_args.kwargs
     assert kwargs["ranges"] == [ResolvedRange(720, 930, False), ResolvedRange(4800, 6130, True)]
     assert kwargs["status_message"] is status
     assert kwargs["source"] == source
+    [job] = job_registry.list_for_chat(CHAT)
+    assert kwargs["cancellation"].job_id == job.job_id
     assert "pending_trim" not in context.user_data
     assert update.message.reply_text.await_args.args[0] == "✂️ Przygotowuję 2 fragmenty..."
+
+
+def test_pending_input_registers_job_before_the_task_runs(store, tmp_path, monkeypatch):
+    source = _source(tmp_path)
+    context = _make_context()
+    _pending(context, source)
+    monkeypatch.setattr(tcb, "check_rate_limit", lambda *_: True)
+    monkeypatch.setattr(tcb, "max_sendable_audio_mb", lambda: 50)
+    monkeypatch.setattr(tcb, "send_audio_file", AsyncMock())
+    cuts = []
+
+    async def recording_cut(src, fragment, dest, *, title_tag, cancellation=None):
+        cuts.append(cancellation)
+        return await _write_fragment(src, fragment, dest, title_tag=title_tag)
+
+    monkeypatch.setattr(tcb, "cut_fragment", recording_cut)
+    seen = {}
+    tasks = []
+
+    def create_task(coroutine, update=None, **kwargs):
+        seen["jobs"] = [(job.kind, job.label) for job in job_registry.list_for_chat(CHAT)]
+        seen["cuts"] = len(cuts)
+        task = asyncio.get_running_loop().create_task(coroutine)
+        tasks.append(task)
+        return task
+
+    context.application.create_task = create_task
+    first, _ = _text_update("1:00-2:00")
+    second, _ = _text_update("3:00-4:00")
+
+    async def scenario():
+        assert await tcb.handle_pending_trim_input(first, context) is True
+        # The user reopens the prompt (✂️ under the audio) before the task started.
+        _pending(context, source)
+        assert await tcb.handle_pending_trim_input(second, context) is True
+        await asyncio.gather(*tasks)
+
+    asyncio.run(scenario())
+
+    assert seen == {"jobs": [("trim", "Przycinanie: Podcast #120")], "cuts": 0}
+    assert second.message.reply_text.await_args.args[0] == tcb.BUSY_TEXT
+    assert len(tasks) == 1 and len(cuts) == 1
+    assert cuts[0] is not None
+    assert job_registry.list_for_chat(CHAT) == []
+
+
+def test_pending_input_unregisters_job_when_scheduling_fails(store, tmp_path, monkeypatch):
+    context = _make_context()
+    _pending(context, _source(tmp_path))
+    monkeypatch.setattr(tcb, "check_rate_limit", lambda *_: True)
+    scheduled = []
+
+    def failing_create_task(coroutine, update=None, **kwargs):
+        scheduled.append(coroutine)
+        raise RuntimeError("application is shutting down")
+
+    context.application.create_task = failing_create_task
+    update, status = _text_update("1:00-2:00")
+
+    assert asyncio.run(tcb.handle_pending_trim_input(update, context)) is True
+
+    assert job_registry.list_for_chat(CHAT) == []
+    assert status.edit_text.await_args.args[0] == "Nie udało się uruchomić przycinania. Spróbuj ponownie."
+    # The unscheduled coroutine is closed, so no "never awaited" warning is emitted.
+    assert inspect.getcoroutinestate(scheduled[0]) == inspect.CORO_CLOSED
 
 
 def test_pending_input_reports_range_error_and_keeps_pending(store, tmp_path, monkeypatch):
@@ -293,6 +392,33 @@ def test_run_trim_job_cuts_and_sends_each_fragment(store, tmp_path, monkeypatch)
     assert final.args[0] == "Gotowe: 2 fragmenty."
     assert final.kwargs["reply_markup"].inline_keyboard[0][0].callback_data == f"trim_src_{source.token}"
     assert sorted(p.name for p in source.workspace.iterdir()) == ["meta.json", "source.mp3"]
+    assert job_registry.list_for_chat(CHAT) == []
+
+
+def test_run_trim_job_uses_and_releases_a_given_cancellation(store, tmp_path, monkeypatch):
+    source = _source(tmp_path)
+    cuts = []
+
+    async def recording_cut(src, fragment, dest, *, title_tag, cancellation=None):
+        cuts.append((cancellation, len(job_registry.list_for_chat(CHAT))))
+        return await _write_fragment(src, fragment, dest, title_tag=title_tag)
+
+    monkeypatch.setattr(tcb, "cut_fragment", recording_cut)
+    monkeypatch.setattr(tcb, "send_audio_file", AsyncMock())
+    monkeypatch.setattr(tcb, "max_sendable_audio_mb", lambda: 50)
+
+    async def scenario():
+        descriptor = JobDescriptor("", CHAT, "trim", "Przycinanie: Podcast #120", datetime.now())
+        cancellation = job_registry.register(CHAT, descriptor)
+        await tcb.run_trim_job(
+            _make_context(), chat_id=CHAT, requester_id=USER, source=source,
+            ranges=_ranges((60, 120)), status_message=_status(), cancellation=cancellation,
+        )
+        return cancellation
+
+    cancellation = asyncio.run(scenario())
+
+    assert cuts == [(cancellation, 1)]  # no second job registered
     assert job_registry.list_for_chat(CHAT) == []
 
 

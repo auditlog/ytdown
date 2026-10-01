@@ -22,7 +22,7 @@ from telegram.ext import ContextTypes
 from bot.handlers.audio_delivery import AudioDeliveryError, max_sendable_audio_mb, send_audio_file
 from bot.handlers.common_ui import escape_md, safe_edit_message
 from bot.handlers.time_range import TimeRangeError, format_timestamp, parse_time_ranges, resolve_ranges
-from bot.jobs import JobDescriptor, job_registry
+from bot.jobs import JobCancellation, JobDescriptor, job_registry
 from bot.runtime import record_download_for
 from bot.security_limits import TRIM_PENDING_INPUT_TIMEOUT_MIN
 from bot.security_policy import extract_url_from_text
@@ -51,6 +51,7 @@ EXPIRED_TEXT = (
 )
 AUTH_REQUIRED_TEXT = "Wymagane uwierzytelnienie — wyślij kod PIN."
 BUSY_TEXT = "Poczekaj, aż skończę poprzednie cięcie, albo przerwij je komendą /stop."
+START_FAILED_TEXT = "Nie udało się uruchomić przycinania. Spróbuj ponownie."
 RATE_LIMIT_TEXT = "Przekroczono limit requestów. Spróbuj ponownie za chwilę."
 NO_ROOM_TEXT = (
     "Na serwerze brakuje miejsca, żeby przechować plik do cięcia. "
@@ -295,14 +296,29 @@ async def handle_pending_trim_input(update: Update, context: ContextTypes.DEFAUL
     status_message = await update.message.reply_text(
         f"✂️ Przygotowuję {fragments_phrase(len(ranges))}..."
     )
-    await run_trim_job(
+    # The application processes updates one at a time (no concurrent_updates in
+    # main.py), so awaiting the job here would hold /stop and the "Zatrzymaj"
+    # buttons back until every fragment is sent. The job therefore runs as a
+    # PTB task. It is registered first, so a range typed before the task
+    # starts already gets BUSY_TEXT.
+    cancellation = _register_trim_job(chat_id, source)
+    job = run_trim_job(
         context,
         chat_id=chat_id,
         requester_id=requester_id,
         source=source,
         ranges=ranges,
         status_message=status_message,
+        cancellation=cancellation,
     )
+    try:
+        # PTB routes exceptions raised by the task to the application's error handlers.
+        context.application.create_task(job, update=update)
+    except Exception as exc:
+        logging.error("Could not schedule trim job: token=%s: %s", source.token, exc)
+        job.close()  # never started; closing avoids a "never awaited" warning
+        job_registry.unregister(cancellation.job_id)
+        await _edit_status(status_message, START_FAILED_TEXT)
     return True
 
 
@@ -317,16 +333,8 @@ def _sent_before(sent: int) -> str:
     return f"\n\nWysłano wcześniej: {fragments_phrase(sent)}." if sent else ""
 
 
-async def run_trim_job(
-    context: ContextTypes.DEFAULT_TYPE,
-    *,
-    chat_id: int,
-    requester_id: int,
-    source: TrimSource,
-    ranges: list,
-    status_message,
-) -> None:
-    """Cut and send each fragment; the source stays in the store for more cuts."""
+def _register_trim_job(chat_id: int, source: TrimSource) -> JobCancellation:
+    """Make the job visible to /stop and to the BUSY_TEXT check."""
 
     descriptor = JobDescriptor(
         job_id="",
@@ -335,15 +343,36 @@ async def run_trim_job(
         label=f"Przycinanie: {source.title}"[:80],
         started_at=datetime.now(),
     )
-    cancellation = job_registry.register(chat_id, descriptor)
+    return job_registry.register(chat_id, descriptor)
+
+
+async def run_trim_job(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int,
+    requester_id: int,
+    source: TrimSource,
+    ranges: list,
+    status_message,
+    cancellation: JobCancellation | None = None,
+) -> None:
+    """Cut and send each fragment; the source stays in the store for more cuts.
+
+    ``cancellation`` is the handle of a job already registered by the caller
+    (handle_pending_trim_input); without it the job registers itself. Either
+    way the job is unregistered when this coroutine ends.
+    """
+
+    if cancellation is None:
+        cancellation = _register_trim_job(chat_id, source)
     again_markup = InlineKeyboardMarkup(
         [[InlineKeyboardButton("✂️ Tnij dalej", callback_data=f"trim_src_{source.token}")]]
     )
     total = len(ranges)
     sent = 0
-    limit_mb = max_sendable_audio_mb()
 
     try:
+        limit_mb = max_sendable_audio_mb()
         for index, fragment in enumerate(ranges, start=1):
             if cancellation.event.is_set():
                 break
