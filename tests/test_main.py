@@ -90,9 +90,10 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
     filters = SimpleNamespace(
         TEXT=DummyFilter(),
         COMMAND=DummyFilter(),
-        VOICE="VOICE",
-        AUDIO="AUDIO",
+        VOICE=DummyFilter(),
+        AUDIO=DummyFilter(),
         VIDEO=DummyFilter(),
+        UpdateType=SimpleNamespace(MESSAGE=DummyFilter()),
         Document=SimpleNamespace(MimeType=lambda *_: DummyFilter()),
     )
     monkeypatch.setattr(app_main, "filters", filters)

@@ -45,6 +45,7 @@ from bot.handlers.media_extras_callbacks import (
     _handle_instagram_download as _extracted_handle_instagram_download,
     _show_spotify_summary_options as _extracted_show_spotify_summary_options,
     handle_formats_list as _extracted_handle_formats_list,
+    handle_thumbnail_download as _extracted_handle_thumbnail_download,
 )
 from bot.handlers.playlist_callbacks import (
     download_playlist as _extracted_download_playlist,
@@ -269,6 +270,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "formats":
         await handle_formats_list(update, context, url)
         return
+    if data == "thumbnail":
+        await handle_thumbnail_download(update, context, url)
+        return
     if data == "time_range":
         await show_time_range_options(update, context, url)
         return
@@ -360,6 +364,11 @@ async def download_file(
 async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     _sync_media_extras_dependencies()
     return await _extracted_handle_formats_list(update, context, url)
+
+
+async def handle_thumbnail_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    _sync_media_extras_dependencies()
+    return await _extracted_handle_thumbnail_download(update, context, url)
 
 
 async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):

@@ -12,6 +12,7 @@ import threading
 import curses
 
 from telegram import BotCommand
+from telegram.error import Forbidden, NetworkError, RetryAfter
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -101,26 +102,53 @@ def build_application(runtime=None):
     return application
 
 
+ERROR_NOTICE_TEXT = (
+    "⚠️ Nie udało się obsłużyć tej akcji z powodu błędu po stronie bota. "
+    "Spróbuj ponownie — jeśli to się powtórzy, wyślij link jeszcze raz."
+)
+# Transient or user-caused errors: logged, but telling the user would only add noise.
+_SILENT_ERRORS = (NetworkError, RetryAfter, Forbidden)
+
+
+async def on_error(update, context) -> None:
+    """Log unhandled handler errors and tell the user the action failed."""
+
+    error = context.error
+    logging.error("Unhandled error while processing update", exc_info=error)
+
+    chat = getattr(update, "effective_chat", None)
+    if chat is None or isinstance(error, _SILENT_ERRORS):
+        return
+    try:
+        await context.bot.send_message(chat_id=chat.id, text=ERROR_NOTICE_TEXT)
+    except Exception:
+        logging.warning("Could not deliver error notice to chat %s", chat.id, exc_info=True)
+
+
 def register_handlers(application) -> None:
     """Register all Telegram command, message, and callback handlers."""
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("help", help_command))
-    application.add_handler(CommandHandler("status", status_command))
-    application.add_handler(CommandHandler("history", history_command))
-    application.add_handler(CommandHandler("cleanup", cleanup_command))
-    application.add_handler(CommandHandler("users", users_command))
-    application.add_handler(CommandHandler("logout", logout_command))
-    application.add_handler(CommandHandler("stop", stop_command))
-    application.add_handler(CommandHandler("spotify_login", spotify_login_command))
-    application.add_handler(CommandHandler("spotify_logout", spotify_logout_command))
+    # Only fresh private/group messages: edited messages and channel posts must
+    # not re-trigger link processing, PIN checks or uploads.
+    NEW_MESSAGES = filters.UpdateType.MESSAGE
+
+    application.add_handler(CommandHandler("start", start, filters=NEW_MESSAGES))
+    application.add_handler(CommandHandler("help", help_command, filters=NEW_MESSAGES))
+    application.add_handler(CommandHandler("status", status_command, filters=NEW_MESSAGES))
+    application.add_handler(CommandHandler("history", history_command, filters=NEW_MESSAGES))
+    application.add_handler(CommandHandler("cleanup", cleanup_command, filters=NEW_MESSAGES))
+    application.add_handler(CommandHandler("users", users_command, filters=NEW_MESSAGES))
+    application.add_handler(CommandHandler("logout", logout_command, filters=NEW_MESSAGES))
+    application.add_handler(CommandHandler("stop", stop_command, filters=NEW_MESSAGES))
+    application.add_handler(CommandHandler("spotify_login", spotify_login_command, filters=NEW_MESSAGES))
+    application.add_handler(CommandHandler("spotify_logout", spotify_logout_command, filters=NEW_MESSAGES))
 
     # Handler for text messages (including PIN and links)
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_youtube_link))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & NEW_MESSAGES, handle_youtube_link))
 
     # Handlers for audio uploads (voice messages, audio files, audio documents)
-    application.add_handler(MessageHandler(filters.VOICE, handle_audio_upload))
-    application.add_handler(MessageHandler(filters.AUDIO, handle_audio_upload))
+    application.add_handler(MessageHandler(filters.VOICE & NEW_MESSAGES, handle_audio_upload))
+    application.add_handler(MessageHandler(filters.AUDIO & NEW_MESSAGES, handle_audio_upload))
     audio_doc_filter = (
         filters.Document.MimeType("audio/ogg")
         | filters.Document.MimeType("audio/mpeg")
@@ -134,7 +162,7 @@ def register_handlers(application) -> None:
         | filters.Document.MimeType("audio/amr")
         | filters.Document.MimeType("audio/x-caf")
     )
-    application.add_handler(MessageHandler(audio_doc_filter, handle_audio_upload))
+    application.add_handler(MessageHandler(audio_doc_filter & NEW_MESSAGES, handle_audio_upload))
 
     # Handlers for video uploads (native video + video documents)
     video_doc_filter = (
@@ -145,9 +173,10 @@ def register_handlers(application) -> None:
         | filters.Document.MimeType("video/x-msvideo")
         | filters.Document.MimeType("video/webm")
     )
-    application.add_handler(MessageHandler(video_doc_filter, handle_video_upload))
+    application.add_handler(MessageHandler(video_doc_filter & NEW_MESSAGES, handle_video_upload))
 
     application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_error_handler(on_error)
 
 
 def main():

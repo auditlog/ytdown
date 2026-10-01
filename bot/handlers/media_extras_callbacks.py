@@ -13,7 +13,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 
 from bot.config import DOWNLOAD_PATH, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
-from bot.downloader_media import COOKIES_FILE, download_photo
+from bot.downloader_media import COOKIES_FILE, download_photo, download_thumbnail
 from bot.downloader_metadata import get_video_info
 from bot.downloader_validation import sanitize_filename
 from bot.handlers.common_ui import escape_md, safe_edit_message
@@ -28,6 +28,44 @@ from bot.session_store import user_urls
 
 
 _executor = ThreadPoolExecutor(max_workers=2)
+
+
+THUMBNAIL_ERROR_TEXT = "Nie udało się pobrać miniaturki tego materiału."
+
+
+async def handle_thumbnail_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    """Send the video thumbnail as a new photo message.
+
+    Deliberately leaves the format menu untouched (no edit_message_text) so the
+    user can keep picking a format; both the result and any error go out as new
+    messages.
+    """
+
+    chat_id = update.effective_chat.id
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    loop = asyncio.get_event_loop()
+    thumb_path = None
+    try:
+        info = await loop.run_in_executor(_executor, get_video_info, url)
+        if info:
+            thumb_path = await loop.run_in_executor(
+                _executor, download_thumbnail, info, chat_download_path, False
+            )
+        if not thumb_path:
+            await context.bot.send_message(chat_id=chat_id, text=THUMBNAIL_ERROR_TEXT)
+            return
+
+        title = info.get("title") or "Miniaturka"
+        with open(thumb_path, "rb") as photo:
+            await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=title[:200])
+    except Exception as exc:
+        logging.error("Error sending thumbnail: %s", exc)
+        await context.bot.send_message(chat_id=chat_id, text=THUMBNAIL_ERROR_TEXT)
+    finally:
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
 
 
 async def _handle_instagram_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url, callback_data: str):

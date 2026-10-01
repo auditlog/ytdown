@@ -331,7 +331,10 @@ async def send_long_message(bot, chat_id, text, header="", parse_mode="Markdown"
             line = line[split_at:]
 
         if len(current) + len(line) + 2 > max_length:
-            parts.append(current)
+            # Telegram rejects empty messages: current can be blank here when
+            # the previous line was split and left a near-limit remainder.
+            if current.strip():
+                parts.append(current)
             current = line + "\n"
         else:
             current += line + "\n"
@@ -340,6 +343,8 @@ async def send_long_message(bot, chat_id, text, header="", parse_mode="Markdown"
         parts.append(current)
 
     for part in parts:
+        if not part.strip():
+            continue
         try:
             await bot.send_message(
                 chat_id=chat_id,
