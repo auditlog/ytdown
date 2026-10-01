@@ -61,6 +61,14 @@ from bot.handlers.common_ui import (
     escape_md,
 )
 from bot.handlers.time_range import parse_time_range as _shared_parse_time_range
+from bot.handlers.time_range import (
+    TimeRangeError,
+    format_timestamp,
+    looks_like_time_ranges,
+    parse_time_ranges,
+    range_to_session_dict,
+    resolve_ranges,
+)
 from bot.session_context import (
     get_auth_state as _get_auth_state,
     get_session_context_value as _get_session_context_value,
@@ -208,6 +216,60 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 
 
+async def _set_pre_download_range(update, context, chat_id, current_url, message_text) -> None:
+    """Validate a typed range for the pre-download ✂️ flow (yt-dlp sections)."""
+
+    info = get_video_info(current_url)
+    if not info:
+        await update.message.reply_text(
+            "Nie udało się odczytać informacji o materiale. Wyślij link ponownie."
+        )
+        return
+    duration = int(info.get("duration") or 0)
+    title = info.get("title", "Nieznany tytuł")
+
+    try:
+        specs = parse_time_ranges(message_text)
+        if len(specs) > 1:
+            raise TimeRangeError(
+                "Przed pobraniem ustawisz jeden zakres. Kilka fragmentów wytniesz "
+                "przyciskiem ✂️ Przytnij pod pobranym plikiem."
+            )
+        if duration:
+            fragment = resolve_ranges(specs, duration)[0]
+            start_sec, end_sec = fragment.start_sec, fragment.end_sec
+        elif specs[0].end_sec is None:
+            raise TimeRangeError(
+                "Nie znam długości tego materiału — podaj oba końce, np. 2:15-10:00."
+            )
+        else:
+            start_sec, end_sec = specs[0].start_sec or 0, specs[0].end_sec
+    except TimeRangeError as exc:
+        # No parse_mode: the message echoes user input.
+        await update.message.reply_text(f"❌ Nieprawidłowy zakres!\n\n{exc}")
+        return
+
+    time_range = range_to_session_dict(start_sec, end_sec)
+    _set_session_value(context, chat_id, "time_range", time_range, user_time_ranges)
+    duration_str = format_timestamp(duration) if duration else "?"
+    cur_platform = _get_session_context_value(
+        context,
+        chat_id,
+        "platform",
+        legacy_key="platform",
+        default="youtube",
+    )
+    reply_markup = InlineKeyboardMarkup(_build_main_keyboard(cur_platform))
+    await update.message.reply_text(
+        f"✅ Ustawiono zakres: {time_range['start']} - {time_range['end']}\n\n"
+        f"*{escape_md(title)}*\nCzas trwania: {duration_str}\n"
+        f"✂️ Zakres: {time_range['start']} - {time_range['end']}\n\n"
+        f"Wybierz format do pobrania:",
+        reply_markup=reply_markup,
+        parse_mode="Markdown",
+    )
+
+
 async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handles YouTube links and custom time range input."""
     user_id = update.effective_user.id
@@ -238,40 +300,9 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     current_url = _get_session_value(context, chat_id, "current_url", user_urls)
-    if current_url:
-        time_range = parse_time_range(message_text)
-        if time_range:
-            info = get_video_info(current_url)
-            if info:
-                duration = int(info.get("duration") or 0)
-                title = info.get("title", "Nieznany tytuł")
-                duration_str = f"{duration // 60}:{duration % 60:02d}" if duration else "?"
-
-                if duration and time_range["end_sec"] > duration:
-                    await update.message.reply_text(
-                        f"❌ Nieprawidłowy zakres!\n\n"
-                        f"Czas końcowy ({time_range['end']}) przekracza czas trwania filmu ({duration_str})."
-                    )
-                    return
-
-                _set_session_value(context, chat_id, "time_range", time_range, user_time_ranges)
-                cur_platform = _get_session_context_value(
-                    context,
-                    chat_id,
-                    "platform",
-                    legacy_key="platform",
-                    default="youtube",
-                )
-                reply_markup = InlineKeyboardMarkup(_build_main_keyboard(cur_platform))
-                await update.message.reply_text(
-                    f"✅ Ustawiono zakres: {time_range['start']} - {time_range['end']}\n\n"
-                    f"*{escape_md(title)}*\nCzas trwania: {duration_str}\n"
-                    f"✂️ Zakres: {time_range['start']} - {time_range['end']}\n\n"
-                    f"Wybierz format do pobrania:",
-                    reply_markup=reply_markup,
-                    parse_mode="Markdown",
-                )
-                return
+    if current_url and looks_like_time_ranges(message_text):
+        await _set_pre_download_range(update, context, chat_id, current_url, message_text)
+        return
 
     if is_user_blocked(user_id, block_map=block_until):
         remaining_time = get_block_remaining_seconds(user_id, block_map=block_until)

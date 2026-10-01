@@ -622,3 +622,14 @@ def test_download_file_trim_after_keeps_file_and_prompts(tmp_path, monkeypatch):
     assert (offered["title"], offered["requester_id"]) == ("Song", 123)
     sender.assert_not_awaited()
     dc.record_download_for.assert_called_once()
+
+
+def test_time_range_menu_lists_open_range_examples(monkeypatch):
+    monkeypatch.setattr(_trc, "get_video_info", lambda _url: {"title": "Clip", "duration": 600})
+    update, context = _make_update("time_range"), _make_context()
+
+    asyncio.run(_trc.show_time_range_options(update, context, "https://youtube.com/watch?v=x"))
+
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert "`2:15-` (do końca)" in text
+    assert "`-5:00` (od początku)" in text

@@ -79,8 +79,8 @@ async def show_time_range_options(update: Update, context: ContextTypes.DEFAULT_
         query,
         f"*{escape_md(title)}*\nCzas trwania: {duration_str}{current_range}\n\n"
         f"Wybierz zakres czasowy do pobrania:\n\n"
-        f"💡 Możesz też wpisać własny zakres w formacie:\n"
-        f"`0:30-5:45` lub `1:00:00-1:30:00`",
+        "💡 Możesz też wpisać własny zakres, np.:\n"
+        "`0:30-5:45` · `2:15-` (do końca) · `-5:00` (od początku)",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
     )

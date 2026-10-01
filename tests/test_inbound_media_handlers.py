@@ -309,7 +309,46 @@ class TestHandleYoutubeLinkTimeRange:
 
         _async(tc.handle_youtube_link(update, context))
 
-        assert "przekracza czas trwania filmu" in update.message.reply_text.await_args.args[0]
+        assert "jest poza plikiem (długość 2:00)" in update.message.reply_text.await_args.args[0]
+
+    def _setup(self, monkeypatch, *, text, duration=360):
+        update = _make_update(text=text, user_id=333, chat_id=333)
+        context = _make_context()
+        _set_authorized_users(monkeypatch, {333})
+        monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
+        monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
+        monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: True)
+        tc.user_urls[333] = "https://www.youtube.com/watch?v=test"
+        monkeypatch.setattr(tc, "get_video_info", lambda *_: {"duration": duration, "title": "Clip"})
+        tc.block_until[333] = 0
+        return update, context
+
+    def test_open_ended_range_runs_to_the_end(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="2:15-")
+        _async(tc.handle_youtube_link(update, context))
+        assert tc.user_time_ranges.get(333) == {"start": "2:15", "end": "6:00", "start_sec": 135, "end_sec": 360}
+
+    def test_range_from_the_beginning(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="-1:00")
+        _async(tc.handle_youtube_link(update, context))
+        assert tc.user_time_ranges.get(333)["start_sec"] == 0
+        assert tc.user_time_ranges.get(333)["end_sec"] == 60
+
+    def test_multiple_ranges_point_to_trim_button(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="0:10-0:20, 1:00-2:00")
+        _async(tc.handle_youtube_link(update, context))
+        assert "Przed pobraniem ustawisz jeden zakres" in update.message.reply_text.await_args.args[0]
+        assert tc.user_time_ranges.get(333) is None
+
+    def test_open_range_needs_known_duration(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="2:15-", duration=0)
+        _async(tc.handle_youtube_link(update, context))
+        assert "podaj oba końce" in update.message.reply_text.await_args.args[0]
+
+    def test_closed_range_works_without_duration(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="0:10-0:20", duration=0)
+        _async(tc.handle_youtube_link(update, context))
+        assert tc.user_time_ranges.get(333)["end_sec"] == 20
 
     def test_pending_trim_input_wins_over_pre_download_range(self, monkeypatch):
         update = _make_update(text="0:10-0:20", user_id=333, chat_id=333)
