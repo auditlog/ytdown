@@ -339,6 +339,47 @@ async def handle_pending_transcript_prompt(
         "To może potrwać około minuty."
     )
     repeat_markup = _prompt_keyboard(pending.transcript_token, repeat=True)
+    job = _run_custom_analysis(
+        context,
+        chat_id=chat_id,
+        requester_id=requester_id,
+        prompt=prompt,
+        transcript_context=transcript_context,
+        transcript_text=transcript_text,
+        claude_api_key=claude_api_key,
+        status_message=status_message,
+        repeat_markup=repeat_markup,
+    )
+    try:
+        # Non-blocking, like the trim job: the Claude call can take a minute and
+        # must not hold up /stop or other chats. See bot/handlers/trim_callbacks.py.
+        context.application.create_task(job, update=update)
+    except Exception as exc:
+        logging.error("Could not schedule custom transcript analysis: %s", exc)
+        job.close()  # never started; closing avoids a "never awaited" warning
+        try:
+            await status_message.edit_text(
+                "Nie udało się uruchomić analizy. Spróbuj ponownie.",
+                reply_markup=repeat_markup,
+            )
+        except Exception as edit_exc:
+            logging.warning("Custom analysis status update failed: %s", edit_exc)
+    return True
+
+
+async def _run_custom_analysis(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int,
+    requester_id: int,
+    prompt: str,
+    transcript_context: TranscriptContext,
+    transcript_text: str,
+    claude_api_key: str,
+    status_message,
+    repeat_markup: InlineKeyboardMarkup,
+) -> None:
+    """Generate the custom analysis and deliver it (runs as a background task)."""
 
     try:
         result = await generate_custom_analysis_artifact(
@@ -356,7 +397,7 @@ async def handle_pending_transcript_prompt(
                 "Nie udało się wykonać polecenia. Spróbuj ponownie.",
                 reply_markup=repeat_markup,
             )
-            return True
+            return
 
         await send_long_message(
             context.bot,
@@ -391,5 +432,3 @@ async def handle_pending_transcript_prompt(
             "Wystąpił błąd podczas wykonywania polecenia. Spróbuj ponownie.",
             reply_markup=repeat_markup,
         )
-
-    return True

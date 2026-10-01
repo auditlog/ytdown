@@ -104,6 +104,13 @@ def _build_playlist_message(playlist_info: dict, context=None) -> tuple[str, Inl
     return build_playlist_message(playlist_info, archive_available=archive_available)
 
 
+# Chats currently running a work callback (download, playlist, transcription...).
+# Check-and-add happens without an await in between, so the asyncio event loop
+# cannot interleave two callbacks of one chat. See also: main.py (block=False).
+_BUSY_WORK_CHATS: set[int] = set()
+BUSY_CHAT_TOAST = "Trwa już inna operacja w tym czacie. Poczekaj albo przerwij ją komendą /stop."
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries and route them through extracted flows."""
 
@@ -114,11 +121,33 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
 
     # Only work-starting buttons are rate limited; navigation stays free.
-    # Exactly one query.answer() per callback: toast when limited, else plain.
-    if is_work_callback(data) and not check_rate_limit(user_id):
+    # Exactly one query.answer() per callback: toast when limited/busy, else plain.
+    is_work = is_work_callback(data)
+    if is_work and not check_rate_limit(user_id):
         await query.answer(RATE_LIMIT_TOAST, show_alert=True)
         return
+    if is_work:
+        if chat_id in _BUSY_WORK_CHATS:
+            await query.answer(BUSY_CHAT_TOAST, show_alert=True)
+            return
+        # No await between the check above and this add.
+        _BUSY_WORK_CHATS.add(chat_id)
+        try:
+            await query.answer()
+            await _route_callback(update, context, data)
+        finally:
+            _BUSY_WORK_CHATS.discard(chat_id)
+        return
+
     await query.answer()
+    await _route_callback(update, context, data)
+
+
+async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Route an already answered callback to its flow."""
+
+    query = update.callback_query
+    chat_id = update.effective_chat.id
 
     if data.startswith("arc_"):
         await _extracted_handle_archive_callback(update, context, data)

@@ -177,9 +177,15 @@ def register_handlers(application) -> None:
     # Handler for text messages (including PIN and links)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND & NEW_MESSAGES, handle_youtube_link))
 
+    # NOTE: callbacks and uploads use block=False so a long download, playlist,
+    # packing or transcription does not stall every other update (including /stop
+    # and other chats) while PTB processes updates one at a time. Text and command
+    # handlers stay blocking to keep their ordering. Same idea as the trim job in
+    # bot/handlers/trim_callbacks.py; the one-job-per-chat guard for callbacks
+    # lives in bot/telegram_callbacks.py (_BUSY_WORK_CHATS).
     # Handlers for audio uploads (voice messages, audio files, audio documents)
-    application.add_handler(MessageHandler(filters.VOICE & NEW_MESSAGES, handle_audio_upload))
-    application.add_handler(MessageHandler(filters.AUDIO & NEW_MESSAGES, handle_audio_upload))
+    application.add_handler(MessageHandler(filters.VOICE & NEW_MESSAGES, handle_audio_upload, block=False))
+    application.add_handler(MessageHandler(filters.AUDIO & NEW_MESSAGES, handle_audio_upload, block=False))
     audio_doc_filter = (
         filters.Document.MimeType("audio/ogg")
         | filters.Document.MimeType("audio/mpeg")
@@ -193,7 +199,7 @@ def register_handlers(application) -> None:
         | filters.Document.MimeType("audio/amr")
         | filters.Document.MimeType("audio/x-caf")
     )
-    application.add_handler(MessageHandler(audio_doc_filter & NEW_MESSAGES, handle_audio_upload))
+    application.add_handler(MessageHandler(audio_doc_filter & NEW_MESSAGES, handle_audio_upload, block=False))
 
     # Handlers for video uploads (native video + video documents)
     video_doc_filter = (
@@ -204,9 +210,9 @@ def register_handlers(application) -> None:
         | filters.Document.MimeType("video/x-msvideo")
         | filters.Document.MimeType("video/webm")
     )
-    application.add_handler(MessageHandler(video_doc_filter & NEW_MESSAGES, handle_video_upload))
+    application.add_handler(MessageHandler(video_doc_filter & NEW_MESSAGES, handle_video_upload, block=False))
 
-    application.add_handler(CallbackQueryHandler(handle_callback))
+    application.add_handler(CallbackQueryHandler(handle_callback, block=False))
     application.add_error_handler(on_error)
 
 

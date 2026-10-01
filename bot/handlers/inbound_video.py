@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -170,7 +171,8 @@ async def extracted_process_video_file(
 
         await progress_msg.edit_text("Ekstrakcja audio z video...")
         mp3_path = os.path.splitext(video_path)[0] + ".mp3"
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["ffmpeg", "-i", video_path, "-vn", "-acodec", "libmp3lame", "-q:a", "2", mp3_path],
             capture_output=True,
             timeout=FFMPEG_TIMEOUT,

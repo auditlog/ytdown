@@ -18,6 +18,20 @@ def _make_text_update(text: str, *, chat_id: int, user_id: int):
     return update
 
 
+def _schedule_on_loop(context):
+    """Make application.create_task schedule on the running loop, like PTB."""
+
+    tasks = []
+
+    def create_task(coroutine, update=None, **kwargs):
+        task = asyncio.get_running_loop().create_task(coroutine)
+        tasks.append(task)
+        return task
+
+    context.application.create_task = Mock(side_effect=create_task)
+    return tasks
+
+
 def test_offer_custom_prompt_registers_transcript_and_sends_button(tmp_path):
     transcript = tmp_path / "sample_transcript.md"
     transcript.write_text("# Sample\n\nBody", encoding="utf-8")
@@ -155,10 +169,19 @@ def test_pending_prompt_generates_message_and_markdown_result(tmp_path, monkeypa
 
     monkeypatch.setattr(handlers, "generate_custom_analysis_artifact", fake_generate)
     monkeypatch.setattr(handlers, "check_rate_limit", lambda _user_id: True)
+    tasks = _schedule_on_loop(context)
 
-    handled = asyncio.run(handlers.handle_pending_transcript_prompt(update, context))
+    async def scenario():
+        handled = await handlers.handle_pending_transcript_prompt(update, context)
+        # The analysis runs as a PTB task; the handler returns before it finishes.
+        assert len(tasks) == 1
+        await asyncio.gather(*tasks)
+        return handled
+
+    handled = asyncio.run(scenario())
 
     assert handled is True
+    assert context.application.create_task.call_args.kwargs["update"] is update
     context.bot.send_document.assert_awaited_once()
     assert any(
         "Analysis body" in call.kwargs["text"]
@@ -210,3 +233,38 @@ def test_prompt_callback_clears_pending_trim(tmp_path):
 
     assert "pending_trim" not in context.user_data
     assert context.user_data["pending_transcript_prompt"].transcript_token == token
+
+
+def test_pending_prompt_scheduling_failure_reports_error(tmp_path, monkeypatch, caplog):
+    transcript = tmp_path / "sample_transcript.md"
+    transcript.write_text("# Sample\n\nTranscript body", encoding="utf-8")
+    context = _make_context()
+    runtime = _attach_runtime(context)
+    runtime.config["CLAUDE_API_KEY"] = "test-key"
+    token = handlers.register_transcript_context(
+        context, chat_id=10, requester_id=20, transcript_path=str(transcript), title="Sample",
+    )
+    runtime.session_store.set_field(
+        10, "pending_transcript_prompt", handlers.PendingTranscriptPrompt(token, 20),
+    )
+    status_message = Mock()
+    status_message.edit_text = AsyncMock()
+    update = _make_text_update("List decisions", chat_id=10, user_id=20)
+    update.message.reply_text.return_value = status_message
+    generate = AsyncMock()
+    monkeypatch.setattr(handlers, "generate_custom_analysis_artifact", generate)
+    monkeypatch.setattr(handlers, "check_rate_limit", lambda _user_id: True)
+    scheduled = []
+
+    def failing_create_task(coroutine, update=None, **kwargs):
+        scheduled.append(coroutine)
+        raise RuntimeError("application is shutting down")
+
+    context.application.create_task = failing_create_task
+
+    assert asyncio.run(handlers.handle_pending_transcript_prompt(update, context)) is True
+
+    assert status_message.edit_text.await_args.args[0] == "Nie udało się uruchomić analizy. Spróbuj ponownie."
+    generate.assert_not_called()
+    # The coroutine was closed, so nothing is left to be "never awaited".
+    assert scheduled[0].cr_frame is None
