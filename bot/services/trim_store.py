@@ -130,6 +130,17 @@ def retain_source(
         shutil.rmtree(workspace, ignore_errors=True)
         return None
 
+    # bot/cleanup.py ages files by mtime, and a download may carry an old
+    # mtime (e.g. from the server's Last-Modified); restart the clock so a
+    # fresh source survives its 24 h. With link=True this also touches the
+    # original upload through the shared inode, which is fresh anyway.
+    # Outside the try above: on failure the file is already in the store and
+    # must not be rolled back with the workspace.
+    try:
+        os.utime(dest)
+    except OSError as exc:
+        logging.warning("Could not refresh mtime of trim source %s: %s", dest, exc)
+
     logging.info(
         "Trim source retained: chat=%d token=%s size=%.1f MB",
         chat_id, token, dest.stat().st_size / (1024 * 1024),

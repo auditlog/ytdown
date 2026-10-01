@@ -2,6 +2,7 @@
 
 import json
 import os
+import time
 from collections import namedtuple
 from datetime import UTC, datetime, timedelta
 
@@ -50,6 +51,21 @@ def test_retain_moves_file_and_writes_meta(store_root, tmp_path):
     assert meta["performer"] == "Host"
     assert meta["duration_sec"] == 6130
     assert len(source.token) == 11
+
+
+@pytest.mark.parametrize("link", [False, True])
+def test_retain_refreshes_source_mtime(store_root, tmp_path, link):
+    # cleanup_old_files ages files by mtime; a download can carry the server's
+    # Last-Modified, which must not make a fresh source look two days old.
+    original = _audio(tmp_path)
+    two_days_ago = time.time() - 2 * 24 * 3600
+    os.utime(original, (two_days_ago, two_days_ago))
+
+    source = trim_store.retain_source(
+        42, original, title="Podcast", performer=None, duration_sec=600, link=link
+    )
+
+    assert abs(source.path.stat().st_mtime - time.time()) < 60
 
 
 def test_retain_with_link_keeps_original(store_root, tmp_path):
