@@ -113,7 +113,11 @@ async def cut_fragment(
     title_tag: str,
     cancellation=None,
 ) -> Path:
-    """Copy one fragment of ``source`` into ``dest`` without re-encoding."""
+    """Copy one fragment of ``source`` into ``dest`` with stream copy.
+
+    MP3 and M4A are never re-encoded. FLAC is re-encoded losslessly so the
+    fragment gets a correct duration header (see the module docstring).
+    """
 
     head = ["ffmpeg", "-v", "error", "-y", "-ss", str(fragment.start_sec), "-i", str(source)]
     if not fragment.open_end:
