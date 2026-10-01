@@ -320,6 +320,7 @@ def test_offer_archive_or_cancel_registers_pending_job(tmp_path, monkeypatch):
     callback_data = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
     assert any(cb.startswith("arc_split_") for cb in callback_data)
     assert any(cb.startswith("arc_cancel_") for cb in callback_data)
+    assert sent_text[0].endswith("i wysłać części.")
 
     session_store.reset()
 
@@ -448,6 +449,7 @@ def test_arc_resend_calls_send_volumes_with_index(tmp_path, monkeypatch):
 
     assert sent.await_count == 1
     assert sent.await_args.kwargs["start_index"] == 1
+    update.callback_query.edit_message_text.assert_awaited_with("Wysłano części od [2/2].")
     session_store.reset()
 
 

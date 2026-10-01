@@ -450,7 +450,11 @@ def test_execute_playlist_archive_flow_happy_path(tmp_path, monkeypatch):
     assert archive_service.ARCHIVE_UNPACK_HINT in texts[-1]
     assert not any("vol_size" in t or "Pakowanie OK" in t for t in texts)
     assert any(t.startswith("Pakuję do 7z w częściach po ") for t in texts)
-    assert any(t.startswith("Spakowano: 1 części.") for t in texts)
+    assert any(t.startswith("Spakowano: 1 część.") for t in texts)
+    assert "Spakowano: 2 pliki → 1 część 7z" in texts[-1]
+    keyboard = update.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    buttons = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    assert "Wyślij wszystkie części ponownie" in buttons
     # Workspace persists for retention.
     assert any(p.name.startswith("pl_") for p in (tmp_path / "99").iterdir())
     session_store.reset()
@@ -743,7 +747,10 @@ def test_execute_single_file_archive_flow_consumes_pending_job(tmp_path, monkeyp
     assert len(sent) == 1
     final_text = update.callback_query.edit_message_text.await_args.args[0]
     assert archive_service.ARCHIVE_UNPACK_HINT in final_text
-    assert "Plik wysłany" in final_text
+    assert "Plik wysłany w 1 części." in final_text
+    keyboard = update.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    buttons = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    assert "Wyślij wszystkie części ponownie" in buttons
     session_store.reset()
 
 
@@ -797,6 +804,10 @@ def test_execute_partial_archive_flow_packs_remaining(tmp_path, monkeypatch):
     send_called.assert_awaited_once()
     final_text = update.callback_query.edit_message_text.await_args.args[0]
     assert archive_service.ARCHIVE_UNPACK_HINT in final_text
+    assert "Częściowa playlista wysłana w 1 części." in final_text
+    keyboard = update.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    buttons = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    assert "Wyślij wszystkie części ponownie" in buttons
     # Partial state consumed.
     assert partial_archive_workspaces.get(44, {}).get("tok") is None
     session_store.reset()
@@ -815,6 +826,13 @@ def test_user_facing_archive_texts_have_no_jargon():
         for line in path.read_text(encoding="utf-8").splitlines():
             if re.search(r"logging\.|logger\.", line) or line.lstrip().startswith("#"):
                 continue
-            if "vol_size" in line or "Pakowanie OK" in line or "olumen" in line:
+            if (
+                "vol_size" in line
+                or "Pakowanie OK" in line
+                or "olumen" in line
+                # Volumes are "części" in user texts; "paczki" only for Spotify groups.
+                or "paczki ponownie" in line
+                or "Wysyłka anulowana" in line
+            ):
                 offenders.append(f"{path.name}: {line.strip()}")
     assert not offenders, offenders

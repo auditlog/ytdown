@@ -26,7 +26,7 @@ from bot.handlers.audio_delivery import (
     send_audio_file,
     trim_button,
 )
-from bot.handlers.common_ui import escape_md, safe_edit_message
+from bot.handlers.common_ui import escape_md, polish_plural, safe_edit_message
 from bot.handlers.time_range import (
     TimeRangeError,
     format_timestamp,
@@ -110,11 +110,7 @@ def _set_pending(context: ContextTypes.DEFAULT_TYPE, chat_id: int, pending: Pend
 def fragments_phrase(count: int) -> str:
     """Polish count phrase: 1 fragment, 2 fragmenty, 5 fragmentów."""
 
-    if count == 1:
-        return "1 fragment"
-    if 2 <= count % 10 <= 4 and not 12 <= count % 100 <= 14:
-        return f"{count} fragmenty"
-    return f"{count} fragmentów"
+    return polish_plural(count, "fragment", "fragmenty", "fragmentów")
 
 
 def _format_expiry(source: TrimSource) -> str:

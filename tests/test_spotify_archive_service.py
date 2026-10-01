@@ -99,6 +99,12 @@ def test_spotify_archive_groups_downloads_by_requested_track_count(
     assert result.downloaded_count == 5
     assert result.archive_count == 1
     assert result.failed_indices == ()
+    texts = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert "Pakowanie zakończone: 1 archiwum, 1 część do wysłania." in texts
+    assert "Spakowano: 1 archiwum 7z" in texts[-1]
+    keyboard = update.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    buttons = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    assert "Wyślij wszystkie części ponownie" in buttons
     session_store.reset()
 
 
@@ -174,6 +180,9 @@ def test_spotify_archive_splits_into_multiple_logical_archives(
     assert group_sizes == [100, 100, 5]
     assert result.archive_count == 3
     assert result.volume_count == 3
+    texts = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert "Pakowanie zakończone: 3 archiwa, 3 części do wysłania." in texts
+    assert "Spakowano: 3 archiwa 7z" in texts[-1]
     session_store.reset()
 
 

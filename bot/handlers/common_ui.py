@@ -16,6 +16,21 @@ def escape_md(text: str) -> str:
     return escape_markdown(text, version=1)
 
 
+def polish_plural(count: int, one: str, few: str, many: str) -> str:
+    """Return "<count> <noun>" with the Polish plural form for ``count``.
+
+    ``one`` for 1, ``few`` for 2-4, 22-24, 32-34, ... (but not 12-14) and
+    ``many`` otherwise (0, 5-21, 25-31, ...): 1 plik, 2 pliki, 5 plików,
+    22 pliki, 112 plików.
+    """
+
+    if count == 1:
+        return f"{count} {one}"
+    if 2 <= count % 10 <= 4 and not 12 <= count % 100 <= 14:
+        return f"{count} {few}"
+    return f"{count} {many}"
+
+
 def stop_button_markup(job_id: str) -> InlineKeyboardMarkup:
     """Single "stop" button for a progress message of the job ``job_id``.
 

@@ -836,7 +836,7 @@ async def _offer_archive_or_cancel(
     ])
     text = (
         f"Plik za duży dla Telegrama: {file_size_mb:.0f} MB > limit {volume_size_mb} MB.\n"
-        f"Mogę spakować go w części 7z (po {volume_size_mb} MB) i wysłać paczki."
+        f"Mogę spakować go w części 7z (po {volume_size_mb} MB) i wysłać części."
     )
     try:
         await update.callback_query.edit_message_text(text, reply_markup=keyboard)
@@ -944,7 +944,7 @@ async def _handle_arc_resend(update, context, chat_id: int, data: str) -> None:
             start_index=start_index,
             status_cb=status,
         )
-        await status(f"Wysłano paczki od [{start_index + 1}/{len(state.volumes)}].")
+        await status(f"Wysłano części od [{start_index + 1}/{len(state.volumes)}].")
     except Exception as exc:
         await status(f"Wysyłka nadal nie powiodła się: {exc}")
 

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from bot.jobs import JobCancellation
 
 from bot.jobs import JobDescriptor, job_registry
-from bot.handlers.common_ui import progress_stop_markup
+from bot.handlers.common_ui import polish_plural, progress_stop_markup
 from bot.archive import (
     compute_archive_basename,
     is_7z_available,
@@ -59,6 +59,18 @@ ARCHIVE_UNPACK_HINT = (
     "folderze, nie zmieniaj nazw i otwórz plik .7z.001 w 7-Zip (Windows), "
     "Keka (macOS) lub ZArchiver (Android)."
 )
+
+def _volumes_phrase(count: int) -> str:
+    """"1 część" / "2 części" / "5 części" -- volumes are "części" in user texts."""
+
+    return polish_plural(count, "część", "części", "części")
+
+
+def _volumes_locative(count: int) -> str:
+    """"(w) 1 części" / "(w) 2 częściach" / "(w) 5 częściach"."""
+
+    return polish_plural(count, "części", "częściach", "częściach")
+
 
 ARCHIVE_EXPIRED_TEXT = (
     "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. "
@@ -418,7 +430,7 @@ async def execute_playlist_archive_flow(
             cancellation.job_id,
             f"Playlist 7z ({media_type} {format_choice}) — wysyłka [0/{len(volumes)}]",
         )
-        await status(f"Spakowano: {len(volumes)} części. Wysyłam…")
+        await status(f"Spakowano: {_volumes_phrase(len(volumes))}. Wysyłam…")
         await send_volumes(
             context.bot,
             chat_id=chat_id,
@@ -440,12 +452,13 @@ async def execute_playlist_archive_flow(
 
         was_cancelled_in_send = cancellation.event.is_set()
         summary_lines = [
-            "Playlista zakończona." if not was_cancelled_in_send else "⏹ Wysyłka anulowana.",
+            "Playlista zakończona." if not was_cancelled_in_send else "⏹ Wysyłka zatrzymana.",
             f"Pobrano: {len(downloaded)}/{total}",
-            f"Spakowano: {len(downloaded)} plików → {len(volumes)} paczek 7z",
+            f"Spakowano: {polish_plural(len(downloaded), 'plik', 'pliki', 'plików')}"
+            f" → {_volumes_phrase(len(volumes))} 7z",
         ]
         if was_cancelled_in_send:
-            summary_lines.append(f"Wysłano: <{len(volumes)} (anulowano)")
+            summary_lines.append(f"Wysłano: <{len(volumes)} (zatrzymano)")
         else:
             summary_lines.append(f"Wysłano: {len(volumes)}/{len(volumes)}")
         summary_lines.append(
@@ -461,7 +474,7 @@ async def execute_playlist_archive_flow(
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "Wyślij wszystkie paczki ponownie",
+                "Wyślij wszystkie części ponownie",
                 callback_data=f"arc_resend_{token}_0",
             )],
             [InlineKeyboardButton("Usuń teraz", callback_data=f"arc_purge_{token}")],
@@ -625,7 +638,7 @@ async def execute_partial_archive_flow(
             cancellation.job_id,
             f"Wysyłka częściowej playlisty [0/{len(volumes)}]",
         )
-        await status(f"Spakowano: {len(volumes)} części. Wysyłam…")
+        await status(f"Spakowano: {_volumes_phrase(len(volumes))}. Wysyłam…")
         await send_volumes(
             context.bot, chat_id=chat_id, volumes=volumes,
             caption_prefix=caption_prefix, use_mtproto=use_mtproto,
@@ -641,7 +654,7 @@ async def execute_partial_archive_flow(
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "Wyślij wszystkie paczki ponownie",
+                "Wyślij wszystkie części ponownie",
                 callback_data=f"arc_resend_{delivery_token}_0",
             )],
             [InlineKeyboardButton(
@@ -650,7 +663,7 @@ async def execute_partial_archive_flow(
             )],
         ])
         await update.callback_query.edit_message_text(
-            f"Częściowa playlista wysłana w {len(volumes)} paczkach.\n\n"
+            f"Częściowa playlista wysłana w {_volumes_locative(len(volumes))}.\n\n"
             f"{ARCHIVE_UNPACK_HINT}",
             reply_markup=keyboard,
         )
@@ -718,7 +731,7 @@ async def execute_single_file_archive_flow(
         volumes = await pack_to_volumes([moved_path], dest_basename, volume_size_mb)
 
         caption_prefix = state.title
-        await status(f"Spakowano: {len(volumes)} części. Wysyłam…")
+        await status(f"Spakowano: {_volumes_phrase(len(volumes))}. Wysyłam…")
         await send_volumes(
             context.bot,
             chat_id=chat_id,
@@ -739,7 +752,7 @@ async def execute_single_file_archive_flow(
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "Wyślij wszystkie paczki ponownie",
+                "Wyślij wszystkie części ponownie",
                 callback_data=f"arc_resend_{delivery_token}_0",
             )],
             [InlineKeyboardButton(
@@ -749,7 +762,7 @@ async def execute_single_file_archive_flow(
         ])
         try:
             await update.callback_query.edit_message_text(
-                f"Plik wysłany w {len(volumes)} paczkach. "
+                f"Plik wysłany w {_volumes_locative(len(volumes))}. "
                 f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.\n\n"
                 f"{ARCHIVE_UNPACK_HINT}",
                 reply_markup=keyboard,

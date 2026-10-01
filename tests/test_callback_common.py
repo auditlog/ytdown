@@ -142,3 +142,27 @@ def test_parse_download_callback_returns_none_for_unknown_payload():
     assert tc.parse_download_callback("formats") is None
     assert tc.parse_download_callback("dl_unknown_720p") is None
     assert tc.parse_download_callback("dl_audio_format") is None
+
+
+@pytest.mark.parametrize(
+    ("count", "expected"),
+    [
+        (0, "0 plików"),
+        (1, "1 plik"),
+        (2, "2 pliki"),
+        (4, "4 pliki"),
+        (5, "5 plików"),
+        (11, "11 plików"),
+        (12, "12 plików"),
+        (14, "14 plików"),
+        (21, "21 plików"),
+        (22, "22 pliki"),
+        (25, "25 plików"),
+        (101, "101 plików"),
+        (112, "112 plików"),
+    ],
+)
+def test_polish_plural_picks_the_right_form(count, expected):
+    from bot.handlers.common_ui import polish_plural
+
+    assert polish_plural(count, "plik", "pliki", "plików") == expected
