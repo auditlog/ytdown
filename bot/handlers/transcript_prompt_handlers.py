@@ -252,6 +252,8 @@ async def handle_transcript_prompt_callback(
         )
         return
 
+    # Only one text input may be pending per chat; see bot/handlers/trim_callbacks.py.
+    clear_session_context_value(context, chat_id, "pending_trim", legacy_key="pending_trim")
     set_session_context_value(
         context,
         chat_id,

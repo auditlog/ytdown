@@ -60,3 +60,12 @@ JOB_DEAD_AGE_HOURS = 6
 # attached to a JobCancellation. Long enough for 7z to finish writing
 # its current 1 MiB block, short enough to not block /stop UX.
 JOB_TERMINATE_GRACE_SEC = 1.0
+
+# Audio trimming. See bot/services/trim_store.py and bot/handlers/trim_callbacks.py.
+# Sources stay on disk this long so the ✂️ button under a sent audio keeps working.
+TRIM_SOURCE_RETENTION_HOURS = 24
+# How long the bot treats the next text message as trim ranges after ✂️ is pressed.
+TRIM_PENDING_INPUT_TIMEOUT_MIN = 10
+TRIM_MAX_RANGES = 10
+# Matches the "low disk" threshold in cleanup.monitor_disk_space (aggressive cleanup below 5 GB).
+TRIM_MIN_FREE_DISK_GB = 5

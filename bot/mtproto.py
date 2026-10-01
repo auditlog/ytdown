@@ -175,6 +175,9 @@ async def send_audio_mtproto(
     caption: str | None = None,
     thumb_path: str | None = None,
     *,
+    performer: str | None = None,
+    file_name: str | None = None,
+    buttons: list[tuple[str, str]] | None = None,
     cancellation: "JobCancellation | None" = None,
 ) -> bool:
     """Send an audio file via MTProto (up to 2 GB).
@@ -188,6 +191,9 @@ async def send_audio_mtproto(
         title: Audio track title shown in the player.
         caption: Message caption.
         thumb_path: Optional thumbnail image path.
+        performer: Optional performer shown in the audio player.
+        file_name: Optional file name shown to the user (defaults to the path's).
+        buttons: Optional (label, callback_data) pairs, one inline button per row.
         cancellation: Optional job cancellation handle; when set, the upload
             coroutine is wrapped in a Task and assigned to
             cancellation.pyrogram_task so /stop can abort it.
@@ -216,12 +222,23 @@ async def send_audio_mtproto(
 
     try:
         async with client:
+            reply_markup = None
+            if buttons:
+                from pyrogram import types as pyrogram_types
+
+                reply_markup = pyrogram_types.InlineKeyboardMarkup(
+                    [[pyrogram_types.InlineKeyboardButton(label, callback_data=data)]
+                     for label, data in buttons]
+                )
             coro = client.send_audio(
                 chat_id=chat_id,
                 audio=file_path,
                 title=title,
+                performer=performer,
+                file_name=file_name,
                 caption=caption,
                 thumb=thumb_path,
+                reply_markup=reply_markup,
             )
             if cancellation is not None:
                 task = asyncio.ensure_future(coro)

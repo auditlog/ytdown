@@ -7,6 +7,7 @@ from unittest.mock import AsyncMock
 
 from bot import telegram_callbacks as tc
 from bot.downloader_validation import sanitize_filename
+from bot.handlers import audio_delivery
 from bot.handlers import spotify_callbacks as sc
 from bot.services.spotify_video_service import get_video_error_message
 from bot.spotify_video import SpotifyVideoCancelled, SpotifyVideoError
@@ -749,15 +750,15 @@ def test_download_spotify_video_audio_mtproto_passes_title(monkeypatch, tmp_path
 
     captured = {}
 
-    async def fake_send_audio_mtproto(chat_id, file_path, title=None, caption=None, thumb_path=None, *, cancellation=None):
+    async def fake_send_audio_mtproto(chat_id, file_path, title=None, caption=None, thumb_path=None, **kwargs):
         captured["title"] = title
         captured["caption"] = caption
         return True
 
     monkeypatch.setattr(sc, "download_episode_media", fake_download)
     monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
-    monkeypatch.setattr(sc, "_mtproto_unavailability_reason", lambda: None)
-    monkeypatch.setattr(sc, "send_audio_mtproto", fake_send_audio_mtproto)
+    monkeypatch.setattr(audio_delivery, "mtproto_unavailability_reason", lambda: None)
+    monkeypatch.setattr(audio_delivery, "send_audio_mtproto", fake_send_audio_mtproto)
 
     update = _make_update("spv_audio_m4a", chat_id=123)
     context = _make_context()
@@ -1713,3 +1714,72 @@ def test_download_spotify_video_waits_for_pending_progress_edit_before_cancel_me
         i for i, entry in enumerate(log) if entry.startswith("start:Pobieranie anulowane.")
     )
     assert finish_progress_idx < cancel_start_idx
+
+
+
+def test_download_spotify_video_audio_offers_trim(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    produced = tmp_path / "episode.m4a"
+    produced.write_bytes(b"X" * 1024)
+
+    async def fake_download(**kwargs):
+        return str(produced)
+
+    sender = AsyncMock(return_value=SimpleNamespace(token="AAAAAAAAAAA"))
+    monkeypatch.setattr(sc, "download_episode_media", fake_download)
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "send_audio_with_trim", sender)
+    update = _make_update("spv_audio_m4a", chat_id=123)
+
+    asyncio.run(sc.download_spotify_video(update, _make_context(), _spotify_video_session(), height=None))
+
+    assert sender.await_args.kwargs["title"] == "Test Episode"
+    assert "✂️ Pod plikiem" in update.callback_query.edit_message_text.await_args.args[0]
+
+
+def test_download_spotify_resolved_offers_trim(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    produced = tmp_path / "Host - Episode.mp3"
+    produced.write_bytes(b"X" * 1024)
+    sender = AsyncMock(return_value=SimpleNamespace(token="AAAAAAAAAAA"))
+    monkeypatch.setattr(sc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(sc, "download_resolved_audio", AsyncMock(return_value=str(produced)))
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "send_audio_with_trim", sender)
+    update = _make_update("dl_audio_mp3", chat_id=123)
+
+    result = asyncio.run(sc.download_spotify_resolved(
+        update, _make_context(), {"source": "itunes", "title": "Episode", "artist": "Host"},
+    ))
+
+    assert result is True
+    assert sender.await_args.kwargs["performer"] == "Host"
+    assert "✂️ Pod plikiem" in update.callback_query.edit_message_text.await_args.args[0]
+
+
+def test_download_spotify_resolved_trim_after_skips_send(monkeypatch, tmp_path):
+    from unittest.mock import AsyncMock
+
+    produced = tmp_path / "Host - Episode.mp3"
+    produced.write_bytes(b"X" * 1024)
+    offer = AsyncMock(return_value=True)
+    sender = AsyncMock()
+    monkeypatch.setattr(sc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(sc, "download_resolved_audio", AsyncMock(return_value=str(produced)))
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "offer_trim_after_download", offer)
+    monkeypatch.setattr(sc, "send_audio_with_trim", sender)
+    update = _make_update("trim_dl", chat_id=123)
+
+    result = asyncio.run(sc.download_spotify_resolved(
+        update, _make_context(), {"source": "itunes", "title": "Episode", "artist": "Host"},
+        "mp3", trim_after=True,
+    ))
+
+    assert result is True
+    assert offer.await_args.kwargs["performer"] == "Host"
+    sender.assert_not_awaited()

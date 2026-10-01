@@ -1,0 +1,3 @@
+-r requirements.txt
+# Keep the stable v1 SDK API; v2 has a separate migration path.
+mcp>=1.26,<2

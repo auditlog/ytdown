@@ -53,7 +53,7 @@ def test_prepare_download_plan_video_best_uses_bestvideo_bestaudio(monkeypatch, 
     )
 
     assert plan is not None
-    assert plan.ydl_opts["format"] == "bestvideo+bestaudio/best"
+    assert plan.ydl_opts["format"] == "bestvideo*+bestaudio/best"
     assert plan.ydl_opts["format_sort"] == ds.VIDEO_FORMAT_SORT
     assert plan.ydl_opts["merge_output_format"] == "mp4"
 
@@ -77,10 +77,60 @@ def test_prepare_download_plan_video_medium_caps_at_720p(monkeypatch, tmp_path):
     # Trailing /best is the unconditional fallback for portrait sources whose
     # height filter would otherwise match no format (see download_service).
     assert plan.ydl_opts["format"] == (
-        "bestvideo[height<=720]+bestaudio/best[height<=720]/best"
+        "bestvideo*[height<=720]+bestaudio/best[height<=720]/best"
     )
     assert plan.ydl_opts["format_sort"] == ds.VIDEO_FORMAT_SORT
     assert plan.ydl_opts["merge_output_format"] == "mp4"
+
+
+@pytest.mark.parametrize(
+    "quality, expected_height",
+    [("best", 4320), ("4320p", 4320), ("2160p", 2160), ("1440p", 1440),
+     ("1080p", 1080), ("720p", 720), ("medium", 720)],
+)
+def test_video_selection_prioritizes_source_resolution_over_codec(
+    tmp_path, monkeypatch, quality, expected_height,
+):
+    # Use yt-dlp's actual sorter/selector, without contacting a source or downloading.
+    formats = [
+        {"format_id": f"video-{height}", "url": f"https://example.invalid/{height}.mp4",
+         "ext": "mp4", "vcodec": codec, "acodec": "none", "width": height * 16 // 9,
+         "height": height, "tbr": height, "preference": 100 if height == 1080 else -10}
+        for height, codec in [(720, "avc1"), (1080, "avc1"), (1440, "vp9"),
+                              (2160, "vp9"), (4320, "av01")]
+    ]
+    formats.append({"format_id": "audio", "url": "https://example.invalid/audio.m4a",
+                    "ext": "m4a", "vcodec": "none", "acodec": "mp4a.40.2", "abr": 128})
+    info = {"id": "quality-test", "title": "Quality test", "duration": 10, "formats": formats}
+    monkeypatch.setattr(ds, "get_video_info", lambda url: info)
+    plan = ds.prepare_download_plan(
+        url="https://example.invalid/video", media_type="video", format_choice=quality,
+        chat_download_path=str(tmp_path),
+    )
+    with ds.yt_dlp.YoutubeDL({**plan.ydl_opts, "simulate": True, "cachedir": False}) as ydl:
+        result = ydl.process_ie_result(info, download=False)
+    assert result["height"] == expected_height
+    assert result["requested_formats"][1]["vcodec"] == "none"
+
+
+def test_best_can_select_higher_combined_video_and_audio(tmp_path, monkeypatch):
+    info = {"id": "combined", "title": "Combined", "duration": 10, "formats": [
+        {"format_id": "low", "url": "https://example.invalid/low.mp4", "ext": "mp4",
+         "vcodec": "avc1", "acodec": "none", "width": 1920, "height": 1080},
+        {"format_id": "high", "url": "https://example.invalid/high.mp4", "ext": "mp4",
+         "vcodec": "vp9", "acodec": "mp4a.40.2", "width": 3840, "height": 2160},
+        {"format_id": "audio", "url": "https://example.invalid/audio.m4a", "ext": "m4a",
+         "vcodec": "none", "acodec": "mp4a.40.2"},
+    ]}
+    monkeypatch.setattr(ds, "get_video_info", lambda url: info)
+    plan = ds.prepare_download_plan(
+        url="https://example.invalid/video", media_type="video", format_choice="best",
+        chat_download_path=str(tmp_path),
+    )
+    with ds.yt_dlp.YoutubeDL({**plan.ydl_opts, "simulate": True, "cachedir": False}) as ydl:
+        result = ydl.process_ie_result(info, download=False)
+    assert result["format_id"] == "high"
+    assert result["height"] == 2160
 
 
 def test_prepare_download_plan_rejects_invalid_audio_quality(monkeypatch, tmp_path):

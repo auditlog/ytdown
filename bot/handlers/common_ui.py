@@ -16,6 +16,12 @@ def escape_md(text: str) -> str:
     return escape_markdown(text, version=1)
 
 
+def trim_download_button() -> InlineKeyboardButton:
+    """Download the whole audio without sending it, then ask for trim ranges."""
+
+    return InlineKeyboardButton("✂️ Pobierz i przytnij", callback_data="trim_dl")
+
+
 def build_main_keyboard(platform: str, large_file: bool = False) -> list:
     """Build the main format selection keyboard for a detected platform."""
 
@@ -32,12 +38,16 @@ def build_main_keyboard(platform: str, large_file: bool = False) -> list:
         return [
             [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
             [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+            [trim_download_button()],
             [InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")],
             [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="transcribe_summary")],
         ]
 
     if large_file:
         keyboard = [
+            [InlineKeyboardButton("Video — maksymalna rozdzielczość źródła", callback_data="dl_video_best")],
+            [InlineKeyboardButton("Video 2160p (4K)", callback_data="dl_video_2160p")],
+            [InlineKeyboardButton("Video 1440p (QHD)", callback_data="dl_video_1440p")],
             [InlineKeyboardButton("Video 1080p (Full HD)", callback_data="dl_video_1080p")],
             [InlineKeyboardButton("Video 720p (HD)", callback_data="dl_video_720p")],
             [InlineKeyboardButton("Video 480p (SD)", callback_data="dl_video_480p")],
@@ -49,7 +59,7 @@ def build_main_keyboard(platform: str, large_file: bool = False) -> list:
         ]
     else:
         keyboard = [
-            [InlineKeyboardButton("Video — najwyższa (do 4K/2160p)", callback_data="dl_video_best")],
+            [InlineKeyboardButton("Video — maksymalna rozdzielczość źródła", callback_data="dl_video_best")],
             [InlineKeyboardButton("Video — średnia (720p HD)", callback_data="dl_video_medium")],
             [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
             [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
@@ -127,6 +137,7 @@ def build_spotify_episode_keyboard(
     if has_fallback_audio:
         keyboard.append([InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")])
         keyboard.append([InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")])
+        keyboard.append([trim_download_button()])
 
     keyboard.append([InlineKeyboardButton("Transkrypcja audio", callback_data="transcribe")])
     keyboard.append([
@@ -142,6 +153,7 @@ def build_spotify_track_keyboard() -> list:
     return [
         [InlineKeyboardButton("Audio (MP3)", callback_data="dl_audio_mp3")],
         [InlineKeyboardButton("Audio (M4A)", callback_data="dl_audio_m4a")],
+        [trim_download_button()],
     ]
 
 

@@ -9,6 +9,19 @@ from telegram.error import BadRequest
 from bot import telegram_callbacks as tc
 
 
+@pytest.mark.parametrize("large_file", [False, True])
+def test_source_maximum_resolution_is_available_even_for_large_files(large_file):
+    from bot.handlers.common_ui import build_main_keyboard
+
+    keyboard = build_main_keyboard("youtube", large_file=large_file)
+    choices = {button.callback_data: button.text for row in keyboard for button in row}
+    assert "dl_video_best" in choices
+    assert "do 4K" not in choices["dl_video_best"]
+    assert tc.parse_download_callback("dl_video_best")["format"] == "best"
+    if large_file:
+        assert "dl_video_2160p" in choices and "dl_video_1440p" in choices
+
+
 def test_format_bytes_formats_values():
     assert tc.format_bytes(None) == "?"
     assert tc.format_bytes(512) == "512.0 B"

@@ -53,6 +53,8 @@ from bot.handlers.playlist_callbacks import (
 from bot.handlers.spotify_callbacks import download_spotify_video, transcribe_spotify_video
 from bot.handlers.spotify_collection_callbacks import handle_spotify_collection_callback
 from bot.handlers.transcript_prompt_handlers import handle_transcript_prompt_callback
+from bot.handlers.trim_callbacks import NO_ROOM_TEXT, ensure_trim_authorized, handle_trim_callback
+from bot.services.trim_store import has_room_for_sources
 from bot.handlers.transcription_callbacks import (
     _handle_subtitle_callback as _extracted_handle_subtitle_callback,
     _handle_subtitle_summary_callback as _extracted_handle_subtitle_summary_callback,
@@ -131,6 +133,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await handle_transcript_prompt_callback(update, context, data)
         return
 
+    # trim_dl needs the session URL and is routed next to dl_ below.
+    if data.startswith("trim_") and data != "trim_dl":
+        await handle_trim_callback(update, context, data)
+        return
+
     if data == "audio_transcribe":
         await transcribe_audio_file(update, context)
         return
@@ -169,6 +176,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
             return
         await download_spotify_video(update, context, session_data, height=video_data["height"])
+        return
+
+    if data == "trim_dl":
+        if await ensure_trim_authorized(update, context):
+            await _handle_trim_download(update, context, url)
         return
 
     if data.startswith("dl_ig_"):
@@ -322,6 +334,7 @@ async def download_file(
     summary_type=None,
     use_format_id=False,
     audio_quality="192",
+    trim_after=False,
 ):
     """Compatibility wrapper for extracted download flow.
 
@@ -340,6 +353,7 @@ async def download_file(
         summary_type=summary_type,
         use_format_id=use_format_id,
         audio_quality=audio_quality,
+        trim_after=trim_after,
     )
 
 
@@ -371,6 +385,7 @@ async def download_spotify_resolved(
     transcribe: bool = False,
     summary: bool = False,
     summary_type: int | None = None,
+    trim_after: bool = False,
 ):
     _sync_download_callback_dependencies()
     return await _extracted_download_spotify_resolved(
@@ -381,7 +396,31 @@ async def download_spotify_resolved(
         transcribe=transcribe,
         summary=summary,
         summary_type=summary_type,
+        trim_after=trim_after,
     )
+
+
+async def _handle_trim_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url: str) -> None:
+    """"✂️ Pobierz i przytnij": fetch the whole audio without sending it.
+
+    Lives here, not in trim_callbacks, because it calls the download flows
+    that import trim_callbacks.
+    """
+
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    if not has_room_for_sources():
+        await query.edit_message_text(NO_ROOM_TEXT)
+        return
+    platform = _get_session_context_value(context, chat_id, "platform", legacy_key="platform")
+    if platform == "spotify":
+        resolved = _get_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+        if not resolved:
+            await query.edit_message_text("Sesja Spotify wygasła. Wyślij link ponownie.")
+            return
+        await download_spotify_resolved(update, context, resolved, "mp3", trim_after=True)
+        return
+    await download_file(update, context, "audio", "mp3", url, trim_after=True)
 
 
 async def _route_spotify_transcription(

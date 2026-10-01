@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
+from bot.handlers import inbound_media
 from bot import telegram_commands as tc
 from tests.telegram_commands_support import (
     _async,
@@ -267,6 +268,31 @@ class TestAudioFileProcessing:
         assert context.user_data["audio_file_title"] == "abc"
         assert progress_message.edit_text.await_count >= 1
 
+    def test_process_audio_file_offers_trim_button(self, tmp_path, monkeypatch):
+        update = _make_update(user_id=777, chat_id=777)
+        context = _make_context()
+        progress_message = Mock()
+        progress_message.edit_text = AsyncMock()
+        update.message.reply_text = AsyncMock(return_value=progress_message)
+        monkeypatch.setattr(tc, "DOWNLOAD_PATH", str(tmp_path / "downloads"))
+        os.makedirs(tc.DOWNLOAD_PATH, exist_ok=True)
+        tg_file = AsyncMock()
+
+        async def download_to_drive(path):
+            Path(path).write_bytes(b"abc")
+
+        tg_file.download_to_drive = download_to_drive
+        context.bot.get_file = AsyncMock(return_value=tg_file)
+
+        _async(tc.process_audio_file(update, context, {
+            "file_id": "x1", "file_size": 1024, "duration": 12,
+            "mime_type": "audio/mpeg", "title": "abc",
+        }))
+
+        markup = progress_message.edit_text.await_args.kwargs["reply_markup"]
+        callbacks = [button.callback_data for row in markup.inline_keyboard for button in row]
+        assert callbacks == ["audio_transcribe", "audio_transcribe_summary", "trim_upload"]
+
 
 class TestHandleYoutubeLinkTimeRange:
     def test_handle_youtube_link_rejects_range_after_video_end(self, monkeypatch):
@@ -283,7 +309,80 @@ class TestHandleYoutubeLinkTimeRange:
 
         _async(tc.handle_youtube_link(update, context))
 
-        assert "przekracza czas trwania filmu" in update.message.reply_text.await_args.args[0]
+        assert "jest poza plikiem (długość 2:00)" in update.message.reply_text.await_args.args[0]
+
+    def _setup(self, monkeypatch, *, text, duration=360):
+        update = _make_update(text=text, user_id=333, chat_id=333)
+        context = _make_context()
+        _set_authorized_users(monkeypatch, {333})
+        monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
+        monkeypatch.setattr(tc, "check_rate_limit", lambda *_: True)
+        monkeypatch.setattr(tc, "validate_youtube_url", lambda *_: True)
+        tc.user_urls[333] = "https://www.youtube.com/watch?v=test"
+        monkeypatch.setattr(tc, "get_video_info", lambda *_: {"duration": duration, "title": "Clip"})
+        tc.block_until[333] = 0
+        return update, context
+
+    def test_open_ended_range_runs_to_the_end(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="2:15-")
+        _async(tc.handle_youtube_link(update, context))
+        assert tc.user_time_ranges.get(333) == {"start": "2:15", "end": "6:00", "start_sec": 135, "end_sec": 360}
+
+    def test_range_from_the_beginning(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="-1:00")
+        _async(tc.handle_youtube_link(update, context))
+        assert tc.user_time_ranges.get(333)["start_sec"] == 0
+        assert tc.user_time_ranges.get(333)["end_sec"] == 60
+
+    def test_multiple_ranges_point_to_trim_button(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="0:10-0:20, 1:00-2:00")
+        _async(tc.handle_youtube_link(update, context))
+        assert "Przed pobraniem ustawisz jeden zakres" in update.message.reply_text.await_args.args[0]
+        assert tc.user_time_ranges.get(333) is None
+
+    def test_range_syntax_is_checked_before_fetching_video_info(self, monkeypatch):
+        cases = {
+            "0:10-0:20, 1:00-2:00": "Przed pobraniem ustawisz jeden zakres",
+            "5:00-2:00": "początek musi być wcześniej niż koniec",
+        }
+        for text, expected in cases.items():
+            update, context = self._setup(monkeypatch, text=text)
+            video_info = Mock(return_value={"duration": 360, "title": "Clip"})
+            monkeypatch.setattr(tc, "get_video_info", video_info)
+
+            _async(tc.handle_youtube_link(update, context))
+
+            reply = update.message.reply_text.await_args
+            assert reply.args[0].startswith("❌ Nieprawidłowy zakres!\n\n")
+            assert expected in reply.args[0]
+            assert "parse_mode" not in reply.kwargs
+            video_info.assert_not_called()
+            assert tc.user_time_ranges.get(333) is None
+
+    def test_open_range_needs_known_duration(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="2:15-", duration=0)
+        _async(tc.handle_youtube_link(update, context))
+        assert "podaj oba końce" in update.message.reply_text.await_args.args[0]
+
+    def test_closed_range_works_without_duration(self, monkeypatch):
+        update, context = self._setup(monkeypatch, text="0:10-0:20", duration=0)
+        _async(tc.handle_youtube_link(update, context))
+        assert tc.user_time_ranges.get(333)["end_sec"] == 20
+
+    def test_pending_trim_input_wins_over_pre_download_range(self, monkeypatch):
+        update = _make_update(text="0:10-0:20", user_id=333, chat_id=333)
+        context = _make_context()
+
+        _set_authorized_users(monkeypatch, {333})
+        monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
+        tc.user_urls[333] = "https://www.youtube.com/watch?v=existing"
+        consumed = AsyncMock(return_value=True)
+        monkeypatch.setattr(inbound_media, "handle_pending_trim_input", consumed)
+
+        _async(tc.handle_youtube_link(update, context))
+
+        consumed.assert_awaited_once()
+        assert tc.user_time_ranges.get(333) is None
 
 
 class TestAudioMetadataExtraction:

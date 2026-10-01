@@ -10,6 +10,84 @@ from bot.handlers import time_range_callbacks as _trc
 from tests.telegram_callbacks_support import _make_context, _make_update
 
 
+@pytest.mark.parametrize(
+    "estimate, seven_zip, transcribe, should_download",
+    [(3000, True, False, True), (None, True, False, True),
+     (11000, True, False, False), (3000, False, False, False), (3000, True, True, False)],
+)
+def test_large_single_download_can_reach_archive_offer(
+    tmp_path, monkeypatch, estimate, seven_zip, transcribe, should_download,
+):
+    from types import SimpleNamespace
+    from pathlib import Path
+    from bot.handlers import download_callbacks as dc
+
+    monkeypatch.setattr(dc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(dc, "is_7z_available", lambda: seven_zip)
+    monkeypatch.setattr(dc, "_mtproto_unavailability_reason", lambda: None)
+    monkeypatch.setattr(dc, "get_media_label", lambda _: "filmie")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: None)
+    monkeypatch.setattr(dc, "record_download_for", mock.Mock())
+    monkeypatch.setattr(dc, "estimate_download_size", lambda _: estimate)
+
+    def plan(**kwargs):
+        return SimpleNamespace(info={"title": "Movie"}, title="Movie", duration_str="1:00",
+                               sanitized_title="Movie", chat_download_path=kwargs["chat_download_path"])
+
+    async def download(plan, **kwargs):
+        assert kwargs["max_file_bytes"] == 10240 * 1024**2
+        file = Path(plan.chat_download_path) / "movie.mp4"
+        file.write_bytes(b"stand-in for a large video")
+        return SimpleNamespace(file_path=str(file), file_size_mb=3000)
+
+    fetch = mock.AsyncMock(side_effect=download)
+    offer = mock.AsyncMock()
+    monkeypatch.setattr(dc, "prepare_download_plan", plan)
+    monkeypatch.setattr(dc, "execute_download", fetch)
+    monkeypatch.setattr(dc, "_offer_archive_or_cancel", offer)
+    update, context = _make_update("dl_video_best"), _make_context()
+    asyncio.run(dc.download_file(update, context, "video", "best", "https://youtube.com/", transcribe=transcribe))
+    assert fetch.await_count == int(should_download)
+    assert offer.await_count == int(should_download)
+    if should_download:
+        assert Path(offer.await_args.kwargs["file_path"]).exists()
+    else:
+        assert not list(tmp_path.glob("*/dl_*"))
+
+
+def test_size_failure_removes_only_current_download_workspace(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+    from pathlib import Path
+    from bot.download_budget import DownloadLimitError
+    from bot.handlers import download_callbacks as dc
+
+    chat = tmp_path / "123"
+    chat.mkdir()
+    previous = chat / "keep.mp4"
+    previous.write_bytes(b"existing file")
+    monkeypatch.setattr(dc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(dc, "get_media_label", lambda _: "filmie")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: None)
+    monkeypatch.setattr(dc, "record_download_for", mock.Mock())
+    monkeypatch.setattr(dc, "estimate_download_size", lambda _: None)
+
+    def plan(**kwargs):
+        return SimpleNamespace(info={}, title="Movie", duration_str="1:00", sanitized_title="Movie",
+                               chat_download_path=kwargs["chat_download_path"])
+
+    async def download(plan, **kwargs):
+        (Path(plan.chat_download_path) / "movie.mp4.part").write_bytes(b"partial")
+        raise DownloadLimitError("Pobierany plik przekroczył dozwolony limit rozmiaru.")
+
+    monkeypatch.setattr(dc, "prepare_download_plan", plan)
+    monkeypatch.setattr(dc, "execute_download", download)
+    update, context = _make_update("dl_video_best"), _make_context()
+    asyncio.run(dc.download_file(update, context, "video", "best", "https://youtube.com/"))
+    assert previous.read_bytes() == b"existing file"
+    assert not list(chat.glob("dl_*"))
+    assert "limit rozmiaru" in update.callback_query.edit_message_text.await_args.args[0]
+
+
 def test_handle_callback_video_and_audio_download_data_dispatch():
     tc.user_urls[555] = "https://www.youtube.com/watch?v=abc"
 
@@ -441,3 +519,156 @@ def test_download_file_registers_and_unregisters_job(tmp_path, monkeypatch):
     # Even on early-exit path the job should register and unregister.
     assert test_registry.list_for_chat(7) == []
     session_store.reset()
+
+
+def _patch_single_download(monkeypatch, tmp_path, *, filename, size_mb=5):
+    """Stub the yt-dlp side of download_file so only the send path runs."""
+
+    from pathlib import Path
+    from types import SimpleNamespace
+    from bot.handlers import download_callbacks as dc
+
+    monkeypatch.setattr(dc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(dc, "is_7z_available", lambda: False)
+    monkeypatch.setattr(dc, "_mtproto_unavailability_reason", lambda: None)
+    monkeypatch.setattr(dc, "get_media_label", lambda _: "filmie")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: None)
+    monkeypatch.setattr(dc, "record_download_for", mock.Mock())
+    monkeypatch.setattr(dc, "estimate_download_size", lambda _: size_mb)
+    monkeypatch.setattr(dc, "download_thumbnail", lambda *args: None)
+
+    def plan(**kwargs):
+        plan.kwargs = kwargs
+        return SimpleNamespace(info={"title": "Song"}, title="Song", duration_str="3:00",
+                               sanitized_title="Song", chat_download_path=kwargs["chat_download_path"])
+
+    async def download(plan_obj, **kwargs):
+        file = Path(plan_obj.chat_download_path) / filename
+        file.write_bytes(b"audio bytes")
+        return SimpleNamespace(file_path=str(file), file_size_mb=size_mb)
+
+    monkeypatch.setattr(dc, "prepare_download_plan", plan)
+    monkeypatch.setattr(dc, "execute_download", download)
+    return dc, plan
+
+
+def test_download_file_audio_sends_through_trim_helper(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    sender = mock.AsyncMock(return_value=SimpleNamespace(token="AAAAAAAAAAA"))
+    monkeypatch.setattr(dc, "send_audio_with_trim", sender)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    assert sender.await_args.kwargs["title"] == "Song"
+    assert sender.await_args.args[2].endswith("song.mp3")
+    final = update.callback_query.edit_message_text.await_args.args[0]
+    assert final.startswith("Plik został wysłany!")
+    assert "✂️ Pod plikiem jest przycisk „Przytnij”" in final
+
+
+def test_download_file_audio_without_trim_keeps_plain_status(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "send_audio_with_trim", mock.AsyncMock(return_value=None))
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    assert update.callback_query.edit_message_text.await_args.args[0] == "Plik został wysłany!"
+
+
+def test_download_file_audio_reports_delivery_error(tmp_path, monkeypatch):
+    from bot.handlers.audio_delivery import AudioDeliveryError
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(
+        dc, "send_audio_with_trim",
+        mock.AsyncMock(side_effect=AudioDeliveryError("Plik za duży dla Bot API (60 MB, limit: 50 MB).\nBrak pyrogram.")),
+    )
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    assert "Brak pyrogram." in update.callback_query.edit_message_text.await_args.args[0]
+
+
+def test_download_file_trim_after_keeps_file_and_prompts(tmp_path, monkeypatch):
+    from pathlib import Path
+
+    dc, plan = _patch_single_download(monkeypatch, tmp_path, filename="episode.mp3")
+    monkeypatch.setattr(
+        dc, "_get_session_value",
+        lambda *args: {"start": "0:10", "end": "0:20", "start_sec": 10, "end_sec": 20},
+    )
+    offered = {}
+
+    async def fake_offer(context, **kwargs):
+        offered.update(kwargs)
+        offered["exists"] = Path(kwargs["file_path"]).exists()
+        return True
+
+    monkeypatch.setattr(dc, "offer_trim_after_download", fake_offer)
+    sender = mock.AsyncMock()
+    monkeypatch.setattr(dc, "send_audio_with_trim", sender)
+    update, context = _make_update("trim_dl"), _make_context()
+    update.effective_user.id = 123
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://castbox.fm/x", trim_after=True))
+
+    assert plan.kwargs["time_range"] is None
+    assert offered["exists"] is True
+    assert (offered["title"], offered["requester_id"]) == ("Song", 123)
+    sender.assert_not_awaited()
+    dc.record_download_for.assert_called_once()
+
+
+def test_time_range_menu_lists_open_range_examples(monkeypatch):
+    monkeypatch.setattr(_trc, "get_video_info", lambda _url: {"title": "Clip", "duration": 600})
+    update, context = _make_update("time_range"), _make_context()
+
+    asyncio.run(_trc.show_time_range_options(update, context, "https://youtube.com/watch?v=x"))
+
+    text = update.callback_query.edit_message_text.await_args.args[0]
+    assert "`2:15-` (do końca)" in text
+    assert "`-5:00` (od początku)" in text
+
+
+_SESSION_RANGE = {"start": "0:11", "end": "0:41", "start_sec": 11, "end_sec": 41}
+
+
+def test_download_file_audio_with_range_downloads_whole_and_cuts_locally(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    dc, plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: dict(_SESSION_RANGE))
+    range_sender = mock.AsyncMock(return_value=SimpleNamespace(token="AAAAAAAAAAA"))
+    full_sender = mock.AsyncMock()
+    monkeypatch.setattr(dc, "send_audio_range_with_trim", range_sender)
+    monkeypatch.setattr(dc, "send_audio_with_trim", full_sender)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    # yt-dlp fetches the whole track so ✂️ under the fragment can trim the original.
+    assert plan.kwargs["time_range"] is None
+    kwargs = range_sender.await_args.kwargs
+    assert (kwargs["start_sec"], kwargs["end_sec"], kwargs["title"]) == (11, 41, "Song")
+    full_sender.assert_not_awaited()
+    final = update.callback_query.edit_message_text.await_args.args[0]
+    assert "tnie pełny oryginał" in final
+    assert dc.record_download_for.call_args.args[6] == _SESSION_RANGE
+
+
+def test_download_file_video_with_range_keeps_ytdlp_sections(tmp_path, monkeypatch):
+    dc, plan = _patch_single_download(monkeypatch, tmp_path, filename="clip.mp4")
+    monkeypatch.setattr(dc, "_get_session_value", lambda *args: dict(_SESSION_RANGE))
+    range_sender = mock.AsyncMock()
+    monkeypatch.setattr(dc, "send_audio_range_with_trim", range_sender)
+    update, context = _make_update("dl_video_720p"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "video", "720p", "https://youtube.com/"))
+
+    assert plan.kwargs["time_range"] == _SESSION_RANGE
+    range_sender.assert_not_awaited()

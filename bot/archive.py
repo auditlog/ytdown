@@ -69,6 +69,7 @@ async def pack_to_volumes(
     *,
     progress_cb: Callable[[str], Awaitable[None]] | None = None,
     cancellation: "JobCancellation | None" = None,
+    min_free_bytes: int = 2 * 1024**3,
 ) -> list[Path]:
     """Pack ``sources`` into a 7z multi-volume archive at ``dest_basename``.
 
@@ -92,6 +93,13 @@ async def pack_to_volumes(
 
     if not sources:
         raise ValueError("empty sources")
+    if volume_size_mb <= 0 or min_free_bytes < 0:
+        raise ValueError("invalid archive limits")
+    # Store mode temporarily needs both the original media and its archive.
+    source_bytes = sum(src.stat().st_size for src in sources)
+    overhead = max(1024**2, source_bytes // 100)
+    if shutil.disk_usage(dest_basename.parent).free < source_bytes + overhead + min_free_bytes:
+        raise ValueError("Za mało wolnego miejsca na przygotowanie archiwum 7z.")
 
     archive_path = dest_basename.with_suffix(".7z")
     args = [
@@ -134,6 +142,8 @@ async def pack_to_volumes(
         p for p in parent.iterdir()
         if p.name.startswith(prefix) and p.name[len(prefix):].isdigit()
     )
+    if not volumes:
+        raise RuntimeError("7z produced no archive volumes")
     logging.info("7z packed %d volume(s) for %s", len(volumes), archive_path)
     return volumes
 

@@ -6,6 +6,7 @@ import asyncio
 import logging
 import os
 import shutil
+import tempfile
 import time
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
@@ -24,7 +25,16 @@ from bot.handlers.common_ui import (
     safe_edit_message,
     send_long_message,
 )
-from bot.security_limits import MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
+from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
+from bot.download_budget import DownloadLimitError
+from bot.handlers.trim_callbacks import offer_trim_after_download
+from bot.handlers.audio_delivery import (
+    AudioDeliveryError,
+    FRAGMENT_TRIM_HINT,
+    TRIM_AVAILABLE_HINT,
+    send_audio_range_with_trim,
+    send_audio_with_trim,
+)
 from bot.security_policy import get_media_label, normalize_url
 from bot.session_context import (
     clear_session_context_value as _clear_session_context_value,
@@ -335,12 +345,15 @@ async def download_file(
     summary_type=None,
     use_format_id=False,
     audio_quality="192",
+    trim_after=False,
 ):
     media_type = type
     query = update.callback_query
     chat_id = update.effective_chat.id
     title = "Unknown"
     success_recorded = False
+    download_workspace = None
+    archive_owns_workspace = False
 
     descriptor = JobDescriptor(
         job_id="",
@@ -360,8 +373,18 @@ async def download_file(
 
         chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
         os.makedirs(chat_download_path, exist_ok=True)
+        if not transcribe:
+            download_workspace = tempfile.mkdtemp(prefix="dl_", dir=chat_download_path)
+            chat_download_path = download_workspace
 
-        time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
+        # "✂️ Pobierz i przytnij" always fetches the whole file; ranges come later.
+        session_range = None if trim_after else _get_session_value(context, chat_id, "time_range", user_time_ranges)
+        # Audio with a pre-download range is fetched whole and cut locally, so
+        # the ✂️ button under the fragment trims the original rather than the
+        # fragment (see audio_delivery.send_audio_range_with_trim). Video and
+        # transcription keep yt-dlp download_sections and fetch only the range.
+        cut_range_locally = bool(session_range) and media_type == "audio" and not transcribe
+        time_range = None if cut_range_locally else session_range
         try:
             plan = prepare_download_plan(
                 url=url,
@@ -389,18 +412,20 @@ async def download_file(
         try:
             await update_status(f"Sprawdzanie rozmiaru pliku...\n({duration_str})")
             size_mb = await asyncio.get_event_loop().run_in_executor(_executor, lambda: estimate_download_size(plan))
-            if not ensure_size_within_limit(size_mb, max_size_mb=MAX_FILE_SIZE_MB):
+            archive_available = not transcribe and is_7z_available()
+            download_limit_mb = MAX_ARCHIVE_ITEM_SIZE_MB if archive_available else MAX_FILE_SIZE_MB
+            if not ensure_size_within_limit(size_mb, max_size_mb=download_limit_mb):
                 await update_status(
                     f"Wybrany format jest zbyt duży!\n\n"
                     f"Rozmiar: {size_mb:.1f} MB\n"
-                    f"Maksymalny dozwolony rozmiar: {MAX_FILE_SIZE_MB} MB\n\n"
+                    f"Maksymalny dozwolony rozmiar: {download_limit_mb} MiB\n\n"
                     f"Spróbuj wybrać niższą jakość lub pobierz tylko audio."
                 )
                 return
 
             time_range_info = ""
-            if time_range:
-                time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}"
+            if session_range:
+                time_range_info = f"\n✂️ Zakres: {session_range['start']} - {session_range['end']}"
             await update_status(f"Rozpoczynam pobieranie...\nCzas trwania: {duration_str}{time_range_info}")
             download_result = await execute_download(
                 plan,
@@ -412,6 +437,7 @@ async def download_file(
                 format_bytes=format_bytes,
                 format_eta=format_eta,
                 cancellation=cancellation,
+                max_file_bytes=download_limit_mb * 1024**2,
             )
             downloaded_file_path = download_result.file_path
             file_size_mb = download_result.file_size_mb
@@ -568,6 +594,20 @@ async def download_file(
                         title=title,
                     )
             else:
+                if trim_after:
+                    offered = await offer_trim_after_download(
+                        context,
+                        chat_id=chat_id,
+                        requester_id=update.effective_user.id,
+                        file_path=downloaded_file_path,
+                        title=title,
+                        performer=None,
+                        query=query,
+                    )
+                    if offered:
+                        record_download_for(context, chat_id, title, url, "audio_trim_source", file_size_mb, selected_format=format)
+                        success_recorded = True
+                    return
                 use_mtproto = file_size_mb > TELEGRAM_UPLOAD_LIMIT_MB
 
                 # Detect files that exceed the active Telegram transport limit.
@@ -575,7 +615,9 @@ async def download_file(
                 transport_limit_mb = volume_size_for(
                     use_mtproto=_mtproto_unavailability_reason() is None
                 )
-                if file_size_mb > transport_limit_mb and is_7z_available():
+                # A locally cut range sends only the fragment, so the size of the
+                # whole download does not decide the transport.
+                if file_size_mb > transport_limit_mb and is_7z_available() and not cut_range_locally:
                     await _offer_archive_or_cancel(
                         update,
                         context,
@@ -587,15 +629,42 @@ async def download_file(
                         file_size_mb=file_size_mb,
                     )
                     # The archive flow now owns the file; skip cleanup.
+                    archive_owns_workspace = True
                     success_recorded = True
                     return
 
                 method_label = " (MTProto)" if use_mtproto else ""
                 await update_status(f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nWysyłanie pliku do Telegram...{method_label}")
                 thumb_path = await asyncio.get_event_loop().run_in_executor(_executor, download_thumbnail, info, chat_download_path, True)
+                trim_source = None
+                trim_hint = TRIM_AVAILABLE_HINT
                 try:
-                    if use_mtproto:
-                        from bot.mtproto import mtproto_unavailability_reason, send_audio_mtproto, send_video_mtproto
+                    if cut_range_locally:
+                        trim_source = await send_audio_range_with_trim(
+                            context,
+                            chat_id,
+                            downloaded_file_path,
+                            title=title,
+                            start_sec=session_range["start_sec"],
+                            end_sec=session_range["end_sec"],
+                            thumb_path=thumb_path,
+                            cancellation=cancellation,
+                        )
+                        trim_hint = FRAGMENT_TRIM_HINT
+                    elif media_type == "audio":
+                        # Moves the file into the trim store when it can be kept,
+                        # so the ✂️ button under the audio works for 24 h.
+                        trim_source = await send_audio_with_trim(
+                            context,
+                            chat_id,
+                            downloaded_file_path,
+                            title=title,
+                            caption=title,
+                            thumb_path=thumb_path,
+                            cancellation=cancellation,
+                        )
+                    elif use_mtproto:
+                        from bot.mtproto import mtproto_unavailability_reason, send_video_mtproto
 
                         reason = mtproto_unavailability_reason()
                         if reason is not None:
@@ -603,35 +672,21 @@ async def download_file(
                                 f"Plik za duży dla Bot API ({file_size_mb:.0f} MB, limit: {TELEGRAM_UPLOAD_LIMIT_MB} MB).\n"
                                 f"{reason}"
                             )
-                        if media_type == "audio":
-                            ok = await send_audio_mtproto(chat_id, downloaded_file_path, title=title, caption=title, thumb_path=thumb_path, cancellation=cancellation)
-                        else:
-                            ok = await send_video_mtproto(chat_id, downloaded_file_path, caption=title, thumb_path=thumb_path, cancellation=cancellation)
+                        ok = await send_video_mtproto(chat_id, downloaded_file_path, caption=title, thumb_path=thumb_path, cancellation=cancellation)
                         if not ok:
                             raise RuntimeError("Wysyłanie pliku przez MTProto nie powiodło się.")
                     else:
                         with open(downloaded_file_path, "rb") as file_obj:
                             thumb_file = open(thumb_path, "rb") if thumb_path else None
                             try:
-                                if media_type == "audio":
-                                    await context.bot.send_audio(
-                                        chat_id=chat_id,
-                                        audio=file_obj,
-                                        title=title,
-                                        caption=title,
-                                        thumbnail=thumb_file,
-                                        read_timeout=60,
-                                        write_timeout=60,
-                                    )
-                                else:
-                                    await context.bot.send_video(
-                                        chat_id=chat_id,
-                                        video=file_obj,
-                                        caption=title,
-                                        thumbnail=thumb_file,
-                                        read_timeout=60,
-                                        write_timeout=60,
-                                    )
+                                await context.bot.send_video(
+                                    chat_id=chat_id,
+                                    video=file_obj,
+                                    caption=title,
+                                    thumbnail=thumb_file,
+                                    read_timeout=60,
+                                    write_timeout=60,
+                                )
                             finally:
                                 if thumb_file:
                                     thumb_file.close()
@@ -646,9 +701,12 @@ async def download_file(
                     os.remove(downloaded_file_path)
                 except OSError:
                     pass
-                record_download_for(context, chat_id, title, url, f"{media_type}_{format}", file_size_mb, time_range, selected_format=format)
+                record_download_for(context, chat_id, title, url, f"{media_type}_{format}", file_size_mb, session_range, selected_format=format)
                 success_recorded = True
-                await update_status("Plik został wysłany!")
+                if trim_source is not None:
+                    await update_status(f"Plik został wysłany!\n\n{trim_hint}")
+                else:
+                    await update_status("Plik został wysłany!")
         except Exception as exc:
             if not success_recorded:
                 record_download_for(
@@ -664,7 +722,9 @@ async def download_file(
             logging.error("Error in download_file: %s", exc)
 
             error_str = str(exc).lower()
-            if any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
+            if isinstance(exc, (DownloadLimitError, AudioDeliveryError)):
+                await update_status(str(exc))
+            elif any(keyword in error_str for keyword in ("login", "sign in", "cookie", "authentication")):
                 platform_name = _get_session_context_value(
                     context, chat_id, "platform", legacy_key="platform"
                 )
@@ -684,6 +744,8 @@ async def download_file(
                 await update_status("Wystąpił błąd podczas pobierania. Spróbuj ponownie.")
     finally:
         job_registry.unregister(cancellation.job_id)
+        if download_workspace and not archive_owns_workspace:
+            shutil.rmtree(download_workspace, ignore_errors=True)
 
 
 async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):

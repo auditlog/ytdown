@@ -27,6 +27,7 @@ import yt_dlp
 from bot.config import YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
 from bot.downloader_metadata import COOKIES_FILE, get_video_info
 from bot.downloader_validation import is_valid_audio_quality, sanitize_filename
+from bot.download_budget import DownloadBudget
 from bot.security_limits import MAX_FILE_SIZE_MB
 
 if TYPE_CHECKING:
@@ -35,11 +36,9 @@ if TYPE_CHECKING:
 
 ArtifactSuffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
 
-# Prefer H.264/AVC video + m4a audio over AV1/VP9+opus.
-# AV1 has better compression but lower bitrate (smaller files) and worse
-# playback compatibility on older devices/players — users expect mp4 output
-# with the largest practical file size for a given resolution.
-VIDEO_FORMAT_SORT = ['vcodec:h264', 'acodec:m4a', 'res', 'br', 'size']
+# Select resolution before codec compatibility; otherwise 1080p H.264 can beat
+# 4K/8K VP9 or AV1. Prefer H.264 and m4a only when resolution is equal.
+VIDEO_FORMAT_SORT = ['res', 'vcodec:h264', 'acodec:m4a', 'br', 'size']
 
 
 @dataclass
@@ -81,6 +80,8 @@ def prepare_download_plan(
     transcribe: bool = False,
     use_format_id: bool = False,
     audio_quality: str = "192",
+    info: dict[str, Any] | None = None,
+    cookies_file: str | None = COOKIES_FILE,
 ) -> DownloadPlan | None:
     """Fetch metadata and build yt-dlp options for a media download.
 
@@ -88,7 +89,12 @@ def prepare_download_plan(
     Raises ValueError for invalid caller-supplied parameters.
     """
 
-    info = get_video_info(url)
+    if info is None:
+        info = (
+            get_video_info(url)
+            if cookies_file == COOKIES_FILE
+            else get_video_info(url, cookies_file=cookies_file)
+        )
     if not info:
         return None
 
@@ -114,8 +120,8 @@ def prepare_download_plan(
         'remote_components': YTDLP_REMOTE_COMPONENTS,
         'js_runtimes': YTDLP_JS_RUNTIMES,
     }
-    if os.path.exists(COOKIES_FILE):
-        ydl_opts['cookiefile'] = COOKIES_FILE
+    if cookies_file and os.path.exists(cookies_file):
+        ydl_opts['cookiefile'] = cookies_file
 
     if time_range:
         start = time_range.get('start', '0:00')
@@ -147,28 +153,31 @@ def prepare_download_plan(
             })
     elif media_type == "video":
         if format_choice == "best":
-            ydl_opts['format'] = 'bestvideo+bestaudio/best'
+            ydl_opts['format'] = 'bestvideo*+bestaudio/best'
             ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
+            ydl_opts['format_sort_force'] = True
             ydl_opts['merge_output_format'] = 'mp4'
         elif format_choice == "medium":
-            # Cap at 720p HD for a smaller, faster download while staying watchable.
+            # Prefer up to 720p HD for smaller downloads.
             # Trailing /best fallback handles portrait formats (TikTok, Reels, Shorts)
             # whose `height` is the longer side and would otherwise fail height<=N.
             ydl_opts['format'] = (
-                'bestvideo[height<=720]+bestaudio'
+                'bestvideo*[height<=720]+bestaudio'
                 '/best[height<=720]'
                 '/best'
             )
             ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
+            ydl_opts['format_sort_force'] = True
             ydl_opts['merge_output_format'] = 'mp4'
-        elif format_choice in ["1080p", "720p", "480p", "360p"]:
+        elif format_choice in ["4320p", "2160p", "1440p", "1080p", "720p", "480p", "360p"]:
             height = format_choice.replace('p', '')
             ydl_opts['format'] = (
-                f'bestvideo[height<={height}]+bestaudio'
+                f'bestvideo*[height<={height}]+bestaudio'
                 f'/best[height<={height}]'
                 f'/best'
             )
             ydl_opts['format_sort'] = VIDEO_FORMAT_SORT
+            ydl_opts['format_sort_force'] = True
             ydl_opts['merge_output_format'] = 'mp4'
         else:
             ydl_opts['format'] = format_choice
@@ -265,6 +274,8 @@ async def execute_download(
     format_bytes: Callable[[int | float | None], str],
     format_eta: Callable[[int | float | None], str],
     cancellation: "JobCancellation | None" = None,
+    max_file_bytes: int | None = None,
+    min_free_bytes: int = 2 * 1024**3,
 ) -> DownloadResult:
     """Run yt-dlp download and stream progress updates through a callback.
 
@@ -276,11 +287,21 @@ async def execute_download(
     """
 
     ydl_opts = plan.ydl_opts.copy()
+    budget = None
+    if max_file_bytes is not None:
+        budget = DownloadBudget(plan.chat_download_path, max_file_bytes, min_free_bytes)
+        budget.check_space()
+        ydl_opts['max_filesize'] = max_file_bytes
+        ydl_opts['postprocessor_hooks'] = [
+            *ydl_opts.get('postprocessor_hooks', []), budget.postprocess,
+        ]
     base_hook = progress_hook_factory(chat_id)
     if cancellation is not None:
-        ydl_opts['progress_hooks'] = [_build_cancellable_progress_hook(base_hook, cancellation)]
-    else:
-        ydl_opts['progress_hooks'] = [base_hook]
+        base_hook = _build_cancellable_progress_hook(base_hook, cancellation)
+    ydl_opts['progress_hooks'] = [
+        *ydl_opts.get('progress_hooks', []),
+        *([budget.progress] if budget else []), base_hook,
+    ]
     progress_state[chat_id] = {'status': 'starting', 'updated': time.time()}
 
     loop = asyncio.get_event_loop()
@@ -325,6 +346,8 @@ async def execute_download(
     if not downloaded_file_path:
         raise FileNotFoundError("downloaded file not found")
 
+    if budget:
+        budget.check_result(downloaded_file_path)
     file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
     return DownloadResult(file_path=downloaded_file_path, file_size_mb=file_size_mb)
 

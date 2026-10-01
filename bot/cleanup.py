@@ -15,6 +15,7 @@ from pathlib import Path
 from bot.config import DOWNLOAD_PATH
 from bot.jobs import job_registry
 from bot.security_limits import JOB_DEAD_AGE_HOURS, PLAYLIST_ARCHIVE_RETENTION_MIN
+from bot.services.trim_store import purge_expired_sources
 
 
 def cleanup_old_files(directory, max_age_hours=24):
@@ -302,6 +303,15 @@ def _purge_partial_archive_workspaces(retention_min: int) -> int:
     return removed
 
 
+def _purge_chat_workspaces(download_root: Path) -> None:
+    """Per-chat cleanup of archive workspaces and expired trim sources."""
+
+    for chat_dir in download_root.iterdir():
+        if chat_dir.is_dir():
+            _purge_archive_workspaces(chat_dir, PLAYLIST_ARCHIVE_RETENTION_MIN)
+            purge_expired_sources(chat_dir)
+
+
 def periodic_cleanup():
     """
     Function run periodically in separate thread.
@@ -322,9 +332,7 @@ def periodic_cleanup():
             if deleted_count > 0:
                 logging.info("Periodic cleanup: deleted %d old files", deleted_count)
 
-            for chat_dir in Path(DOWNLOAD_PATH).iterdir():
-                if chat_dir.is_dir():
-                    _purge_archive_workspaces(chat_dir, PLAYLIST_ARCHIVE_RETENTION_MIN)
+            _purge_chat_workspaces(Path(DOWNLOAD_PATH))
             _purge_pending_archive_jobs(PLAYLIST_ARCHIVE_RETENTION_MIN)
             _purge_archived_deliveries(PLAYLIST_ARCHIVE_RETENTION_MIN)
             _purge_dead_jobs(JOB_DEAD_AGE_HOURS)

@@ -192,6 +192,138 @@ def test_youtube_track_search_prefers_topic_channel(monkeypatch):
     assert result["url"].endswith("topic")
 
 
+def test_search_text_preserves_cyrillic_and_normalizes_polish_letters():
+    assert spotify._search_text("Як черешня!") == "як черешня"
+    assert spotify._search_text("Z czego składają się Święta") == (
+        "z czego skladaja sie swieta"
+    )
+
+
+def test_youtube_track_search_accepts_cyrillic_title(monkeypatch):
+    class FakeYDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def extract_info(self, _query, download=False):
+            return {
+                "entries": [
+                    {
+                        "id": "cherry",
+                        "title": "Як черешня — InskarFolk",
+                        "channel": "InskarFolk",
+                        "duration": 185,
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(spotify.yt_dlp, "YoutubeDL", FakeYDL)
+
+    result = spotify.search_youtube_track("Як черешня!", "InskarFolk", 184)
+
+    assert result["url"].endswith("cherry")
+    assert result["score"] >= 0.55
+
+
+def test_youtube_track_search_retries_without_official_audio(monkeypatch):
+    queries = []
+
+    class FakeYDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def extract_info(self, query, download=False):
+            queries.append(query)
+            if "official audio" in query:
+                return {"entries": []}
+            return {
+                "entries": [
+                    {
+                        "id": "drag",
+                        "title": "Rejsel - DRAG! feat. Lagoona Aqua Pussy",
+                        "channel": "Rejsel and Mudormood",
+                        "duration": 135,
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(spotify.yt_dlp, "YoutubeDL", FakeYDL)
+
+    result = spotify.search_youtube_track(
+        "DRAG!",
+        "Rejsel, Lagoona Aqua Pussy",
+        135,
+    )
+
+    assert result["url"].endswith("drag")
+    assert "official audio" in queries[0]
+    assert "official audio" not in queries[1]
+    assert result["search_query"] == "Rejsel, Lagoona Aqua Pussy - DRAG!"
+
+
+def test_youtube_track_search_reports_low_confidence(monkeypatch):
+    class FakeYDL:
+        def __init__(self, _opts):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def extract_info(self, _query, download=False):
+            return {
+                "entries": [
+                    {
+                        "id": "wrong",
+                        "title": "Completely different recording",
+                        "channel": "Unknown",
+                        "duration": 20,
+                    }
+                ]
+            }
+
+    monkeypatch.setattr(spotify.yt_dlp, "YoutubeDL", FakeYDL)
+
+    outcome = spotify.search_youtube_track_detailed("Expected Song", "Artist", 180)
+
+    assert outcome.match is None
+    assert outcome.failure_code == "low_confidence"
+    assert "wymagane co najmniej 0.55" in outcome.failure_detail
+
+
+def test_spotify_track_resolution_preserves_search_failure(monkeypatch):
+    monkeypatch.setattr(
+        spotify,
+        "search_youtube_track_detailed",
+        lambda *_args, **_kwargs: spotify.YouTubeTrackSearchOutcome(
+            match=None,
+            failure_code="no_search_results",
+            failure_detail="Brak wyników po wszystkich próbach.",
+        ),
+    )
+
+    outcome = spotify.resolve_spotify_track_info_detailed(
+        {"title": "Song", "artist": "Artist", "duration_ms": 180_000}
+    )
+
+    assert outcome.resolved is None
+    assert outcome.failure_code == "no_search_results"
+    assert outcome.failure_detail == "Brak wyników po wszystkich próbach."
+
+
 def test_build_collection_view_marks_selection_and_paginates():
     collection = {
         "kind": "album",

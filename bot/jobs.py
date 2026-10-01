@@ -27,6 +27,7 @@ JobKind = Literal[
     "summary",
     "archive_pack",
     "archive_send",
+    "trim",
 ]
 
 

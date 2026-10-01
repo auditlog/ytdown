@@ -2,17 +2,83 @@
 
 Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram, LinkedIn i X z funkcjami transkrypcji i podsumowań AI.
 
+## MCP on rpi5a
+
+ytdown also provides an MCP server for single YouTube videos: metadata, video/audio
+downloads, transcription and summaries. The server runs on **rpi5a**, alongside
+the Telegram bot in a separate service and virtual environment. Claude Desktop
+connects through an SSH/stdio bridge over Tailscale; processing and API credentials
+stay on the Raspberry Pi.
+
+- [rpi5a deployment and Claude Desktop configuration, including Windows/WSL](docs/mcp-rpi5a.md)
+- [MCP installation, tools, limits and ChatGPT access options](docs/mcp.md)
+- [systemd service definition](deploy/ytdown-mcp-rpi5a.service)
+
+The deployed HTTP endpoint is private to Tailscale and requires a bearer token.
+The backend listens on loopback; MCP is not exposed through Tailscale Funnel.
+The SSH bridge reads the token on rpi5a, so client configuration contains no token.
+All authorized clients share one owner's jobs and files. YouTube cookies are
+disabled by default. ChatGPT account-side connection setup is described separately
+in the MCP guide.
+
+### Video quality
+
+MCP `start_job` defaults to `quality="best"`, selecting the highest available
+source resolution, including 4K and 8K. Available presets are `4320p`, `2160p`,
+`1440p`, `1080p`, `720p`, `480p` and `360p`. Presets prefer formats up to that
+height, with a source-format fallback when none match; they are not strict caps.
+Resolution takes priority over codec compatibility, so the source may use VP9
+or AV1. Storage and processing limits still apply.
+
+In Telegram, choose **Video — maksymalna rozdzielczość źródła**. The option is also
+available in the large-file menu, alongside 2160p, 1440p and lower presets.
+
+### Large files and 7z archives
+
+| Setting | MCP video/audio | Standard Telegram video/audio downloads |
+| --- | --- | --- |
+| Maximum media file | 10 GiB | 10 GiB with `7z` installed |
+| Archive trigger | Automatically above 1000 MiB | **Wyślij jako 7z** offered above the active upload threshold |
+| Maximum part size | 1000 MiB | 1900 MiB with MTProto; 49 MiB with Bot API only |
+| Without `7z` | Oversized output fails with an installation message | Download limit remains 1000 MiB |
+
+Install the system `7z` executable on the server for archive support; it is
+already installed on rpi5a. Telegram transcription retains its 1000 MiB input
+limit. The Telegram sizes above apply to the standard downloader; Spotify flows
+have their own limits described below.
+
+Archives use 7z store mode: splitting does not re-encode media or reduce quality,
+and is intended to fit transfer limits rather than shrink compressed video.
+Download **all parts** into one folder, keep their names, and extract `.7z.001`
+with 7-Zip. For example:
+
+```bash
+7z x media.7z.001
+```
+
+MCP lists every part plus `rozpakowanie.txt`. Retrieve large files through the
+authenticated HTTP artifact endpoint or SSH, outside the model context; they
+are not automatically attached to the chat. See [artifact retrieval](docs/mcp.md#tools-and-output).
+
+Download and archive checks reserve 2 GiB of free disk space, including room for
+temporary merging or archive copies. MCP also limits each job to 22 GiB of
+temporary output and two hours of processing. Failed or cancelled MCP jobs lose
+their partial output; completed results expire after 24 hours. The rpi5a service
+allows one active MCP job. Standard Telegram downloads use separate temporary
+folders, retaining files only when handed to the pending archive workflow.
+
 ## Funkcje
 
 ### Podstawowe
 - **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp), podcastów Spotify oraz utworów dopasowanych w YT Music
-- Pobieranie video w różnych formatach (1080p, 720p, 480p, 360p)
+- Video at the highest available source resolution, including 4K/8K, plus lower-quality presets
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
 - **Napisy YouTube jako źródło transkrypcji** — natychmiastowe pobieranie napisów (manualnych lub automatycznych) bez zużycia tokenów AI
 - Generowanie podsumowań transkrypcji (Claude API - Haiku 4.5)
 - **Transkrypcja przesłanych plików audio** — wiadomości głosowe, pliki audio i dokumenty audio (np. notatki głosowe z WhatsApp)
 - **Transkrypcja przesłanych plików video** — ekstrakcja audio z MP4, MKV, AVI, MOV, WebM
+- Przycinanie audio według znaczników czasu (✂️), także kilku fragmentów naraz
 - Ochrona dostępu kodem PIN
 - Interfejs wiersza poleceń (CLI) z pełnym wsparciem dla wyboru formatu, jakości i audio
 - Bot Telegram z interaktywnym menu
@@ -31,7 +97,7 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram, Link
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik
-- Limit rozmiaru plików - max 1GB
+- Media downloads up to 10 GiB with archive support; see [large-file limits](#large-files-and-7z-archives)
 - Walidacja URL - whitelist domen (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Spotify), wymagany HTTPS
 - Blokada po 3 nieudanych próbach PIN (15 minut)
 - Logowanie nieudanych prób PIN + powiadomienia Telegram do admina
@@ -50,14 +116,16 @@ Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram, Link
 
 ## Wymagania
 
-- Python 3.11+
+- Python 3.12+
 - ffmpeg (zainstalowany w systemie)
 - deno (wymagany przez yt-dlp do rozwiązywania YouTube JS challenges)
 - Poetry (opcjonalnie, zalecane) lub pip
 
 ### Zależności opcjonalne
 
-- `pyrogram` - potrzebny do pobierania dużych plików z Telegrama przez MTProto
+- `pyrogram` with `TELEGRAM_API_ID` and `TELEGRAM_API_HASH` for large Telegram transfers through MTProto
+- `7z` (system executable) for multipart archives; required for oversized MCP output
+- MCP Python dependencies: `pip install -r requirements-mcp.txt` or `poetry install -E mcp`
 - `instaloader` - potrzebny do zdjęć i karuzel z Instagrama
 
 Instalacja opcjonalnych dodatków:
@@ -408,9 +476,14 @@ pobierania, wymaga binarki `7z` w PATH) nie jest jeszcze podpięty do ścieżki 
 5. Dla archiwum wybierz 50, 100 albo wszystkie utwory w jednej logicznej paczce. Paczka
    przekraczająca około 1 GB zostanie automatycznie podzielona na wolumeny `.7z.001`,
    `.7z.002` itd.; wszystkie wolumeny trzeba zapisać w jednym katalogu i otworzyć `.001`.
+   Każde niezależne archiwum zaczyna własną numerację od `.001`, więc kilka plików kończących
+   się na `.7z.001` jest prawidłowe, jeśli ich nazwy bazowe lub zakresy utworów są różne.
 
 Muzyka jest wyszukiwana przede wszystkim w YT Music na podstawie tytułu, wykonawcy i czasu
-trwania. Bot nie pobiera strumienia muzycznego Spotify i nie obchodzi DRM.
+trwania. Dopasowanie obsługuje tytuły Unicode (w tym cyrylicę), wielu wykonawców oraz zapasowe,
+mniej restrykcyjne warianty zapytań. Jeśli któregoś utworu nie uda się dopasować lub pobrać,
+bot wysyła pełny raport TXT zawierający wszystkie nieudane pozycje, etap i przyczynę. Bot nie
+pobiera strumienia muzycznego Spotify i nie obchodzi DRM.
 
 ### Transkrypcja plików audio
 1. Wyślij wiadomość głosową, plik audio lub dokument audio (np. notatkę głosową z WhatsApp)
@@ -424,6 +497,31 @@ trwania. Bot nie pobiera strumienia muzycznego Spotify i nie obchodzi DRM.
 3. Wybierz opcję: "Transkrypcja" lub "Transkrypcja + Podsumowanie"
 4. Obsługiwane formaty: MP4, MOV, MKV, AVI, WebM
 5. Limit rozmiaru: 20 MB (ograniczenie Telegram Bot API)
+
+### Przycinanie audio
+Bot wycina fragmenty audio bez utraty jakości (MP3 i M4A bez ponownego kodowania, FLAC bezstratnie), z dokładnością ~25 ms.
+
+- **Pod wysłanym plikiem audio** jest przycisk **✂️ Przytnij** — działa przez 24 h od wysłania
+  (plik czeka na serwerze; przy wolnym miejscu < 5 GB bot go nie zatrzymuje i przycisku nie ma).
+- **Podcasty (Spotify, Castbox) i utwory Spotify:** **✂️ Pobierz i przytnij** pobiera całość
+  bez wysyłania i od razu pyta o zakres.
+- **Własny plik:** wyślij MP3 lub wiadomość głosową i wybierz **✂️ Przytnij**.
+- **YouTube, Vimeo, Instagram, LinkedIn:** **✂️ Zakres czasowy** przed pobraniem ustawia jeden
+  fragment. Wideo pobiera się od razu jako wycinek; audio bot pobiera w całości i sam wycina
+  fragment, więc **✂️ Przytnij** pod wycinkiem tnie pełny oryginał.
+
+Zapis zakresów:
+
+| Wpis | Znaczenie |
+|---|---|
+| `1:30-4:45` | jeden fragment |
+| `90-285`, `1:02:30-1:05:00` | sekundy albo H:MM:SS |
+| `2:15-` | od 2:15 do końca |
+| `-5:00` | od początku do 5:00 |
+| `1:00-2:00, 5:30-7:00` | kilka fragmentów (maks. 10), każdy jako osobny plik |
+
+Cięcie można przerwać komendą `/stop`. Po wysłaniu fragmentów przycisk **✂️ Tnij dalej**
+pozwala wyciąć kolejne z tego samego źródła.
 
 ## Typy streszczeń
 
@@ -457,6 +555,8 @@ ytdown/
 │   ├── transcription_chunking.py   # Dzielenie MP3 na części (silence detection, split)
 │   ├── transcription_providers.py  # Adaptery API: Groq Whisper i Claude (transkrypcja, korekta, podsumowania)
 │   ├── transcription_pipeline.py   # Orkiestracja pipeline'u transkrypcji MP3
+│   ├── mcp/                         # MCP tools, jobs, private HTTP/stdio and SSH bridge
+│   ├── download_budget.py           # Runtime download size and free-space checks
 │   ├── downloader.py               # Fasada kompatybilności — deleguje do wyspecjalizowanych downloader_*
 │   ├── downloader_core.py          # Standalone download (progress_hook, download_youtube_video) dla CLI
 │   ├── downloader_validation.py    # Walidacja formatów, parsowanie czasu, sanityzacja nazw plików
@@ -475,6 +575,8 @@ ytdown/
 │   │   ├── command_access.py       # Auth/admin/info: /start, PIN, /logout, /help, /status
 │   │   ├── inbound_media.py        # Intake URL-i, routing platform, playlist entry
 │   │   ├── inbound_audio.py        # Upload i przetwarzanie plików audio
+│   │   ├── audio_delivery.py       # Wysyłka pojedynczego audio (Bot API/MTProto) z przyciskiem ✂️
+│   │   ├── trim_callbacks.py       # Przepływ przycinania: prompt, zakresy, cięcie i wysyłka fragmentów
 │   │   ├── inbound_video.py        # Upload i przetwarzanie plików video
 │   │   ├── download_callbacks.py   # Core download flow i progress
 │   │   ├── spotify_callbacks.py    # Pobieranie odcinków Spotify (transkrypcja, podsumowania)
@@ -491,13 +593,19 @@ ytdown/
 │       ├── auth_service.py         # PIN, login/logout, security state reset
 │       ├── download_service.py     # Planowanie i wykonywanie pobrań
 │       ├── archive_service.py      # Pakowanie, wysyłka i wznawianie wolumenów 7z
+│       ├── audio_trim_service.py   # Cięcie fragmentów ffmpeg (MP3/M4A bez rekodowania, FLAC bezstratnie)
+│       ├── trim_store.py           # Magazyn źródeł do przycinania (24 h, meta.json)
 │       ├── playlist_service.py     # Obsługa playlist (budowanie, pobieranie itemów)
 │       ├── spotify_service.py      # Audio Spotify/YouTube Music i kolekcje
 │       ├── spotify_archive_service.py # Grupowe archiwa 50/100/całość dla Spotify
 │       ├── spotify_video_service.py # Natywne audio/wideo i napisy Spotify
 │       └── transcription_service.py # Artefakty transkrypcji i podsumowań
+├── deploy/                         # rpi5a MCP systemd service
+├── docs/mcp.md                     # MCP setup, tools and security options
+├── docs/mcp-rpi5a.md                # Remote deployment and client configuration
+├── requirements-mcp.txt            # Optional MCP dependencies
 ├── setup_config.py                 # Narzędzie konfiguracyjne
-├── tests/                          # Testy (~979 testów)
+├── tests/                          # Testy (~1190 testów)
 │   ├── conftest.py                 # Współdzielone fixtures
 │   ├── test_security.py            # Testy bezpieczeństwa
 │   ├── test_security_unit.py       # Testy PIN, blokowania, security reset
@@ -509,6 +617,11 @@ ytdown/
 │   ├── test_callback_common.py     # Testy routera callbacków, rate limit, sesji
 │   ├── test_callback_download_handlers.py # Testy pobierania, playlist, time range
 │   ├── test_callback_transcription_handlers.py # Testy transkrypcji, napisów, Spotify
+│   ├── test_time_ranges.py         # Testy parsera wielu i otwartych zakresów
+│   ├── test_audio_trim_service.py  # Testy cięcia ffmpeg (wymaga ffmpeg)
+│   ├── test_trim_store.py          # Testy magazynu źródeł i wygasania
+│   ├── test_audio_delivery.py      # Testy wysyłki audio z ✂️
+│   ├── test_trim_callbacks.py      # Testy przepływu przycinania
 │   ├── test_telegram_integration.py # Testy integracyjne cross-module (PIN→URL, callback routing)
 │   ├── test_auth_service.py        # Testy auth service (PIN, logout)
 │   ├── test_runtime.py             # Testy runtime auth helperów
@@ -546,7 +659,7 @@ ytdown/
 - Klucze API w gitignore
 - Cookies YouTube w gitignore (`cookies.txt`)
 - Rate limiting (10 req/min)
-- Limit plików (1GB)
+- Separate media, workspace and transfer limits; see [large-file handling](#large-files-and-7z-archives)
 - Tylko HTTPS (whitelist domen)
 - Blokada po złym PIN
 - Autoryzacja zapisywana w JSON
@@ -555,10 +668,10 @@ ytdown/
 
 - Max 20MB dla pojedynczej części transkrypcji (większe pliki są dzielone automatycznie)
 - Max 20MB dla przesyłanych plików audio/video (limit Telegram Bot API dla pobierania plików przez bota)
-- Telegram limit: 50MB dla plików, 4096 znaków dla wiadomości
+- Telegram Bot API uploads use a 50 MiB application threshold; MTProto and multipart 7z handle larger downloads. Text messages remain limited to 4096 characters.
 - Korekta AI transkrypcji: do ~4.5h materiału audio (powyżej automatycznie pomijana)
 - Podsumowanie AI: do ~14h materiału audio (powyżej automatycznie pomijane)
-- Sama transkrypcja (Whisper) i napisy YouTube działają bez limitu długości
+- Telegram Whisper/subtitle transcription has no fixed duration cap; MCP processing accepts known durations up to two hours by default.
 - Instagram, LinkedIn, TikTok mogą wymagać cookies.txt do pobierania
 - Instagram zdjęcia/karuzele wymagają instaloader z ważną sesją w cookies.txt
 - YouTube wymaga deno jako JS runtime — bez niego część filmów zwróci "This video is not available"
@@ -579,9 +692,12 @@ ytdown/
 - Sprawdź klucz API Groq
 - Sprawdź rozmiar pliku audio
 
-**Plik za duży:**
-- Wybierz niższą jakość
-- Pobierz tylko audio
+**File too large:**
+
+- For standard Telegram downloads, install `7z` on the server and choose **Wyślij jako 7z** when offered.
+- MCP automatically splits outputs above 1000 MiB; retrieve every part before extracting.
+- Above the 10 GiB media limit, choose a lower quality or audio only.
+- Check free space for both the original and archive, plus the 2 GiB reserve.
 
 **Brak miejsca na dysku:**
 - Użyj `/cleanup` do usunięcia starych plików

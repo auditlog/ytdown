@@ -33,8 +33,21 @@ from bot.services.archive_service import (
     save_partial_archive_after_cancel,
     send_volumes,
 )
-from bot.services.spotify_service import download_resolved_audio, resolve_track_info
+from bot.services.spotify_service import (
+    download_resolved_audio,
+    resolve_track_info_detailed,
+)
 from bot.session_store import ArchivedDeliveryState
+
+
+@dataclass(frozen=True)
+class SpotifyArchiveFailure:
+    """One failed track with enough context for logs and a user report."""
+
+    track_index: int
+    label: str
+    stage: str
+    reason: str
 
 
 @dataclass(frozen=True)
@@ -46,6 +59,7 @@ class SpotifyArchiveResult:
     archive_count: int
     volume_count: int
     cancelled: bool = False
+    failures: tuple[SpotifyArchiveFailure, ...] = ()
 
 
 def _track_label(track: dict[str, Any]) -> str:
@@ -57,6 +71,94 @@ def _track_label(track: dict[str, Any]) -> str:
 def _archive_slug(title: str) -> str:
     value = sanitize_filename(transliterate_to_ascii(title)).replace(" ", "_")
     return value[:60] or "spotify"
+
+
+def _compact_exception(exc: Exception, *, limit: int = 240) -> str:
+    """Return a one-line, bounded exception description safe for a TXT report."""
+
+    detail = " ".join(str(exc).split())
+    if detail:
+        return f"{type(exc).__name__}: {detail[:limit]}"
+    return type(exc).__name__
+
+
+def _write_failure_report(
+    workspace: Path,
+    *,
+    collection_title: str,
+    selected_count: int,
+    downloaded_count: int,
+    failures: list[SpotifyArchiveFailure],
+) -> Path:
+    """Write a complete UTF-8 failure report retained with the archive workspace."""
+
+    report_path = workspace / "spotify_nieudane_utwory.txt"
+    lines = [
+        "Spotify — raport nieudanych utworów",
+        f"Kolekcja: {collection_title}",
+        f"Wybrano: {selected_count}",
+        f"Pobrano: {downloaded_count}",
+        f"Nieudane: {len(failures)}",
+        "",
+    ]
+    for number, failure in enumerate(failures, start=1):
+        lines.extend(
+            [
+                f"{number}. [pozycja {failure.track_index + 1}] {failure.label}",
+                f"   Etap: {failure.stage}",
+                f"   Powód: {failure.reason}",
+                "",
+            ]
+        )
+    report_path.write_text("\n".join(lines), encoding="utf-8")
+    return report_path
+
+
+def _report_message_chunks(text: str, *, limit: int = 3500) -> list[str]:
+    """Split a report on line boundaries for the Telegram text fallback."""
+
+    chunks: list[str] = []
+    current: list[str] = []
+    current_size = 0
+    for line in text.splitlines():
+        line = line[:limit]
+        extra = len(line) + (1 if current else 0)
+        if current and current_size + extra > limit:
+            chunks.append("\n".join(current))
+            current = []
+            current_size = 0
+        current.append(line)
+        current_size += len(line) + (1 if len(current) > 1 else 0)
+    if current:
+        chunks.append("\n".join(current))
+    return chunks
+
+
+async def _send_failure_report(bot, *, chat_id: int, report_path: Path) -> str | None:
+    """Send the report as TXT, falling back to complete chunked messages."""
+
+    try:
+        with report_path.open("rb") as handle:
+            await bot.send_document(
+                chat_id=chat_id,
+                document=handle,
+                filename=report_path.name,
+                caption="Pełna lista nieudanych utworów Spotify wraz z przyczynami.",
+                read_timeout=60,
+                write_timeout=60,
+            )
+        return "plik TXT"
+    except Exception as exc:
+        logging.warning("Could not send Spotify failure report as a document: %s", exc)
+
+    try:
+        report_text = report_path.read_text(encoding="utf-8")
+        for chunk in _report_message_chunks(report_text):
+            await bot.send_message(chat_id=chat_id, text=chunk)
+        return "osobne wiadomości"
+    except Exception as exc:
+        logging.error("Could not send Spotify failure report fallback: %s", exc)
+        return None
 
 
 def _target_track_path(
@@ -145,10 +247,28 @@ async def execute_spotify_collection_archive_flow(
 
     downloaded: list[Path] = []
     failed_indices: list[int] = []
-    failed_labels: list[str] = []
+    failures: list[SpotifyArchiveFailure] = []
     packed_volumes: list[Path] = []
     archive_count = 0
     cancelled = False
+
+    def record_failure(
+        track_index: int,
+        label: str,
+        *,
+        stage: str,
+        reason: str,
+    ) -> None:
+        failed_indices.append(track_index)
+        failure = SpotifyArchiveFailure(track_index, label, stage, reason)
+        failures.append(failure)
+        logging.warning(
+            "Spotify archive item failed: index=%d label=%r stage=%s reason=%s",
+            track_index,
+            label,
+            stage,
+            reason,
+        )
 
     try:
         total = len(selected)
@@ -156,10 +276,13 @@ async def execute_spotify_collection_archive_flow(
             if cancellation.event.is_set():
                 cancelled = True
                 remaining = selected[position - 1 :]
-                failed_indices.extend(remaining)
-                failed_labels.extend(
-                    f"{_track_label(tracks[index])} (anulowano)" for index in remaining
-                )
+                for index in remaining:
+                    record_failure(
+                        index,
+                        _track_label(tracks[index]),
+                        stage="anulowanie",
+                        reason="Operacja została zatrzymana przed rozpoczęciem utworu.",
+                    )
                 break
 
             track = tracks[track_index]
@@ -177,26 +300,62 @@ async def execute_spotify_collection_archive_flow(
             temp_dir = workspace / f".spotify_{track_index:04d}"
             temp_dir.mkdir(parents=True, exist_ok=True)
             try:
-                resolved = await resolve_track_info(track, executor=executor)
-                if not resolved:
-                    failed_indices.append(track_index)
-                    failed_labels.append(label)
+                try:
+                    resolution = await resolve_track_info_detailed(track, executor=executor)
+                except Exception as exc:
+                    record_failure(
+                        track_index,
+                        label,
+                        stage="dopasowanie w YouTube",
+                        reason=_compact_exception(exc),
+                    )
                     continue
-                downloaded_path = await download_resolved_audio(
-                    resolved=resolved,
-                    audio_format=audio_format,
-                    output_dir=str(temp_dir),
-                    executor=executor,
-                )
+                if not resolution.resolved:
+                    record_failure(
+                        track_index,
+                        label,
+                        stage="dopasowanie w YouTube",
+                        reason=(
+                            resolution.failure_detail
+                            or "Nie znaleziono wiarygodnego dopasowania."
+                        ),
+                    )
+                    continue
+                try:
+                    downloaded_path = await download_resolved_audio(
+                        resolved=resolution.resolved,
+                        audio_format=audio_format,
+                        output_dir=str(temp_dir),
+                        executor=executor,
+                    )
+                except Exception as exc:
+                    record_failure(
+                        track_index,
+                        label,
+                        stage="pobieranie audio",
+                        reason=_compact_exception(exc),
+                    )
+                    continue
                 if not downloaded_path:
-                    failed_indices.append(track_index)
-                    failed_labels.append(label)
+                    record_failure(
+                        track_index,
+                        label,
+                        stage="pobieranie audio",
+                        reason="Pobieranie zakończyło się bez pliku wynikowego.",
+                    )
                     continue
                 source = Path(downloaded_path)
                 size_mb = source.stat().st_size / (1024 * 1024)
                 if size_mb > MAX_ARCHIVE_ITEM_SIZE_MB:
-                    failed_indices.append(track_index)
-                    failed_labels.append(f"{label} (za duży: {size_mb:.0f} MB)")
+                    record_failure(
+                        track_index,
+                        label,
+                        stage="kontrola rozmiaru",
+                        reason=(
+                            f"Plik ma {size_mb:.0f} MB i przekracza limit "
+                            f"{MAX_ARCHIVE_ITEM_SIZE_MB:.0f} MB."
+                        ),
+                    )
                     continue
                 target = _target_track_path(
                     workspace,
@@ -207,9 +366,12 @@ async def execute_spotify_collection_archive_flow(
                 shutil.move(str(source), target)
                 downloaded.append(target)
             except Exception as exc:
-                logging.error("Spotify archive download failed for %s: %s", label, exc)
-                failed_indices.append(track_index)
-                failed_labels.append(label)
+                record_failure(
+                    track_index,
+                    label,
+                    stage="przygotowanie pliku do archiwum",
+                    reason=_compact_exception(exc),
+                )
             finally:
                 shutil.rmtree(temp_dir, ignore_errors=True)
 
@@ -228,14 +390,45 @@ async def execute_spotify_collection_archive_flow(
                 volume_size_mb=volume_size_mb,
             )
             return SpotifyArchiveResult(
-                len(downloaded), tuple(sorted(set(failed_indices))), 0, 0, True
+                len(downloaded),
+                tuple(sorted(set(failed_indices))),
+                0,
+                0,
+                True,
+                tuple(failures),
             )
 
         if not downloaded:
+            failure_report_delivery = None
+            if failures:
+                report_path = _write_failure_report(
+                    workspace,
+                    collection_title=title,
+                    selected_count=len(selected),
+                    downloaded_count=0,
+                    failures=failures,
+                )
+                failure_report_delivery = await _send_failure_report(
+                    context.bot,
+                    chat_id=chat_id,
+                    report_path=report_path,
+                )
             shutil.rmtree(workspace, ignore_errors=True)
-            await _safe_status_edit(update, "Nie udało się pobrać żadnego utworu.")
+            report_note = (
+                f" Pełny raport wysłano jako {failure_report_delivery}."
+                if failure_report_delivery
+                else " Nie udało się wysłać pełnego raportu."
+            )
+            await _safe_status_edit(
+                update,
+                f"Nie udało się pobrać żadnego utworu.{report_note}",
+            )
             return SpotifyArchiveResult(
-                0, tuple(sorted(set(failed_indices or selected))), 0, 0
+                0,
+                tuple(sorted(set(failed_indices or selected))),
+                0,
+                0,
+                failures=tuple(failures),
             )
 
         batch_size = files_per_archive or len(downloaded)
@@ -288,7 +481,12 @@ async def execute_spotify_collection_archive_flow(
                 volume_size_mb=volume_size_mb,
             )
             return SpotifyArchiveResult(
-                len(downloaded), tuple(sorted(set(failed_indices))), 0, 0, True
+                len(downloaded),
+                tuple(sorted(set(failed_indices))),
+                0,
+                0,
+                True,
+                tuple(failures),
             )
 
         caption_prefix = f"{title} (Spotify {audio_format.upper()}, paczki {batch_label})"
@@ -311,6 +509,21 @@ async def execute_spotify_collection_archive_flow(
             cancellation=cancellation,
         )
 
+        failure_report_delivery = None
+        if failures:
+            report_path = _write_failure_report(
+                workspace,
+                collection_title=title,
+                selected_count=len(selected),
+                downloaded_count=len(downloaded),
+                failures=failures,
+            )
+            failure_report_delivery = await _send_failure_report(
+                context.bot,
+                chat_id=chat_id,
+                report_path=report_path,
+            )
+
         delivery = ArchivedDeliveryState(
             workspace=workspace,
             volumes=packed_volumes,
@@ -323,14 +536,23 @@ async def execute_spotify_collection_archive_flow(
         summary = [
             "⏹ Wysyłka zatrzymana." if cancelled else "Spotify: archiwa gotowe.",
             f"Pobrano: {len(downloaded)}/{len(selected)} utworów",
-            f"Archiwa 7z: {archive_count}",
-            f"Pliki wysłane do Telegrama: {len(packed_volumes)}",
+            f"Logiczne archiwa 7z: {archive_count}",
+            f"Wolumeny wysłane do Telegrama: {len(packed_volumes)}",
             f"Rozmiar grupy: {batch_label}",
+            "Każde archiwum zaczyna numerację wolumenów od .7z.001.",
             f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
         ]
-        if failed_labels:
-            summary.extend(["", f"Nieudane utwory: {len(failed_labels)}"])
-            summary.extend(f"- {label[:70]}" for label in failed_labels[:5])
+        if failures:
+            summary.extend(["", f"Nieudane utwory: {len(failures)}"])
+            summary.extend(f"- {failure.label[:70]}" for failure in failures[:5])
+            if len(failures) > 5:
+                summary.append(f"- … oraz {len(failures) - 5} kolejnych")
+            if failure_report_delivery:
+                summary.append(
+                    f"Pełna lista z przyczynami została wysłana jako {failure_report_delivery}."
+                )
+            else:
+                summary.append("Nie udało się wysłać pełnego raportu; szczegóły są w logach.")
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
@@ -346,6 +568,7 @@ async def execute_spotify_collection_archive_flow(
             archive_count,
             len(packed_volumes),
             cancelled,
+            tuple(failures),
         )
     except RuntimeError as exc:
         if str(exc) == "cancelled":
@@ -365,18 +588,23 @@ async def execute_spotify_collection_archive_flow(
                 volume_size_mb=volume_size_mb,
             )
             return SpotifyArchiveResult(
-                len(downloaded), tuple(sorted(set(failed_indices))), 0, 0, True
+                len(downloaded),
+                tuple(sorted(set(failed_indices))),
+                0,
+                0,
+                True,
+                tuple(failures),
             )
         logging.error("Spotify archive flow failed: %s", exc)
         await _safe_status_edit(update, "Pakowanie lub wysyłka archiwum nie powiodły się.")
         return SpotifyArchiveResult(
-            len(downloaded), tuple(selected), 0, 0
+            len(downloaded), tuple(selected), 0, 0, failures=tuple(failures)
         )
     except Exception:
         logging.exception("Unexpected Spotify archive flow failure")
         await _safe_status_edit(update, "Pakowanie lub wysyłka archiwum nie powiodły się.")
         return SpotifyArchiveResult(
-            len(downloaded), tuple(selected), 0, 0
+            len(downloaded), tuple(selected), 0, 0, failures=tuple(failures)
         )
     finally:
         lock_path.unlink(missing_ok=True)
