@@ -22,7 +22,7 @@ if TYPE_CHECKING:
     from bot.jobs import JobCancellation
 
 from bot.jobs import JobDescriptor, job_registry
-from bot.handlers.common_ui import stop_button_markup
+from bot.handlers.common_ui import progress_stop_markup
 from bot.archive import (
     compute_archive_basename,
     is_7z_available,
@@ -345,7 +345,7 @@ async def execute_playlist_archive_flow(
 
     async def status(text: str) -> None:
         await _safe_status_edit(
-            update, text, reply_markup=stop_button_markup(cancellation.job_id),
+            update, text, reply_markup=progress_stop_markup(cancellation),
         )
 
     async def finish_status(text: str) -> None:
@@ -575,7 +575,7 @@ async def execute_partial_archive_flow(
 
     async def status(text: str) -> None:
         await _safe_status_edit(
-            update, text, reply_markup=stop_button_markup(cancellation.job_id),
+            update, text, reply_markup=progress_stop_markup(cancellation),
         )
 
     async def finish_status(text: str) -> None:

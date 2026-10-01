@@ -27,6 +27,17 @@ def stop_button_markup(job_id: str) -> InlineKeyboardMarkup:
     )
 
 
+def progress_stop_markup(cancellation) -> InlineKeyboardMarkup | None:
+    """Stop button for an in-progress edit, or None once the job is stopping.
+
+    Keeps a progress edit from re-adding the button after the user pressed it.
+    """
+
+    if cancellation.event.is_set():
+        return None
+    return stop_button_markup(cancellation.job_id)
+
+
 def trim_download_button() -> InlineKeyboardButton:
     """Download the whole audio without sending it, then ask for trim ranges."""
 

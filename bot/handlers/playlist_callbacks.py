@@ -13,7 +13,7 @@ from telegram.ext import ContextTypes
 
 from bot.downloader_media import download_thumbnail
 from bot.downloader_metadata import get_video_info
-from bot.handlers.common_ui import build_main_keyboard, escape_md, stop_button_markup
+from bot.handlers.common_ui import build_main_keyboard, escape_md, progress_stop_markup
 from bot.security_limits import MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.security_policy import get_media_label
 from bot.services.archive_service import execute_playlist_archive_flow
@@ -148,7 +148,7 @@ async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, 
     await query.edit_message_text(
         f"Rozpoczynam pobieranie playlisty ({total} filmów)...\n"
         f"Format: {media_type} {format_choice}",
-        reply_markup=stop_button_markup(cancellation.job_id),
+        reply_markup=progress_stop_markup(cancellation),
     )
 
     try:
@@ -198,14 +198,14 @@ async def download_playlist(update: Update, context: ContextTypes.DEFAULT_TYPE, 
             for title in failed_titles[:5]:
                 summary += f"  - {title[:40]}\n"
 
-        # The summary below is the terminal message; drop the stale stop button.
+        await context.bot.send_message(chat_id=chat_id, text=summary)
+        _clear_session_value_if(context, chat_id, "playlist_data", user_playlist_data, playlist)
+    finally:
+        # The start message is never terminal; drop its stop button even on errors.
         try:
             await query.edit_message_reply_markup(reply_markup=None)
         except Exception as exc:
             logging.debug("Could not remove playlist stop button: %s", exc)
-        await context.bot.send_message(chat_id=chat_id, text=summary)
-        _clear_session_value_if(context, chat_id, "playlist_data", user_playlist_data, playlist)
-    finally:
         job_registry.unregister(cancellation.job_id)
 
 

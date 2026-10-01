@@ -20,7 +20,7 @@ from bot.archive import (
     volume_size_for,
 )
 from bot.downloader_validation import sanitize_filename
-from bot.handlers.common_ui import stop_button_markup
+from bot.handlers.common_ui import progress_stop_markup
 from bot.jobs import JobDescriptor, job_registry
 from bot.mtproto import mtproto_unavailability_reason
 from bot.security_limits import (
@@ -296,7 +296,7 @@ async def execute_spotify_collection_archive_flow(
                 update,
                 f"Spotify → 7z ({audio_format.upper()})\n"
                 f"[{position}/{total}] Dopasowywanie i pobieranie:\n{label}",
-                reply_markup=stop_button_markup(cancellation.job_id),
+                reply_markup=progress_stop_markup(cancellation),
             )
 
             temp_dir = workspace / f".spotify_{track_index:04d}"
@@ -456,7 +456,7 @@ async def execute_spotify_collection_archive_flow(
                 update,
                 f"Pakowanie archiwum {group_index}/{archive_count} "
                 f"({len(group)} utworów, wolumeny do {volume_size_mb} MB)...",
-                reply_markup=stop_button_markup(cancellation.job_id),
+                reply_markup=progress_stop_markup(cancellation),
             )
             packed_volumes.extend(
                 await pack_to_volumes(
@@ -501,7 +501,7 @@ async def execute_spotify_collection_archive_flow(
             update,
             f"Pakowanie zakończone: {archive_count} archiwów, "
             f"{len(packed_volumes)} plików do wysłania.",
-            reply_markup=stop_button_markup(cancellation.job_id),
+            reply_markup=progress_stop_markup(cancellation),
         )
         await send_volumes(
             context.bot,
@@ -510,7 +510,7 @@ async def execute_spotify_collection_archive_flow(
             caption_prefix=caption_prefix,
             use_mtproto=use_mtproto,
             status_cb=lambda text: _safe_status_edit(
-                update, text, reply_markup=stop_button_markup(cancellation.job_id),
+                update, text, reply_markup=progress_stop_markup(cancellation),
             ),
             cancellation=cancellation,
         )

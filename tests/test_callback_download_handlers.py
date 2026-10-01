@@ -745,3 +745,37 @@ def test_download_error_without_stop_still_records_failure(tmp_path, monkeypatch
 
     assert update.callback_query.edit_message_text.await_args.args[0].startswith("Wystąpił błąd")
     assert dc.record_download_for.call_args.kwargs["status"] == "failure"
+
+
+def test_missing_groq_key_message_has_no_stop_button(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", lambda key, default="": "")
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/", transcribe=True,
+    ))
+
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0].startswith("Funkcja niedostępna")
+    assert _markup_of(last) is None
+
+
+def test_progress_edit_after_stop_signal_has_no_stop_button(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "send_audio_with_trim", mock.AsyncMock(return_value=None))
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+    download_orig = dc.execute_download
+
+    async def stop_then_download(plan_obj, **kwargs):
+        kwargs["cancellation"].event.set()
+        await kwargs["status_callback"]("Pobieranie: 50%")
+        return await download_orig(plan_obj, **kwargs)
+
+    monkeypatch.setattr(dc, "execute_download", stop_then_download)
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    calls = update.callback_query.edit_message_text.await_args_list
+    stopping = [c for c in calls if c.args[0] == "Pobieranie: 50%"]
+    assert stopping and _markup_of(stopping[0]) is None

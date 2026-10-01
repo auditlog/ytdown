@@ -24,7 +24,7 @@ from bot.handlers.common_ui import (
     format_eta,
     safe_edit_message,
     send_long_message,
-    stop_button_markup,
+    progress_stop_markup,
 )
 from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB, MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS, MAX_PLAYLIST_ITEMS_EXPANDED, TELEGRAM_UPLOAD_LIMIT_MB
 from bot.download_budget import DownloadLimitError
@@ -373,7 +373,7 @@ async def download_file(
         async def update_status(text):
             # In-progress edit: carries the stop button for this job.
             await safe_edit_message(
-                query, text, reply_markup=stop_button_markup(cancellation.job_id),
+                query, text, reply_markup=progress_stop_markup(cancellation),
             )
 
         async def finish_status(text):
@@ -461,7 +461,7 @@ async def download_file(
                 )
 
                 if not get_runtime_value("GROQ_API_KEY", ""):
-                    await update_status(
+                    await finish_status(
                         "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
                         "Skontaktuj się z administratorem."
                     )
