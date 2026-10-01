@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
+from bot.handlers import inbound_media
 from bot import telegram_commands as tc
 from tests.telegram_commands_support import (
     _async,
@@ -284,6 +285,21 @@ class TestHandleYoutubeLinkTimeRange:
         _async(tc.handle_youtube_link(update, context))
 
         assert "przekracza czas trwania filmu" in update.message.reply_text.await_args.args[0]
+
+    def test_pending_trim_input_wins_over_pre_download_range(self, monkeypatch):
+        update = _make_update(text="0:10-0:20", user_id=333, chat_id=333)
+        context = _make_context()
+
+        _set_authorized_users(monkeypatch, {333})
+        monkeypatch.setattr(tc, "handle_pin", AsyncMock(return_value=False))
+        tc.user_urls[333] = "https://www.youtube.com/watch?v=existing"
+        consumed = AsyncMock(return_value=True)
+        monkeypatch.setattr(inbound_media, "handle_pending_trim_input", consumed)
+
+        _async(tc.handle_youtube_link(update, context))
+
+        consumed.assert_awaited_once()
+        assert tc.user_time_ranges.get(333) is None
 
 
 class TestAudioMetadataExtraction:

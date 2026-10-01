@@ -87,6 +87,7 @@ from bot.handlers.inbound_video import (
     extracted_process_video_file,
 )
 from bot.handlers.transcript_prompt_handlers import handle_pending_transcript_prompt
+from bot.handlers.trim_callbacks import handle_pending_trim_input
 
 
 async def handle_pin(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -230,6 +231,10 @@ async def handle_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if await handle_pending_transcript_prompt(update, context):
+        return
+
+    # Must run before the pre-download range parser below: both accept "1:30-4:45".
+    if await handle_pending_trim_input(update, context):
         return
 
     current_url = _get_session_value(context, chat_id, "current_url", user_urls)

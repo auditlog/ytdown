@@ -193,3 +193,20 @@ def test_prompt_too_long_keeps_pending_state(tmp_path, monkeypatch):
     assert handled is True
     assert "za długie" in update.message.reply_text.await_args.args[0]
     assert context.user_data["pending_transcript_prompt"].transcript_token == token
+
+
+def test_prompt_callback_clears_pending_trim(tmp_path):
+    transcript = tmp_path / "sample_transcript.md"
+    transcript.write_text("Body", encoding="utf-8")
+    context = _make_context()
+    token = handlers.register_transcript_context(
+        context, chat_id=10, requester_id=20, transcript_path=str(transcript), title="Sample",
+    )
+    context.user_data["pending_trim"] = object()
+    update = _make_update(f"tr_prompt_{token}", chat_id=10)
+    update.effective_user.id = 20
+
+    asyncio.run(handlers.handle_transcript_prompt_callback(update, context, f"tr_prompt_{token}"))
+
+    assert "pending_trim" not in context.user_data
+    assert context.user_data["pending_transcript_prompt"].transcript_token == token

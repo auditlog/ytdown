@@ -31,6 +31,7 @@ TRANSIENT_FLOW_FIELDS = (
     "subtitle_pending",
     "transcript_contexts",
     "pending_transcript_prompt",
+    "pending_trim",
 )
 
 TRANSIENT_FLOW_LEGACY_KEYS = (
@@ -44,6 +45,7 @@ TRANSIENT_FLOW_LEGACY_KEYS = (
     "subtitle_pending",
     "transcript_contexts",
     "pending_transcript_prompt",
+    "pending_trim",
 )
 
 

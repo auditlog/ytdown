@@ -53,6 +53,7 @@ from bot.handlers.playlist_callbacks import (
 from bot.handlers.spotify_callbacks import download_spotify_video, transcribe_spotify_video
 from bot.handlers.spotify_collection_callbacks import handle_spotify_collection_callback
 from bot.handlers.transcript_prompt_handlers import handle_transcript_prompt_callback
+from bot.handlers.trim_callbacks import handle_trim_callback
 from bot.handlers.transcription_callbacks import (
     _handle_subtitle_callback as _extracted_handle_subtitle_callback,
     _handle_subtitle_summary_callback as _extracted_handle_subtitle_summary_callback,
@@ -129,6 +130,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if data.startswith("tr_prompt_"):
         await handle_transcript_prompt_callback(update, context, data)
+        return
+
+    # trim_dl needs the session URL and is routed next to dl_ below.
+    if data.startswith("trim_") and data != "trim_dl":
+        await handle_trim_callback(update, context, data)
         return
 
     if data == "audio_transcribe":

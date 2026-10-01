@@ -75,6 +75,15 @@ class PendingTranscriptPrompt:
     requester_id: int
 
 
+@dataclass(frozen=True)
+class PendingTrimInput:
+    """One chat waiting for a specific user to type trim ranges for a stored source."""
+
+    token: str
+    requester_id: int
+    created_at: Any  # timezone-aware datetime
+
+
 @dataclass
 class SessionState:
     """Chat-scoped runtime state used by Telegram handlers."""
@@ -95,6 +104,7 @@ class SessionState:
     subtitle_pending: dict[str, Any] | None = None
     transcript_contexts: dict[str, TranscriptContext] | None = None
     pending_transcript_prompt: PendingTranscriptPrompt | None = None
+    pending_trim: PendingTrimInput | None = None
     pending_archive_jobs: dict[str, ArchiveJobState] | None = None
     archived_deliveries: dict[str, ArchivedDeliveryState] | None = None
     partial_archive_workspaces: dict[str, ArchivePartialState] | None = None
@@ -236,6 +246,7 @@ class SessionStore:
             and session.subtitle_pending is None
             and session.transcript_contexts is None
             and session.pending_transcript_prompt is None
+            and session.pending_trim is None
             and session.pending_archive_jobs is None
             and session.archived_deliveries is None
             and session.partial_archive_workspaces is None
