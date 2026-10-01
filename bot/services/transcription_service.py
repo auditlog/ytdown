@@ -54,6 +54,37 @@ SUMMARY_TYPE_NAMES = {
 }
 
 
+MISSING_GROQ_KEY_TEXT = (
+    "Funkcja niedostępna — brak klucza API do transkrypcji. "
+    "Skontaktuj się z administratorem."
+)
+MISSING_CLAUDE_KEY_TEXT = (
+    "Podsumowanie jest niedostępne — brak klucza API Claude. "
+    "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
+)
+SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT = (
+    "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
+    "Wysyłam samą transkrypcję."
+)
+
+
+def missing_transcription_key_message(
+    get_value: Callable[..., Any], *, summary: bool
+) -> str | None:
+    """Return the Polish error text when a required API key is missing.
+
+    Called before any download or upload work starts so the user is not made
+    to wait for a job that is bound to fail. ``get_value`` is the calling
+    handler module's own ``get_runtime_value`` (kept injectable so the
+    per-module test seams keep working).
+    """
+    if not get_value("GROQ_API_KEY", ""):
+        return MISSING_GROQ_KEY_TEXT
+    if summary and not get_value("CLAUDE_API_KEY", ""):
+        return MISSING_CLAUDE_KEY_TEXT
+    return None
+
+
 async def run_transcription_with_progress(
     *,
     source_path: str,

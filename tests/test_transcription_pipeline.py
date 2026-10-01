@@ -104,7 +104,7 @@ def test_pipeline_uses_placeholder_for_empty_transcription(tmp_path):
 
     assert result is not None
     content = Path(result).read_text(encoding="utf-8")
-    assert "No transcription for this part" in content
+    assert "brak transkrypcji tego fragmentu" in content
 
 
 def test_split_mp3_failure_propagates_exception(tmp_path):
@@ -136,7 +136,7 @@ def test_split_mp3_failure_propagates_exception(tmp_path):
 def test_all_parts_empty_transcript_writes_placeholder_content(tmp_path):
     """All parts returning empty string should produce placeholder text in the output file.
 
-    The pipeline inserts '[No transcription for this part]' rather than creating an
+    The pipeline inserts '[brak transkrypcji tego fragmentu]' rather than creating an
     error document, because each placeholder is non-empty text. The real error file
     is only written when *all* placeholders are also stripped away (whitespace-only).
     """
@@ -167,7 +167,7 @@ def test_all_parts_empty_transcript_writes_placeholder_content(tmp_path):
     assert result is not None
     content = Path(result).read_text(encoding="utf-8")
     # Pipeline appends placeholder text for each empty part — verify both are present
-    assert content.count("[No transcription for this part]") == 2
+    assert content.count("[brak transkrypcji tego fragmentu]") == 2
 
 
 def test_api_timeout_during_post_processing_uses_raw_transcript(tmp_path):

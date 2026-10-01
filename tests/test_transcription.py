@@ -189,7 +189,7 @@ def test_transcribe_mp3_file_error_creates_error_report(monkeypatch, tmp_path):
     result = tr.transcribe_mp3_file(str(source), str(tmp_path))
 
     text = Path(result).read_text(encoding="utf-8")
-    assert "No transcription for this part" in text
+    assert "brak transkrypcji tego fragmentu" in text
 
 
 def test_post_process_transcript(monkeypatch):

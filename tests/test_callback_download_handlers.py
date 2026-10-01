@@ -779,3 +779,92 @@ def test_progress_edit_after_stop_signal_has_no_stop_button(tmp_path, monkeypatc
     calls = update.callback_query.edit_message_text.await_args_list
     stopping = [c for c in calls if c.args[0] == "Pobieranie: 50%"]
     assert stopping and _markup_of(stopping[0]) is None
+
+
+def _fake_keys(**values):
+    return lambda key, default="": values.get(key, default)
+
+
+def test_link_transcription_checks_groq_key_before_downloading(tmp_path, monkeypatch):
+    dc, plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(CLAUDE_API_KEY="c"))
+    download = mock.AsyncMock()
+    monkeypatch.setattr(dc, "execute_download", download)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/", transcribe=True,
+    ))
+
+    download.assert_not_awaited()
+    assert not hasattr(plan, "kwargs")
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0] == (
+        "Funkcja niedostępna — brak klucza API do transkrypcji. Skontaktuj się z administratorem."
+    )
+    assert _markup_of(last) is None
+
+
+def test_link_summary_checks_claude_key_before_downloading(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g"))
+    download = mock.AsyncMock()
+    monkeypatch.setattr(dc, "execute_download", download)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+
+    download.assert_not_awaited()
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0] == (
+        "Podsumowanie jest niedostępne — brak klucza API Claude. "
+        "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
+    )
+    assert _markup_of(last) is None
+
+
+def test_link_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    transcript = tmp_path / "Song_transcript.md"
+    transcript.write_text("# Song\n\nTekst.\n", encoding="utf-8")
+    monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=str(transcript)))
+    monkeypatch.setattr(dc, "generate_summary_artifact", mock.AsyncMock(return_value=None))
+    offer = mock.AsyncMock()
+    monkeypatch.setattr(dc, "offer_custom_transcript_prompt", offer)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+
+    context.bot.send_document.assert_awaited_once()
+    texts = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert (
+        "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
+        "Wysyłam samą transkrypcję."
+    ) in texts
+    assert dc.record_download_for.call_args.args[4] == "transcription"
+    offer.assert_awaited_once()
+
+
+def test_link_summary_exception_still_sends_transcript(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    transcript = tmp_path / "Song_transcript.md"
+    transcript.write_text("# Song\n\nTekst.\n", encoding="utf-8")
+    monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=str(transcript)))
+    monkeypatch.setattr(dc, "generate_summary_artifact", mock.AsyncMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(dc, "offer_custom_transcript_prompt", mock.AsyncMock())
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+
+    context.bot.send_document.assert_awaited_once()

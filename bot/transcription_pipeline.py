@@ -104,7 +104,7 @@ def transcribe_mp3_file(
             previous_text = transcription
         else:
             logging.warning("Part %s: transcription is empty!", index + 1)
-            transcriptions.append("[No transcription for this part]")
+            transcriptions.append("[brak transkrypcji tego fragmentu]")
 
         output_part_num = get_part_number_fn(os.path.basename(part_path)) or (index + 1)
         transcript_path = os.path.join(output_dir, f"{base_name}_part{output_part_num}_transcript.txt")
@@ -140,7 +140,7 @@ def transcribe_mp3_file(
         transcript_md_path = os.path.join(output_dir, f"{base_name}_transcript.md")
         with open(transcript_md_path, "w", encoding="utf-8") as file_obj:
             file_obj.write(f"# {base_name} Transcript\n\n")
-            file_obj.write("**Error during transcription**\n\n")
+            file_obj.write("**Błąd podczas transkrypcji**\n\n")
             file_obj.write("Could not generate transcription for this audio file.\n")
             file_obj.write("Possible reasons:\n")
             file_obj.write("- Audio file is corrupted or incompatible\n")

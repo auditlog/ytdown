@@ -31,7 +31,9 @@ from bot.downloader_validation import sanitize_filename
 from bot.services.transcription_service import (
     cleanup_transcription_artifacts,
     generate_summary_artifact,
+    SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
     load_transcript_result,
+    missing_transcription_key_message,
     run_transcription_with_progress,
     save_transcript_markdown,
     transcript_too_long_for_summary,
@@ -106,14 +108,13 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     file_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
 
-    await update_status("Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut.")
-
-    if not get_runtime_value("GROQ_API_KEY", ""):
-        await update_status(
-            "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
-            "Skontaktuj się z administratorem."
-        )
+    # Fail fast: check API keys before starting any transcription work.
+    missing_key_text = missing_transcription_key_message(get_runtime_value, summary=summary)
+    if missing_key_text:
+        await update_status(missing_key_text)
         return
+
+    await update_status("Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut.")
 
     transcript_path = await run_transcription_with_progress(
         source_path=mp3_path,
@@ -127,13 +128,6 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         return
 
     if summary:
-        if not get_runtime_value("CLAUDE_API_KEY", ""):
-            await update_status(
-                "Funkcja niedostępna — brak klucza API do podsumowań.\n"
-                "Skontaktuj się z administratorem."
-            )
-            return
-
         transcript_result = load_transcript_result(transcript_path)
         transcript_text = transcript_result.display_text
 
@@ -164,16 +158,39 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
 
         await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
         safe_title = sanitize_filename(title)
-        summary_result = await generate_summary_artifact(
-            transcript_text=transcript_text,
-            summary_type=summary_type,
-            title=title,
-            sanitized_title=safe_title,
-            output_dir=chat_download_path,
-            executor=_executor,
-        )
+        try:
+            summary_result = await generate_summary_artifact(
+                transcript_text=transcript_text,
+                summary_type=summary_type,
+                title=title,
+                sanitized_title=safe_title,
+                output_dir=chat_download_path,
+                executor=_executor,
+            )
+        except Exception as exc:
+            logging.error("Summary generation failed: %s", exc)
+            summary_result = None
         if not summary_result:
-            await update_status("Wystąpił błąd podczas generowania podsumowania.")
+            # Never lose the finished transcript because the summary failed.
+            await update_status(SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT)
+            with open(transcript_path, "rb") as file_obj:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=file_obj,
+                    filename=os.path.basename(transcript_path),
+                    caption=f"Transkrypcja: {title} (podsumowanie nie powiodło się)",
+                    read_timeout=60,
+                    write_timeout=60,
+                )
+            record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
+            _clear_uploaded_audio_state(context, chat_id, mp3_path)
+            await offer_custom_transcript_prompt(
+                context,
+                chat_id=chat_id,
+                requester_id=update.effective_user.id,
+                transcript_path=transcript_path,
+                title=title,
+            )
             return
 
         await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
