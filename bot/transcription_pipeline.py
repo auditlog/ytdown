@@ -63,9 +63,14 @@ def transcribe_mp3_file(
 
     part_files = split_mp3_fn(file_path, temp_dir)
     part_files.sort(key=lambda path: get_part_number_fn(os.path.basename(path)))
+    if not part_files:
+        logging.error("No audio parts could be produced from %s", file_path)
+        _remove_temp_dir(rmtree_fn, temp_dir)
+        return None
 
     transcriptions = []
     total_parts = len(part_files)
+    failed_parts = 0
     total_characters = 0
     start_time = time.time()
     previous_text = ""
@@ -110,6 +115,7 @@ def transcribe_mp3_file(
         else:
             logging.warning("Part %s: transcription is empty!", index + 1)
             transcriptions.append(EMPTY_PART_MARKER)
+            failed_parts += 1
 
         output_part_num = get_part_number_fn(os.path.basename(part_path)) or (index + 1)
         transcript_path = os.path.join(output_dir, f"{base_name}_part{output_part_num}_transcript.txt")
@@ -125,34 +131,33 @@ def transcribe_mp3_file(
     if progress_callback:
         elapsed_total = time.time() - start_time
         elapsed_str = f"{int(elapsed_total // 60)}m {int(elapsed_total % 60)}s" if elapsed_total >= 60 else f"{int(elapsed_total)}s"
+        failed_line = f"Części bez transkrypcji: {failed_parts} z {total_parts}\n" if failed_parts else ""
         progress_callback(
             f"Łączenie transkrypcji...\n"
             f"Części: {total_parts}\n"
+            f"{failed_line}"
             f"Łącznie znaków: {total_characters:,}\n"
             f"Czas transkrypcji: {elapsed_str}"
         )
 
+    # Placeholders keep their place in the merged text so a partial result
+    # shows where audio is missing, but they are not content on their own.
     valid_transcriptions = [text for text in transcriptions if text and text.strip()]
     combined_text = "\n\n".join(valid_transcriptions)
 
     logging.info("Combined transcriptions: %s non-empty out of %s parts", len(valid_transcriptions), len(transcriptions))
     logging.info("Final text length: %s characters", len(combined_text))
 
-    if not combined_text or not combined_text.strip():
-        logging.error("ERROR: No transcription content to save!")
-        logging.error("All part transcriptions: %s", transcriptions)
-
-        transcript_md_path = os.path.join(output_dir, f"{base_name}_transcript.md")
-        with open(transcript_md_path, "w", encoding="utf-8") as file_obj:
-            file_obj.write(f"# {base_name} Transcript\n\n")
-            file_obj.write("**Błąd podczas transkrypcji**\n\n")
-            file_obj.write("Nie udało się wygenerować transkrypcji tego pliku audio.\n")
-            file_obj.write("Możliwe przyczyny:\n")
-            file_obj.write("- plik audio jest uszkodzony lub ma nieobsługiwany format\n")
-            file_obj.write("- błąd API Groq (Whisper)\n")
-            file_obj.write("- w nagraniu nie ma wyraźnej mowy\n\n")
-            file_obj.write("Spróbuj ponownie z innym plikiem albo skontaktuj się z administratorem.")
-        return transcript_md_path
+    if not any(text != EMPTY_PART_MARKER for text in valid_transcriptions):
+        # Nothing was transcribed (e.g. every Groq call failed). Returning a file
+        # of placeholders would be shown as a finished transcript and could be
+        # sent on to paid correction and summaries; callers report
+        # TRANSCRIPTION_FAILED_TEXT instead (bot/services/transcription_service.py).
+        logging.error(
+            "No transcription content to save: %s of %s parts failed", failed_parts, total_parts
+        )
+        _remove_temp_dir(rmtree_fn, temp_dir)
+        return None
 
     if get_claude_api_key_fn():
         if is_text_too_long_for_correction_fn(combined_text):
@@ -183,9 +188,14 @@ def transcribe_mp3_file(
 
     logging.info("All transcriptions combined and saved to %s", transcript_md_path)
 
+    _remove_temp_dir(rmtree_fn, temp_dir)
+    return transcript_md_path
+
+
+def _remove_temp_dir(rmtree_fn, temp_dir):
+    """Remove the chunk directory; a leftover is only disk clutter, so just log."""
+
     try:
         rmtree_fn(temp_dir)
     except Exception as e:
         logging.error("Error removing temporary directory: %s", e)
-
-    return transcript_md_path

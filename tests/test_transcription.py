@@ -102,8 +102,10 @@ def test_transcribe_audio_non_200_error(monkeypatch, tmp_path):
     file_path = tmp_path / "audio.mp3"
     file_path.write_bytes(b"x" * (10 * 1024))
 
+    # A non-retryable status; 5xx retries with backoff are covered in
+    # tests/test_transcription_providers.py where the sleep can be injected.
     class Resp:
-        status_code = 500
+        status_code = 400
         text = "error"
 
     monkeypatch.setattr(tr.requests, "post", lambda *args, **kwargs: Resp())
@@ -174,7 +176,7 @@ def test_transcribe_mp3_file_success_with_postprocessing(monkeypatch, tmp_path):
     assert calls[0][0] == "audio_part1.mp3"
 
 
-def test_transcribe_mp3_file_error_creates_error_report(monkeypatch, tmp_path):
+def test_transcribe_mp3_file_returns_none_when_nothing_was_transcribed(monkeypatch, tmp_path):
     source = tmp_path / "audio.mp3"
     source.write_bytes(b"x" * 1024)
 
@@ -188,8 +190,8 @@ def test_transcribe_mp3_file_error_creates_error_report(monkeypatch, tmp_path):
 
     result = tr.transcribe_mp3_file(str(source), str(tmp_path))
 
-    text = Path(result).read_text(encoding="utf-8")
-    assert "brak transkrypcji tego fragmentu" in text
+    # A placeholder-only file used to be returned and shown as a transcript.
+    assert result is None
 
 
 def test_post_process_transcript(monkeypatch):

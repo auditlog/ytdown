@@ -30,3 +30,20 @@ def test_expired_archive_sessions_share_one_text():
         source = (BOT_DIR / name).read_text(encoding="utf-8")
         assert '"Sesja wygasła."' not in source
         assert source.count("Paczki wygasły") <= 1  # only the constant definition
+
+
+def test_transcription_failures_share_one_concrete_text():
+    from bot.services.transcription_service import TRANSCRIPTION_FAILED_TEXT
+
+    # The pipeline returns None when nothing was transcribed; this text is the
+    # only explanation the user gets, so it names causes and a next step.
+    assert TRANSCRIPTION_FAILED_TEXT.startswith("Nie udało się przepisać nagrania.")
+    assert "Spróbuj ponownie" in TRANSCRIPTION_FAILED_TEXT
+    for name in (
+        "handlers/download_callbacks.py",
+        "handlers/spotify_callbacks.py",
+        "handlers/transcription_callbacks.py",
+    ):
+        source = (BOT_DIR / name).read_text(encoding="utf-8")
+        assert '"Wystąpił błąd podczas transkrypcji."' not in source
+        assert "TRANSCRIPTION_FAILED_TEXT" in source

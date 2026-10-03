@@ -20,6 +20,14 @@ SUMMARY_DURATION_LIMIT_MIN = 840
 CLAUDE_API_MAX_RETRIES = 3
 CLAUDE_API_RETRY_BASE_DELAY = 10
 
+# Retry settings for Groq transcription calls. Retry-After can ask for minutes
+# once an hourly audio quota is used up; waiting longer than the cap would
+# stall the whole transcription, so such a part fails and is marked instead.
+GROQ_API_MAX_RETRIES = 3
+GROQ_API_RETRY_BASE_DELAY = 5
+GROQ_RETRY_AFTER_MAX_SEC = 60
+GROQ_RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+
 
 def estimate_token_count(text: str) -> int:
     """Estimate token count using a rough 4 chars/token heuristic."""

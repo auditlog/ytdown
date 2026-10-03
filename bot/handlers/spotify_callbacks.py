@@ -36,6 +36,7 @@ from bot.services.transcription_service import (
     MISSING_CLAUDE_KEY_TEXT,
     MISSING_GROQ_KEY_TEXT,
     SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
+    TRANSCRIPTION_FAILED_TEXT,
     cleanup_transcription_artifacts,
     generate_summary_artifact,
     load_transcript_result,
@@ -633,7 +634,7 @@ async def transcribe_spotify_video(
                 status_callback=update_status,
             )
             if not transcript_path or not os.path.exists(transcript_path):
-                await update_status("Wystąpił błąd podczas transkrypcji.")
+                await update_status(TRANSCRIPTION_FAILED_TEXT)
                 return
 
         transcript_result = load_transcript_result(transcript_path)
@@ -736,7 +737,7 @@ async def _handle_transcription(
         status_callback=update_status,
     )
     if not transcript_path or not os.path.exists(transcript_path):
-        await update_status("Wystąpił błąd podczas transkrypcji.")
+        await update_status(TRANSCRIPTION_FAILED_TEXT)
         return False
 
     transcript_result = load_transcript_result(transcript_path)

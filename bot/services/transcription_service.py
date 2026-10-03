@@ -73,6 +73,13 @@ MISSING_CLAUDE_KEY_ADMIN_TEXT = (
     "Funkcja niedostępna — brak klucza API Claude. "
     "Skontaktuj się z administratorem."
 )
+# Shown when the pipeline returns None (no part could be transcribed or the
+# audio could not be cut into parts). See also: bot/transcription_pipeline.py.
+TRANSCRIPTION_FAILED_TEXT = (
+    "Nie udało się przepisać nagrania. Najczęstsze przyczyny: chwilowa awaria "
+    "lub limit usługi rozpoznawania mowy, uszkodzony plik albo brak wyraźnej mowy "
+    "w nagraniu. Spróbuj ponownie za kilka minut."
+)
 SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT = (
     "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
     "Wysyłam samą transkrypcję."

@@ -14,6 +14,10 @@ from bot.transcription_limits import (
     CLAUDE_API_RETRY_BASE_DELAY,
     CLAUDE_MAX_OUTPUT_TOKENS,
     CUSTOM_ANALYSIS_MAX_OUTPUT_TOKENS,
+    GROQ_API_MAX_RETRIES,
+    GROQ_API_RETRY_BASE_DELAY,
+    GROQ_RETRY_AFTER_MAX_SEC,
+    GROQ_RETRYABLE_STATUS_CODES,
     POST_PROCESS_MAX_INPUT_TOKENS,
     SUMMARY_MAX_INPUT_TOKENS,
     estimate_token_count,
@@ -33,8 +37,31 @@ def get_claude_api_key(*, config_getter=get_runtime_value):
     return config_getter("CLAUDE_API_KEY", "")
 
 
-def transcribe_audio(file_path, api_key, language=None, prompt=None, *, requests_module=requests):
-    """Transcribe audio file with Groq Whisper."""
+def _groq_retry_delay(response, default_delay):
+    """Return the wait before the next Groq attempt, honouring a capped Retry-After."""
+
+    headers = getattr(response, "headers", None) or {}
+    try:
+        delay = float(headers.get("Retry-After"))
+    except (TypeError, ValueError):
+        delay = default_delay
+    return min(max(delay, 0.0), GROQ_RETRY_AFTER_MAX_SEC)
+
+
+def transcribe_audio(
+    file_path,
+    api_key,
+    language=None,
+    prompt=None,
+    *,
+    requests_module=requests,
+    sleep_fn=time.sleep,
+):
+    """Transcribe audio file with Groq Whisper.
+
+    Rate limits, server errors and network failures are retried with backoff;
+    other errors (e.g. a rejected API key) fail at once. Returns "" on failure.
+    """
 
     if not os.path.exists(file_path):
         logging.error("File does not exist: %s", file_path)
@@ -51,18 +78,33 @@ def transcribe_audio(file_path, api_key, language=None, prompt=None, *, requests
 
     try:
         with open(file_path, "rb") as audio_file:
-            filename = os.path.basename(file_path)
-            if not filename.lower().endswith('.mp3'):
-                filename = filename.rsplit('.', 1)[0] + '.mp3'
+            audio_bytes = audio_file.read()
+    except OSError as e:
+        logging.error("Error reading audio for transcription: %s", e)
+        return ""
 
-            files = {"file": (filename, audio_file.read(), "audio/mpeg")}
-            data = {"model": "whisper-large-v3-turbo", "response_format": "text"}
-            if language:
-                data["language"] = language
-            if prompt:
-                data["prompt"] = prompt
+    filename = os.path.basename(file_path)
+    if not filename.lower().endswith('.mp3'):
+        filename = filename.rsplit('.', 1)[0] + '.mp3'
+    data = {"model": "whisper-large-v3-turbo", "response_format": "text"}
+    if language:
+        data["language"] = language
+    if prompt:
+        data["prompt"] = prompt
 
+    for attempt in range(1, GROQ_API_MAX_RETRIES + 1):
+        delay = GROQ_API_RETRY_BASE_DELAY * (2 ** (attempt - 1))
+        try:
+            files = {"file": (filename, audio_bytes, "audio/mpeg")}
             response = requests_module.post(url, headers=headers, files=files, data=data, timeout=300)
+        except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as e:
+            logging.warning(
+                "Groq transcription attempt %s/%s failed: %s", attempt, GROQ_API_MAX_RETRIES, e
+            )
+        except Exception as e:
+            logging.error("Error during transcription: %s", e)
+            return ""
+        else:
             if response.status_code == 200:
                 result = response.text.strip()
                 if result:
@@ -71,12 +113,22 @@ def transcribe_audio(file_path, api_key, language=None, prompt=None, *, requests
                 logging.warning("API returned empty transcription")
                 return ""
 
-            logging.error("Groq API error: %s", response.status_code)
-            logging.error("Response: %s", response.text[:500])
-            return ""
-    except Exception as e:
-        logging.error("Error during transcription: %s", e)
-        return ""
+            if response.status_code not in GROQ_RETRYABLE_STATUS_CODES:
+                logging.error("Groq API error: %s", response.status_code)
+                logging.error("Response: %s", response.text[:500])
+                return ""
+
+            logging.warning(
+                "Groq transcription attempt %s/%s failed with status %s",
+                attempt, GROQ_API_MAX_RETRIES, response.status_code,
+            )
+            delay = _groq_retry_delay(response, delay)
+
+        if attempt < GROQ_API_MAX_RETRIES:
+            sleep_fn(delay)
+
+    logging.error("Groq transcription failed after %s attempts", GROQ_API_MAX_RETRIES)
+    return ""
 
 
 def _extract_claude_text(result: dict) -> str:

@@ -33,6 +33,7 @@ from bot.services.transcription_service import (
     generate_summary_artifact,
     MISSING_CLAUDE_KEY_TEXT,
     SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
+    TRANSCRIPTION_FAILED_TEXT,
     load_transcript_result,
     missing_transcription_key_message,
     run_transcription_with_progress,
@@ -125,7 +126,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
     if not transcript_path or not os.path.exists(transcript_path):
-        await update_status("Wystąpił błąd podczas transkrypcji.")
+        await update_status(TRANSCRIPTION_FAILED_TEXT)
         return
 
     if summary:

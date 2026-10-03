@@ -83,6 +83,7 @@ from bot.services.transcription_service import (
     cleanup_transcription_artifacts,
     generate_summary_artifact,
     SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
+    TRANSCRIPTION_FAILED_TEXT,
     load_transcript_result,
     missing_transcription_key_message,
     run_transcription_with_progress,
@@ -486,7 +487,7 @@ async def download_file(
                     return
 
                 if not transcript_path or not os.path.exists(transcript_path):
-                    await finish_status("Wystąpił błąd podczas transkrypcji.")
+                    await finish_status(TRANSCRIPTION_FAILED_TEXT)
                     return
 
                 transcript_result = load_transcript_result(transcript_path)

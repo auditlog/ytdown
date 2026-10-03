@@ -10,6 +10,7 @@ from bot.downloader_validation import sanitize_filename
 from bot.handlers import audio_delivery
 from bot.handlers import spotify_callbacks as sc
 from bot.services.spotify_video_service import get_video_error_message
+from bot.services.transcription_service import TRANSCRIPTION_FAILED_TEXT
 from bot.spotify_video import SpotifyVideoCancelled, SpotifyVideoError
 from tests.telegram_callbacks_support import _attach_runtime, _make_context, _make_update
 
@@ -1910,7 +1911,7 @@ def test_spotify_transcription_failure_is_not_overwritten_by_done(tmp_path, monk
 
     assert result is False
     messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
-    assert messages[-1] == "Wystąpił błąd podczas transkrypcji."
+    assert messages[-1] == TRANSCRIPTION_FAILED_TEXT
     assert not any(m.startswith("Gotowe") for m in messages)
 
 
