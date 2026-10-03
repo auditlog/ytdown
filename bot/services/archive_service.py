@@ -421,10 +421,16 @@ async def execute_playlist_archive_flow(
         dest_basename = workspace / compute_archive_basename(
             f"{slug}_{media_type}_{format_choice}", datetime.now()
         )
-        volumes = await pack_to_volumes(
-            downloaded, dest_basename, volume_size_mb,
-            cancellation=cancellation,
-        )
+        try:
+            volumes = await pack_to_volumes(
+                downloaded, dest_basename, volume_size_mb,
+                cancellation=cancellation,
+            )
+        except RuntimeError:
+            # A stop terminates 7z, which surfaces as an error; it is a stop.
+            if not cancellation.event.is_set():
+                raise
+            volumes = []
 
         if cancellation.event.is_set():
             # User cancelled during pack — pack_to_volumes already cleaned partials.
@@ -623,20 +629,25 @@ async def execute_partial_archive_flow(
             for index in range(0, len(state.downloaded), batch_size)
         ]
         volumes: list[Path] = []
-        for group_index, group in enumerate(groups):
-            group_dest = dest_basename
-            if len(groups) > 1:
-                start = group_index * batch_size + 1
-                end = start + len(group) - 1
-                group_dest = Path(f"{dest_basename}_{start:03d}-{end:03d}")
-            volumes.extend(
-                await pack_to_volumes(
-                    group,
-                    group_dest,
-                    volume_size_mb,
-                    cancellation=cancellation,
+        try:
+            for group_index, group in enumerate(groups):
+                group_dest = dest_basename
+                if len(groups) > 1:
+                    start = group_index * batch_size + 1
+                    end = start + len(group) - 1
+                    group_dest = Path(f"{dest_basename}_{start:03d}-{end:03d}")
+                volumes.extend(
+                    await pack_to_volumes(
+                        group,
+                        group_dest,
+                        volume_size_mb,
+                        cancellation=cancellation,
+                    )
                 )
-            )
+        except RuntimeError:
+            # A stop terminates 7z, which surfaces as an error; it is a stop.
+            if not cancellation.event.is_set():
+                raise
 
         if cancellation.event.is_set():
             await finish_status("⏹ Zatrzymano w trakcie pakowania.")

@@ -128,6 +128,11 @@ async def pack_to_volumes(
             raise RuntimeError("cancelled")
 
         stdout, stderr = await process.communicate()
+        # Without progress_cb the whole 7z run happens inside communicate(), so
+        # a /stop that terminates 7z there shows up only now, as a non-zero exit.
+        if cancellation is not None and cancellation.event.is_set():
+            _remove_partial_volumes(dest_basename)
+            raise RuntimeError("cancelled")
         if process.returncode != 0:
             err = stderr.decode("utf-8", errors="replace")[:200]
             raise RuntimeError(f"7z failed (exit {process.returncode}): {err}")

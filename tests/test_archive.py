@@ -319,3 +319,36 @@ def test_pack_to_volumes_cleans_partial_volumes_on_cancel(tmp_path):
     # Partial volumes must be cleaned up.
     assert not (tmp_path / "playlist.7z.001").exists()
     assert not (tmp_path / "playlist.7z.002").exists()
+
+
+def test_pack_to_volumes_reports_a_stop_during_packing_as_cancelled(tmp_path):
+    from bot import archive
+    from bot.jobs import JobCancellation
+    import asyncio
+
+    src = tmp_path / "a.bin"
+    src.write_bytes(b"x")
+    dest = tmp_path / "playlist"
+    cancellation = JobCancellation(job_id="t", event=asyncio.Event())
+
+    async def stopped_mid_run():
+        # /stop sets the flag and terminates 7z while communicate() waits;
+        # the killed process exits with -15 and leaves partial volumes.
+        (tmp_path / "playlist.7z.001").write_bytes(b"a")
+        cancellation.event.set()
+        fake_proc.returncode = -15
+        return b"", b""
+
+    fake_proc = mock.MagicMock()
+    fake_proc.communicate = stopped_mid_run
+    fake_proc.returncode = None
+    fake_proc.wait = mock.AsyncMock(return_value=-15)
+
+    async def fake_exec(*args, **kwargs):
+        return fake_proc
+
+    with mock.patch("bot.archive.asyncio.create_subprocess_exec", side_effect=fake_exec):
+        with pytest.raises(RuntimeError, match="^cancelled$"):
+            asyncio.run(archive.pack_to_volumes([src], dest, volume_size_mb=1, cancellation=cancellation))
+
+    assert not (tmp_path / "playlist.7z.001").exists()

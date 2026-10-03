@@ -979,3 +979,72 @@ def test_partial_archive_summary_says_stopped_when_sending_was_stopped(tmp_path,
     assert summary.startswith("⏹ Wysyłka zatrzymana.")
     assert "Wysłano: 1/2" in summary
     session_store.reset()
+
+
+def _pack_killed_by_stop():
+    async def fake_pack(sources, dest_basename, volume_size_mb, *, cancellation, **_kwargs):
+        cancellation.event.set()  # /stop terminated 7z
+        raise RuntimeError("7z failed (exit -15): ")
+    return fake_pack
+
+
+def test_playlist_archive_stop_during_packing_offers_the_partial_archive(tmp_path, monkeypatch):
+    import asyncio
+    from bot.jobs import JobRegistry
+    from bot.services import archive_service
+    from bot.session_store import session_store
+
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(archive_service, "is_7z_available", lambda: True)
+    monkeypatch.setattr(archive_service, "job_registry", JobRegistry())
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: None)
+
+    async def fake_download_into(workspace, entries, **_kwargs):
+        p1 = workspace / "a.mp3"; p1.write_bytes(b"x")
+        return [p1], []
+
+    monkeypatch.setattr(archive_service, "download_playlist_into", fake_download_into)
+    monkeypatch.setattr(archive_service, "pack_to_volumes", _pack_killed_by_stop())
+    save_partial = mock.AsyncMock()
+    monkeypatch.setattr(archive_service, "save_partial_archive_after_cancel", save_partial)
+    update = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+
+    asyncio.run(archive_service.execute_playlist_archive_flow(
+        update, mock.MagicMock(), chat_id=99,
+        playlist={"title": "Hits", "entries": [{"url": "u1", "title": "a"}]},
+        media_type="audio", format_choice="mp3", executor=mock.MagicMock(),
+    ))
+
+    save_partial.assert_awaited_once()
+    texts = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert not any("nie powiodły się" in text for text in texts)
+    session_store.reset()
+
+
+def test_partial_archive_stop_during_packing_says_stopped(tmp_path, monkeypatch):
+    import asyncio
+    from datetime import datetime
+    from bot.services import archive_service
+    from bot.session_store import ArchivePartialState, partial_archive_workspaces, session_store
+
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(archive_service, "is_7z_available", lambda: True)
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: "n/a")
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    p1 = workspace / "a.mp3"; p1.write_bytes(b"x")
+    partial_archive_workspaces[44] = {"tok": ArchivePartialState(
+        workspace=workspace, downloaded=[p1], title="Hits", media_type="audio",
+        format_choice="mp3", use_mtproto=False, created_at=datetime(2026, 5, 3),
+    )}
+    monkeypatch.setattr(archive_service, "pack_to_volumes", _pack_killed_by_stop())
+    update = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+
+    asyncio.run(archive_service.execute_partial_archive_flow(update, mock.MagicMock(), chat_id=44, token="tok"))
+
+    assert update.callback_query.edit_message_text.await_args.args[0] == "⏹ Zatrzymano w trakcie pakowania."
+    session_store.reset()

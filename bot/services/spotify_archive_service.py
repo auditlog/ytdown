@@ -466,14 +466,21 @@ async def execute_spotify_collection_archive_flow(
                 f"części po {volume_size_mb} MB)...",
                 reply_markup=progress_stop_markup(cancellation),
             )
-            packed_volumes.extend(
-                await pack_to_volumes(
-                    group,
-                    workspace / group_name,
-                    volume_size_mb,
-                    cancellation=cancellation,
+            try:
+                packed_volumes.extend(
+                    await pack_to_volumes(
+                        group,
+                        workspace / group_name,
+                        volume_size_mb,
+                        cancellation=cancellation,
+                    )
                 )
-            )
+            except RuntimeError:
+                # A stop terminates 7z, which surfaces as an error; it is a stop.
+                if not cancellation.event.is_set():
+                    raise
+                cancelled = True
+                break
 
         if cancellation.event.is_set() or cancelled:
             for volume in packed_volumes:
