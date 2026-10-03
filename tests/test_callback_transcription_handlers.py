@@ -2102,3 +2102,46 @@ def test_spotify_summary_without_claude_key_names_no_variable(monkeypatch):
     )
     assert statuses == [notice]
     assert "CLAUDE_API_KEY" not in notice
+
+
+def test_upload_transcription_failure_shows_the_concrete_failure_text(tmp_path, monkeypatch):
+    from bot.handlers import transcription_callbacks as tcb
+
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"fake mp3 content")
+    update = _make_update("audio_transcribe", chat_id=777)
+    context = _make_context()
+    context.user_data["audio_file_path"] = str(audio_file)
+    monkeypatch.setattr(tcb, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(tcb, "missing_transcription_key_message", lambda *a, **k: None)
+    # The pipeline returns None when no part could be transcribed.
+    monkeypatch.setattr(tcb, "run_transcription_with_progress", AsyncMock(return_value=None))
+
+    asyncio.run(tcb.transcribe_audio_file(update, context))
+
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages[-1] == TRANSCRIPTION_FAILED_TEXT
+
+
+def test_spotify_video_transcription_failure_shows_the_concrete_failure_text(monkeypatch, tmp_path):
+    audio_file = tmp_path / "episode.m4a"
+    audio_file.write_bytes(b"fake-audio-bytes")
+
+    async def fake_download_episode_media(*, episode, height, output_dir, executor, **kw):
+        return str(audio_file)
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **_kw: None)
+    monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
+    # The pipeline returns None when no part could be transcribed.
+    monkeypatch.setattr(sc, "run_transcription_with_progress", AsyncMock(return_value=None))
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    session = _spotify_video_session()
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages[-1] == TRANSCRIPTION_FAILED_TEXT
+    context.bot.send_document.assert_not_awaited()

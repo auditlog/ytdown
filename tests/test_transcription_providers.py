@@ -364,3 +364,36 @@ def test_post_process_transcript_returns_none_on_connection_error(monkeypatch):
 
     assert result is None
     assert calls["attempts"] == 3
+
+
+def test_transcribe_audio_retries_a_dropped_connection(monkeypatch, tmp_path):
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"x" * 100)
+    outcomes = [real_requests.exceptions.ConnectionError("reset"), _GroqResp(200, "after reconnect")]
+
+    def fake_post(*_a, **_k):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(providers.requests, "post", fake_post)
+    sleeps = []
+
+    result = providers.transcribe_audio(
+        str(audio_file), "groq-key", requests_module=providers.requests, sleep_fn=sleeps.append,
+    )
+
+    assert result == "after reconnect"
+    assert sleeps == [providers.GROQ_API_RETRY_BASE_DELAY]
+
+
+def test_transcribe_audio_falls_back_to_backoff_for_a_date_retry_after(monkeypatch, tmp_path):
+    # Retry-After may also be an HTTP date; only the seconds form is parsed.
+    result, _calls, sleeps = _transcribe_with_responses(monkeypatch, tmp_path, [
+        _GroqResp(503, "busy", headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}),
+        _GroqResp(200, "ok"),
+    ])
+
+    assert result == "ok"
+    assert sleeps == [providers.GROQ_API_RETRY_BASE_DELAY]

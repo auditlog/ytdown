@@ -356,3 +356,16 @@ def test_split_mp3_cuts_non_mp3_audio_into_playable_mp3_parts(tmp_path):
     assert all(part.endswith(".mp3") for part in parts)
     total_seconds = sum(MP3(part).info.length for part in parts)
     assert total_seconds == pytest.approx(20, abs=1.5)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_split_mp3_returns_no_parts_when_non_mp3_audio_cannot_be_converted(tmp_path):
+    # The pipeline turns an empty part list into a reported failure.
+    source = tmp_path / "broken.m4a"
+    source.write_bytes(b"not audio at all" * 4096)
+    parts_dir = tmp_path / "parts"
+    parts_dir.mkdir()
+
+    parts = split_mp3(str(source), str(parts_dir), max_size_mb=0.01)
+
+    assert parts == []

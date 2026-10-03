@@ -917,3 +917,21 @@ def test_plain_audio_download_ignores_missing_api_keys(tmp_path, monkeypatch):
 
     sender.assert_awaited_once()
     assert update.callback_query.edit_message_text.await_args.args[0].startswith("Plik został wysłany!")
+
+
+def test_link_transcription_failure_shows_the_concrete_failure_text(tmp_path, monkeypatch):
+    from bot.jobs import JobRegistry
+    from bot.services.transcription_service import TRANSCRIPTION_FAILED_TEXT
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "job_registry", JobRegistry())
+    monkeypatch.setattr(dc, "missing_transcription_key_message", lambda *a, **k: None)
+    # The pipeline returns None when no part could be transcribed.
+    monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=None))
+    update, context = _make_update("transcribe"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/", transcribe=True,
+    ))
+
+    assert update.callback_query.edit_message_text.await_args.args[0] == TRANSCRIPTION_FAILED_TEXT
