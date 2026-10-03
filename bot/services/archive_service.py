@@ -250,8 +250,11 @@ async def send_volumes(
     start_index: int = 0,
     status_cb: Callable[[str], Awaitable[None]] | None = None,
     cancellation: "JobCancellation | None" = None,
-) -> None:
+) -> int:
     """Send 7z volumes [start_index:] to ``chat_id`` as documents.
+
+    Returns how many volumes this call actually sent, so callers can report
+    the real count after a stop instead of the number of packed volumes.
 
     Volumes ≤ TELEGRAM_UPLOAD_LIMIT_MB go via Bot API (``bot.send_document``);
     larger ones go via MTProto. Caption per volume is
@@ -261,7 +264,7 @@ async def send_volumes(
     ``use_mtproto`` is informational for higher layers — the per-volume
     transport decision is based solely on volume size vs TELEGRAM_UPLOAD_LIMIT_MB.
 
-    When cancellation.event is set the loop breaks before the next volume.
+    When cancellation.event is set the loop stops before the next volume.
 
     Raises:
         RuntimeError: when a volume needs MTProto but it is unavailable, or
@@ -269,9 +272,10 @@ async def send_volumes(
     """
 
     total = len(volumes)
+    sent = 0
     for idx in range(start_index, total):
         if cancellation is not None and cancellation.event.is_set():
-            return
+            return sent
         volume = volumes[idx]
         size_mb = volume.stat().st_size / (1024 * 1024)
         caption = f"{caption_prefix} [{idx + 1}/{total}]"
@@ -305,6 +309,8 @@ async def send_volumes(
                 raise RuntimeError(f"Wysyłka {volume.name} przez MTProto nie powiodła się.")
 
         logging.info("Sent volume %d/%d: %s (%.1f MB)", idx + 1, total, volume.name, size_mb)
+        sent += 1
+    return sent
 
 
 async def _safe_status_edit(update, text: str, reply_markup=None) -> None:
@@ -434,7 +440,7 @@ async def execute_playlist_archive_flow(
             f"Playlist 7z ({media_type} {format_choice}) — wysyłka [0/{len(volumes)}]",
         )
         await status(f"Spakowano: {_volumes_phrase(len(volumes))}. Wysyłam…")
-        await send_volumes(
+        sent_count = await send_volumes(
             context.bot,
             chat_id=chat_id,
             volumes=volumes,
@@ -461,7 +467,7 @@ async def execute_playlist_archive_flow(
             f" → {_volumes_phrase(len(volumes))} 7z",
         ]
         if was_cancelled_in_send:
-            summary_lines.append(f"Wysłano: <{len(volumes)} (zatrzymano)")
+            summary_lines.append(f"Wysłano: {sent_count}/{len(volumes)} (zatrzymano)")
         else:
             summary_lines.append(f"Wysłano: {len(volumes)}/{len(volumes)}")
         summary_lines.append(
@@ -642,7 +648,7 @@ async def execute_partial_archive_flow(
             f"Wysyłka częściowej playlisty [0/{len(volumes)}]",
         )
         await status(f"Spakowano: {_volumes_phrase(len(volumes))}. Wysyłam…")
-        await send_volumes(
+        sent_count = await send_volumes(
             context.bot, chat_id=chat_id, volumes=volumes,
             caption_prefix=caption_prefix, use_mtproto=use_mtproto,
             status_cb=status, cancellation=cancellation,
@@ -665,11 +671,14 @@ async def execute_partial_archive_flow(
                 callback_data=f"arc_purge_{delivery_token}",
             )],
         ])
-        await update.callback_query.edit_message_text(
-            f"Częściowa playlista wysłana w {_volumes_locative(len(volumes))}.\n\n"
-            f"{ARCHIVE_UNPACK_HINT}",
-            reply_markup=keyboard,
-        )
+        if cancellation.event.is_set():
+            summary_text = f"⏹ Wysyłka zatrzymana.\nWysłano: {sent_count}/{len(volumes)}"
+        else:
+            summary_text = (
+                f"Częściowa playlista wysłana w {_volumes_locative(len(volumes))}.\n\n"
+                f"{ARCHIVE_UNPACK_HINT}"
+            )
+        await update.callback_query.edit_message_text(summary_text, reply_markup=keyboard)
     except Exception as exc:
         logging.error("Partial archive flow failed: %s", exc)
         await finish_status(f"Pakowanie/wysyłka nie powiodły się: {exc}")

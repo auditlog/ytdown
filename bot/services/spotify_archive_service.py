@@ -511,7 +511,7 @@ async def execute_spotify_collection_archive_flow(
             f"{polish_plural(len(packed_volumes), 'część', 'części', 'części')} do wysłania.",
             reply_markup=progress_stop_markup(cancellation),
         )
-        await send_volumes(
+        sent_count = await send_volumes(
             context.bot,
             chat_id=chat_id,
             volumes=packed_volumes,
@@ -551,7 +551,11 @@ async def execute_spotify_collection_archive_flow(
             "⏹ Wysyłka zatrzymana." if cancelled else "Spotify: archiwa gotowe.",
             f"Pobrano: {len(downloaded)}/{len(selected)} utworów",
             f"Spakowano: {_archives_phrase(archive_count)} 7z",
-            f"Części wysłane do Telegrama: {len(packed_volumes)}",
+            (
+                f"Części wysłane do Telegrama: {sent_count} z {len(packed_volumes)}"
+                if cancelled
+                else f"Części wysłane do Telegrama: {len(packed_volumes)}"
+            ),
             f"Rozmiar grupy: {batch_label}",
             "Każde archiwum ma własną numerację części, od .7z.001.",
             f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
