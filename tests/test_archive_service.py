@@ -1048,3 +1048,43 @@ def test_partial_archive_stop_during_packing_says_stopped(tmp_path, monkeypatch)
 
     assert update.callback_query.edit_message_text.await_args.args[0] == "⏹ Zatrzymano w trakcie pakowania."
     session_store.reset()
+
+
+def test_playlist_archive_packing_failure_without_a_stop_is_still_reported(tmp_path, monkeypatch):
+    import asyncio
+    from bot.jobs import JobRegistry
+    from bot.services import archive_service
+    from bot.session_store import session_store
+
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(archive_service, "is_7z_available", lambda: True)
+    monkeypatch.setattr(archive_service, "job_registry", JobRegistry())
+    monkeypatch.setattr(archive_service, "mtproto_unavailability_reason", lambda: None)
+
+    async def fake_download_into(workspace, entries, **_kwargs):
+        p1 = workspace / "a.mp3"; p1.write_bytes(b"x")
+        return [p1], []
+
+    async def broken_pack(*_args, **_kwargs):
+        raise RuntimeError("7z failed (exit 2): disk error")
+
+    monkeypatch.setattr(archive_service, "download_playlist_into", fake_download_into)
+    monkeypatch.setattr(archive_service, "pack_to_volumes", broken_pack)
+    save_partial = mock.AsyncMock()
+    monkeypatch.setattr(archive_service, "save_partial_archive_after_cancel", save_partial)
+    update = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+
+    asyncio.run(archive_service.execute_playlist_archive_flow(
+        update, mock.MagicMock(), chat_id=99,
+        playlist={"title": "Hits", "entries": [{"url": "u1", "title": "a"}]},
+        media_type="audio", format_choice="mp3", executor=mock.MagicMock(),
+    ))
+
+    # Only a packing error under a set stop flag is a stop; a real 7z failure
+    # must still be reported as one.
+    save_partial.assert_not_awaited()
+    final = update.callback_query.edit_message_text.await_args.args[0]
+    assert final.startswith("Pakowanie/wysyłka nie powiodły się: 7z failed (exit 2)")
+    session_store.reset()
