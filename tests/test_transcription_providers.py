@@ -50,6 +50,30 @@ def test_post_process_transcript_extracts_text_blocks(monkeypatch):
     assert result == "fixed"
 
 
+def test_post_process_transcript_keeps_raw_text_when_reply_hits_max_tokens(monkeypatch):
+    # A reply cut off at max_tokens is missing the end of the transcript;
+    # returning it would silently replace the full raw text with a shorter one.
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "first half of the corrected text"}],
+                "stop_reason": "max_tokens",
+            }
+
+    monkeypatch.setattr(providers.requests, "post", lambda *_args, **_kwargs: Resp())
+
+    result = providers.post_process_transcript(
+        "first half of the raw text and the second half",
+        api_key="key",
+        requests_module=providers.requests,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert result is None
+
+
 def test_post_process_transcript_returns_none_without_api_key():
     result = providers.post_process_transcript("text", api_key=None)
     assert result is None

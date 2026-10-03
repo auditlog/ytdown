@@ -144,7 +144,17 @@ def post_process_transcript(
         try:
             response = requests_module.post(url, headers=headers, json=data, timeout=dynamic_timeout)
             if response.status_code == 200:
-                corrected = _extract_claude_text(response.json())
+                result = response.json()
+                # max_tokens comes from a len/4 estimate that undercounts many
+                # languages; a reply cut off there lacks the end of the
+                # transcript and must not replace the full raw text.
+                if result.get("stop_reason") == "max_tokens":
+                    logging.warning(
+                        "Post-processing reply hit max_tokens (%s), using original text",
+                        dynamic_max_tokens,
+                    )
+                    return None
+                corrected = _extract_claude_text(result)
                 if corrected:
                     return corrected
                 logging.warning("Post-processing returned empty result, using original text")
