@@ -341,6 +341,7 @@ async def _download_and_send_ig_videos(
 
 STOPPED_TEXT = "⏹ Zatrzymano pobieranie."
 STOPPED_TRANSCRIPTION_TEXT = "⏹ Zatrzymano transkrypcję."
+STOPPED_SUMMARY_TEXT = "⏹ Zatrzymano. Podsumowanie i transkrypcja nie zostały wysłane."
 
 
 async def download_file(
@@ -467,6 +468,12 @@ async def download_file(
             downloaded_file_path = download_result.file_path
             file_size_mb = download_result.file_size_mb
 
+            # yt-dlp's ffmpeg post-processing (merge, audio extraction) runs no
+            # progress hooks, so a stop pressed then only shows up here.
+            if cancellation.event.is_set():
+                await finish_status(stopped_text)
+                return
+
             if transcribe:
                 await update_status(
                     f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\n"
@@ -519,7 +526,8 @@ async def download_file(
                         )
                         return
 
-                    await finish_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
+                    # Still part of the stoppable job, so keep the stop button.
+                    await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
                     try:
                         summary_result = await generate_summary_artifact(
                             transcript_text=transcript_text,
@@ -532,6 +540,9 @@ async def download_file(
                     except Exception as exc:
                         logging.error("Summary generation failed: %s", exc)
                         summary_result = None
+                    if cancellation.event.is_set():
+                        await finish_status(STOPPED_SUMMARY_TEXT)
+                        return
                     if not summary_result:
                         # Never lose the finished transcript because the summary failed.
                         await finish_status(SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT)

@@ -935,3 +935,80 @@ def test_link_transcription_failure_shows_the_concrete_failure_text(tmp_path, mo
     ))
 
     assert update.callback_query.edit_message_text.await_args.args[0] == TRANSCRIPTION_FAILED_TEXT
+
+
+def test_stop_during_post_processing_does_not_send_the_file(tmp_path, monkeypatch):
+    from bot.jobs import JobRegistry
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "job_registry", JobRegistry())
+    finished_download = dc.execute_download
+
+    async def download_then_stop(plan_obj, **kwargs):
+        result = await finished_download(plan_obj, **kwargs)
+        # yt-dlp's ffmpeg post-processing runs no progress hooks, so a stop
+        # pressed then is only visible once execute_download has returned.
+        kwargs["cancellation"].event.set()
+        return result
+
+    monkeypatch.setattr(dc, "execute_download", download_then_stop)
+    sender = mock.AsyncMock()
+    monkeypatch.setattr(dc, "send_audio_with_trim", sender)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    sender.assert_not_awaited()
+    context.bot.send_document.assert_not_awaited()
+    assert update.callback_query.edit_message_text.await_args.args[0] == dc.STOPPED_TEXT
+
+
+def _patch_summary_flow(monkeypatch, tmp_path, summary_fn):
+    from bot.jobs import JobRegistry
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    registry = JobRegistry()
+    monkeypatch.setattr(dc, "job_registry", registry)
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    transcript = tmp_path / "Song_transcript.md"
+    transcript.write_text("# Song\n\nTekst.\n", encoding="utf-8")
+    monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=str(transcript)))
+    monkeypatch.setattr(dc, "generate_summary_artifact", summary_fn(registry))
+    monkeypatch.setattr(dc, "send_long_message", mock.AsyncMock())
+    monkeypatch.setattr(dc, "offer_custom_transcript_prompt", mock.AsyncMock())
+    return dc
+
+
+def test_stop_during_summary_sends_neither_summary_nor_transcript(tmp_path, monkeypatch):
+    def summary_fn(registry):
+        async def stopped_while_summarising(**_kwargs):
+            for job in registry.list_for_chat(123):
+                await registry.cancel_async(job.job_id)
+            return mock.Mock(summary_text="Podsumowanie", summary_path=str(tmp_path / "s.md"))
+        return stopped_while_summarising
+
+    dc = _patch_summary_flow(monkeypatch, tmp_path, summary_fn)
+    update, context = _make_update("dl_audio_mp3", chat_id=123), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+
+    dc.send_long_message.assert_not_awaited()
+    context.bot.send_document.assert_not_awaited()
+    assert update.callback_query.edit_message_text.await_args.args[0] == dc.STOPPED_SUMMARY_TEXT
+
+
+def test_summary_progress_message_keeps_the_stop_button(tmp_path, monkeypatch):
+    dc = _patch_summary_flow(monkeypatch, tmp_path, lambda _registry: mock.AsyncMock(return_value=None))
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+
+    calls = update.callback_query.edit_message_text.await_args_list
+    summarising = [c for c in calls if "Generuję podsumowanie AI" in c.args[0]]
+    assert summarising and _markup_of(summarising[0]) is not None
