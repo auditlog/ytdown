@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Callable
 if TYPE_CHECKING:
     from bot.jobs import JobCancellation
 
+from bot.services.download_service import send_progress_update
 from bot.transcription_limits import is_text_too_long_for_summary
 from bot.transcription_pipeline import transcribe_mp3_file
 from bot.transcription_providers import (
@@ -138,7 +139,7 @@ async def run_transcription_with_progress(
     while not future.done():
         if current_status["text"] and current_status["text"] != last_status:
             last_status = current_status["text"]
-            await status_callback(current_status["text"])
+            await send_progress_update(status_callback, current_status["text"])
         await asyncio.sleep(2)
 
     return await future

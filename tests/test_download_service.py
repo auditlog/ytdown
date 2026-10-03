@@ -529,3 +529,70 @@ def test_execute_download_progress_hook_raises_on_cancel():
 
     # Base hook must not have been called after cancellation.
     assert base_called["n"] == 1
+
+
+def _progress_plan(tmp_path):
+    (tmp_path / "2026-03-21 Sample.mp3").write_text("media", encoding="utf-8")
+    return ds.DownloadPlan(
+        url="https://www.youtube.com/watch?v=abc", media_type="audio", format_choice="mp3",
+        transcribe=False, use_format_id=False, audio_quality="192",
+        info={"title": "Sample", "duration": 10}, title="Sample", duration=10,
+        duration_str="0:10", sanitized_title="Sample",
+        output_path=str(tmp_path / "2026-03-21 Sample"), chat_download_path=str(tmp_path),
+        ydl_opts={"format": "bestaudio/best"}, time_range=None,
+    )
+
+
+def _run_download_with_progress(monkeypatch, tmp_path, status_callback, seconds):
+    """Run execute_download while a fake yt-dlp keeps changing the progress."""
+
+    progress_state = {}
+    finished = {}
+
+    class ProgressingYoutubeDL:
+        def __init__(self, _opts):
+            pass
+
+        def download(self, _urls):
+            deadline = time.monotonic() + seconds
+            step = 0
+            while time.monotonic() < deadline:
+                step += 1
+                progress_state[123] = {"status": "downloading", "percent": f"{step}%"}
+                time.sleep(0.05)
+            finished["yt_dlp"] = True
+            return 0
+
+    monkeypatch.setattr(ds.yt_dlp, "YoutubeDL", ProgressingYoutubeDL)
+    result = asyncio.run(ds.execute_download(
+        _progress_plan(tmp_path), chat_id=123, executor=ThreadPoolExecutor(max_workers=1),
+        progress_hook_factory=lambda _cid: (lambda _d: None), progress_state=progress_state,
+        status_callback=status_callback, format_bytes=lambda b: f"{b}B", format_eta=lambda e: f"{e}s",
+    ))
+    return result, finished
+
+
+def test_execute_download_survives_a_failed_progress_edit(monkeypatch, tmp_path):
+    from telegram.error import RetryAfter
+
+    async def flood_controlled(_text):
+        # Telegram flood control, a deleted status message or a blocked bot
+        # must not abandon the download while yt-dlp keeps running.
+        raise RetryAfter(30)
+
+    result, finished = _run_download_with_progress(monkeypatch, tmp_path, flood_controlled, seconds=1.5)
+
+    assert finished.get("yt_dlp") is True
+    assert result.file_path.endswith("2026-03-21 Sample.mp3")
+
+
+def test_execute_download_edits_progress_at_most_every_few_seconds(monkeypatch, tmp_path):
+    edits = []
+
+    async def record(text):
+        edits.append(text)
+
+    _run_download_with_progress(monkeypatch, tmp_path, record, seconds=2.5)
+
+    # Per-second edits of one message run into Telegram's flood control.
+    assert len(edits) == 1
