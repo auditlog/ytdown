@@ -131,3 +131,31 @@ def test_full_playlist_keeps_download_all_labels():
     assert "Pobierz wszystkie — Audio MP3" in _labels(kb)
     assert "Pobiorę pozycje" not in msg
     assert not any(b.callback_data == "pl_more" for r in kb.inline_keyboard for b in r)
+
+
+def test_legacy_playlist_item_download_is_bounded_by_size_and_free_space(monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from bot.security_limits import MAX_FILE_SIZE_MB
+    from bot.services import playlist_service
+
+    captured = {}
+    monkeypatch.setattr(
+        playlist_service, "build_playlist_item_download_plan", lambda **_kwargs: SimpleNamespace(url="u")
+    )
+    # An unknown size estimate used to skip every limit for the item.
+    monkeypatch.setattr(playlist_service, "estimate_download_size", lambda _plan: None)
+
+    async def fake_execute_download(_plan, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(file_path="item.mp3", file_size_mb=1.0)
+
+    monkeypatch.setattr(playlist_service, "execute_download", fake_execute_download)
+
+    asyncio.run(playlist_service.download_playlist_item(
+        chat_id=1, url="u", title="t", media_type="audio", format_choice="mp3", executor=None,
+    ))
+
+    # max_file_bytes turns on DownloadBudget: byte cap plus the free-disk guard.
+    assert captured["max_file_bytes"] == MAX_FILE_SIZE_MB * 1024**2

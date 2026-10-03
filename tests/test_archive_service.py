@@ -836,3 +836,30 @@ def test_user_facing_archive_texts_have_no_jargon():
             ):
                 offenders.append(f"{path.name}: {line.strip()}")
     assert not offenders, offenders
+
+
+def test_archive_playlist_item_download_is_bounded_by_size_and_free_space(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB
+    from bot.services import archive_service
+
+    captured = {}
+    monkeypatch.setattr(archive_service, "prepare_download_plan", lambda **_kwargs: SimpleNamespace(url="u"))
+    # An unknown size estimate used to skip every limit for the item.
+    monkeypatch.setattr(archive_service, "estimate_download_size", lambda _plan: None)
+
+    async def fake_execute_download(_plan, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(file_path=str(tmp_path / "item.mp3"), file_size_mb=1.0)
+
+    monkeypatch.setattr(archive_service, "execute_download", fake_execute_download)
+
+    asyncio.run(archive_service._download_one_into_workspace(
+        {"url": "u", "title": "t"}, tmp_path,
+        media_type="audio", format_choice="mp3", executor=None,
+    ))
+
+    # max_file_bytes turns on DownloadBudget: byte cap plus the free-disk guard.
+    assert captured["max_file_bytes"] == MAX_ARCHIVE_ITEM_SIZE_MB * 1024**2

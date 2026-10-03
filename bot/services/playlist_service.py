@@ -11,7 +11,7 @@ from telegram.helpers import escape_markdown
 
 from bot.config import DOWNLOAD_PATH
 from bot.downloader_playlist import get_playlist_info, strip_playlist_params
-from bot.security_limits import MAX_PLAYLIST_ITEMS_EXPANDED
+from bot.security_limits import MAX_FILE_SIZE_MB, MAX_PLAYLIST_ITEMS_EXPANDED
 from bot.services.download_service import (
     DownloadResult,
     ensure_size_within_limit,
@@ -191,6 +191,9 @@ async def download_playlist_item(
         status_callback=_noop_status_update,
         format_bytes=lambda value: str(value),
         format_eta=lambda value: str(value),
+        # Enforced while downloading, so items whose size could not be
+        # estimated are capped too, and the free-disk guard protects the Pi.
+        max_file_bytes=MAX_FILE_SIZE_MB * 1024**2,
     )
 
 

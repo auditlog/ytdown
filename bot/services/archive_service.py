@@ -178,6 +178,9 @@ async def _download_one_into_workspace(
         status_callback=_noop_status,
         format_bytes=lambda v: str(v),
         format_eta=lambda v: str(v),
+        # Enforced while downloading, so items whose size could not be
+        # estimated are capped too, and the free-disk guard protects the Pi.
+        max_file_bytes=MAX_ARCHIVE_ITEM_SIZE_MB * 1024**2,
     )
     return Path(result.file_path), result.file_size_mb
 
