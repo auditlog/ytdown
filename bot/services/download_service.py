@@ -40,6 +40,24 @@ ArtifactSuffixes = ('_transcript.md', '_transcript.txt', '_summary.md')
 # 4K/8K VP9 or AV1. Prefer H.264 and m4a only when resolution is equal.
 VIDEO_FORMAT_SORT = ['res', 'vcodec:h264', 'acodec:m4a', 'br', 'size']
 
+# Download progress changes every second, but editing one Telegram message that
+# often runs into flood control (RetryAfter), so progress edits are spaced out.
+PROGRESS_EDIT_MIN_INTERVAL_SEC = 3.0
+
+
+async def send_progress_update(status_callback: Callable[[str], Any], text: str) -> None:
+    """Deliver a progress text; a failed edit is logged and never fatal.
+
+    The status message is informational only. Flood control, a deleted message
+    or a blocked bot must not abandon work whose worker thread keeps running.
+    asyncio.CancelledError is not an Exception, so stops still propagate.
+    """
+
+    try:
+        await status_callback(text)
+    except Exception as exc:
+        logging.warning("Progress update failed, work continues: %s", exc)
+
 
 @dataclass
 class DownloadPlan:
@@ -311,6 +329,7 @@ async def execute_download(
     )
 
     last_update = ""
+    last_edit_at: float | None = None
     try:
         while not future.done():
             progress = progress_state.get(chat_id, {})
@@ -332,9 +351,12 @@ async def execute_download(
                     f"Czas trwania: {plan.duration_str}"
                 )
 
-                if status_text != last_update:
+                now = time.monotonic()
+                edit_due = last_edit_at is None or now - last_edit_at >= PROGRESS_EDIT_MIN_INTERVAL_SEC
+                if status_text != last_update and edit_due:
                     last_update = status_text
-                    await status_callback(status_text)
+                    last_edit_at = now
+                    await send_progress_update(status_callback, status_text)
 
             await asyncio.sleep(1)
 

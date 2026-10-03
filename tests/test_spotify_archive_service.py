@@ -108,6 +108,95 @@ def test_spotify_archive_groups_downloads_by_requested_track_count(
     session_store.reset()
 
 
+def test_spotify_archive_reports_parts_actually_sent_after_a_stop(tmp_path, monkeypatch):
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(spotify_archive_service, "is_7z_available", lambda: True)
+    monkeypatch.setattr(spotify_archive_service, "mtproto_unavailability_reason", lambda: None)
+
+    async def fake_resolve(track, **_kwargs):
+        return TrackResolutionOutcome(resolved={
+            "source": "youtube_music", "title": track["title"], "artist": track["artist"],
+            "youtube_url": "https://youtube.com/watch?v=x",
+        })
+
+    async def fake_download(*, resolved, audio_format, output_dir, **_kwargs):
+        path = spotify_archive_service.Path(output_dir) / f"{resolved['title']}.{audio_format}"
+        path.write_bytes(b"audio")
+        return str(path)
+
+    async def fake_pack(sources, dest_basename, volume_size_mb, **_kwargs):
+        volumes = [spotify_archive_service.Path(f"{dest_basename}.7z.00{i}") for i in (1, 2)]
+        for volume in volumes:
+            volume.write_bytes(b"archive")
+        return volumes
+
+    async def fake_send(_bot, *, volumes, cancellation, **_kwargs):
+        cancellation.event.set()  # Stop pressed after the first part went out
+        return 1
+
+    monkeypatch.setattr(spotify_archive_service, "resolve_track_info_detailed", fake_resolve)
+    monkeypatch.setattr(spotify_archive_service, "download_resolved_audio", fake_download)
+    monkeypatch.setattr(spotify_archive_service, "pack_to_volumes", fake_pack)
+    monkeypatch.setattr(spotify_archive_service, "send_volumes", fake_send)
+    update = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+    context.bot = mock.MagicMock()
+
+    asyncio.run(spotify_archive_service.execute_spotify_collection_archive_flow(
+        update, context, chat_id=7, collection=_collection(2), selected_indices=[0, 1],
+        audio_format="mp3", files_per_archive=50, executor=mock.MagicMock(),
+    ))
+
+    summary = update.callback_query.edit_message_text.await_args.args[0]
+    assert summary.startswith("⏹ Wysyłka zatrzymana.")
+    assert "Części wysłane do Telegrama: 1 z 2" in summary
+    session_store.reset()
+
+
+def test_spotify_archive_stop_during_packing_offers_the_partial_archive(tmp_path, monkeypatch):
+    session_store.reset()
+    monkeypatch.setattr(archive_service, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(spotify_archive_service, "is_7z_available", lambda: True)
+    monkeypatch.setattr(spotify_archive_service, "mtproto_unavailability_reason", lambda: None)
+
+    async def fake_resolve(track, **_kwargs):
+        return TrackResolutionOutcome(resolved={
+            "source": "youtube_music", "title": track["title"], "artist": track["artist"],
+            "youtube_url": "https://youtube.com/watch?v=x",
+        })
+
+    async def fake_download(*, resolved, audio_format, output_dir, **_kwargs):
+        path = spotify_archive_service.Path(output_dir) / f"{resolved['title']}.{audio_format}"
+        path.write_bytes(b"audio")
+        return str(path)
+
+    async def fake_pack(sources, dest_basename, volume_size_mb, *, cancellation, **_kwargs):
+        cancellation.event.set()  # /stop terminated 7z
+        raise RuntimeError("7z failed (exit -15): ")
+
+    save_partial = mock.AsyncMock()
+    monkeypatch.setattr(spotify_archive_service, "resolve_track_info_detailed", fake_resolve)
+    monkeypatch.setattr(spotify_archive_service, "download_resolved_audio", fake_download)
+    monkeypatch.setattr(spotify_archive_service, "pack_to_volumes", fake_pack)
+    monkeypatch.setattr(spotify_archive_service, "save_partial_archive_after_cancel", save_partial)
+    update = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+    context.bot = mock.MagicMock()
+
+    asyncio.run(spotify_archive_service.execute_spotify_collection_archive_flow(
+        update, context, chat_id=7, collection=_collection(2), selected_indices=[0, 1],
+        audio_format="mp3", files_per_archive=50, executor=mock.MagicMock(),
+    ))
+
+    save_partial.assert_awaited_once()
+    texts = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert not any("nie powiod" in text for text in texts)
+    session_store.reset()
+
+
 def test_spotify_archive_splits_into_multiple_logical_archives(
     tmp_path,
     monkeypatch,

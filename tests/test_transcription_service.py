@@ -125,3 +125,31 @@ def test_cleanup_transcription_artifacts_removes_source_and_chunks(tmp_path):
     assert not source.exists()
     assert not chunk.exists()
     assert keep.exists()
+
+
+def test_run_transcription_with_progress_survives_a_failed_status_edit(monkeypatch, tmp_path):
+    import asyncio
+    import time as time_module
+    from concurrent.futures import ThreadPoolExecutor
+
+    from telegram.error import RetryAfter
+
+    source = tmp_path / "audio.mp3"
+    source.write_bytes(b"x")
+
+    def slow_pipeline(source_path, output_dir, progress_callback, language=None, cancellation=None):
+        progress_callback("Transkrypcja części 1/2")
+        time_module.sleep(2.5)  # long enough for the status loop to try an edit
+        return str(tmp_path / "audio_transcript.md")
+
+    monkeypatch.setattr(ts, "transcribe_mp3_file", slow_pipeline)
+
+    async def flood_controlled(_text):
+        raise RetryAfter(30)
+
+    result = asyncio.run(ts.run_transcription_with_progress(
+        source_path=str(source), output_dir=str(tmp_path),
+        executor=ThreadPoolExecutor(max_workers=1), status_callback=flood_controlled,
+    ))
+
+    assert result == str(tmp_path / "audio_transcript.md")

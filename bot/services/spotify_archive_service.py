@@ -466,14 +466,21 @@ async def execute_spotify_collection_archive_flow(
                 f"części po {volume_size_mb} MB)...",
                 reply_markup=progress_stop_markup(cancellation),
             )
-            packed_volumes.extend(
-                await pack_to_volumes(
-                    group,
-                    workspace / group_name,
-                    volume_size_mb,
-                    cancellation=cancellation,
+            try:
+                packed_volumes.extend(
+                    await pack_to_volumes(
+                        group,
+                        workspace / group_name,
+                        volume_size_mb,
+                        cancellation=cancellation,
+                    )
                 )
-            )
+            except RuntimeError:
+                # A stop terminates 7z, which surfaces as an error; it is a stop.
+                if not cancellation.event.is_set():
+                    raise
+                cancelled = True
+                break
 
         if cancellation.event.is_set() or cancelled:
             for volume in packed_volumes:
@@ -511,7 +518,7 @@ async def execute_spotify_collection_archive_flow(
             f"{polish_plural(len(packed_volumes), 'część', 'części', 'części')} do wysłania.",
             reply_markup=progress_stop_markup(cancellation),
         )
-        await send_volumes(
+        sent_count = await send_volumes(
             context.bot,
             chat_id=chat_id,
             volumes=packed_volumes,
@@ -551,7 +558,11 @@ async def execute_spotify_collection_archive_flow(
             "⏹ Wysyłka zatrzymana." if cancelled else "Spotify: archiwa gotowe.",
             f"Pobrano: {len(downloaded)}/{len(selected)} utworów",
             f"Spakowano: {_archives_phrase(archive_count)} 7z",
-            f"Części wysłane do Telegrama: {len(packed_volumes)}",
+            (
+                f"Części wysłane do Telegrama: {sent_count} z {len(packed_volumes)}"
+                if cancelled
+                else f"Części wysłane do Telegrama: {len(packed_volumes)}"
+            ),
             f"Rozmiar grupy: {batch_label}",
             "Każde archiwum ma własną numerację części, od .7z.001.",
             f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
