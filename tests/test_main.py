@@ -1,6 +1,9 @@
 """Unit tests for application entrypoint."""
 
 import asyncio
+import contextlib
+import io
+import logging
 from argparse import Namespace
 from types import SimpleNamespace
 
@@ -31,6 +34,57 @@ def _run_set_bot_commands(monkeypatch, admin_chat_id):
 
 def _names(call):
     return [command.command for command in call.args[0]]
+
+
+@contextlib.contextmanager
+def _isolated_root_logging():
+    """Let configure_logging() rewire the real root logger without touching pytest.
+
+    basicConfig(force=True) removes and closes every root handler, so pytest's
+    capture handlers are detached first and restored within the same test phase.
+    """
+    root = logging.getLogger()
+    httpx_logger = logging.getLogger("httpx")
+    saved_handlers, saved_level, saved_httpx_level = root.handlers[:], root.level, httpx_logger.level
+    root.handlers[:] = []
+    try:
+        yield root
+    finally:
+        for handler in root.handlers:
+            handler.close()
+        root.handlers[:] = saved_handlers
+        root.setLevel(saved_level)
+        httpx_logger.setLevel(saved_httpx_level)
+
+
+def test_configure_logging_enables_info_after_an_earlier_implicit_setup():
+    with _isolated_root_logging() as root:
+        # Importing bot.config logs at module load, which already installs a
+        # default WARNING handler before main.py gets to configure anything.
+        root.addHandler(logging.StreamHandler(io.StringIO()))
+        root.setLevel(logging.WARNING)
+
+        app_main.configure_logging()
+
+        assert root.level == logging.INFO
+        assert len(root.handlers) == 1
+        assert root.handlers[0].formatter._fmt == app_main.LOG_FORMAT
+
+
+def test_configure_logging_keeps_bot_token_urls_out_of_the_log():
+    with _isolated_root_logging() as root:
+        app_main.configure_logging()
+        output = io.StringIO()
+        root.handlers[0].setStream(output)
+
+        # httpx logs every request URL at INFO; Bot API URLs embed the token.
+        logging.getLogger("httpx").info(
+            'HTTP Request: POST https://api.telegram.org/bot123:SECRET/getUpdates "HTTP/1.1 200 OK"'
+        )
+        logging.getLogger("bot.example").info("regular bot event")
+
+        assert "SECRET" not in output.getvalue()
+        assert "regular bot event" in output.getvalue()
 
 
 def test_set_bot_commands_scopes_admin_commands_to_admin_chat(monkeypatch):
@@ -81,10 +135,14 @@ def test_main_cli_mode_calls_cli(monkeypatch):
 
     cli_called = Mock()
     monkeypatch.setattr(app_main, "cli_mode", cli_called)
+    configure_logging = Mock()
+    monkeypatch.setattr(app_main, "configure_logging", configure_logging)
 
     app_main.main()
 
     cli_called.assert_called_once_with(args)
+    # INFO lines on stderr would corrupt the curses interface.
+    configure_logging.assert_not_called()
 
 
 def test_main_starts_bot_in_non_cli_mode(monkeypatch):
@@ -148,9 +206,12 @@ def test_main_starts_bot_in_non_cli_mode(monkeypatch):
             pass
 
     monkeypatch.setattr(app_main.threading, "Thread", DummyThread)
+    configure_logging = Mock()
+    monkeypatch.setattr(app_main, "configure_logging", configure_logging)
 
     app_main.main()
 
+    configure_logging.assert_called_once_with()
     assert builder.token.called
     assert "app_runtime" in app.bot_data
     app.run_polling.assert_called_once()

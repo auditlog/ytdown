@@ -47,11 +47,20 @@ from bot.telegram_callbacks import handle_callback
 from bot.telegram_commands import stop_command
 from bot.spotify_oauth import start_spotify_oauth_callback_server
 
-# Configure logging
-logging.basicConfig(
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    level=logging.INFO
-)
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+
+def configure_logging() -> None:
+    """Send INFO and above to stderr (journald under systemd) in bot mode.
+
+    force=True is required: importing bot.config logs at module load, and that
+    first call already installs a default WARNING handler, which turns a plain
+    basicConfig() here into a silent no-op.
+    """
+    logging.basicConfig(format=LOG_FORMAT, level=logging.INFO, force=True)
+    # httpx logs every request URL at INFO, and Bot API URLs embed the bot
+    # token (https://api.telegram.org/bot<TOKEN>/...), so keep it at WARNING.
+    logging.getLogger("httpx").setLevel(logging.WARNING)
 
 
 USER_COMMANDS = [
@@ -239,6 +248,8 @@ def main():
     if len(sys.argv) == 1 and sys.stdin.isatty():
         pass
 
+    # Bot mode only: INFO lines on stderr would corrupt the CLI's curses UI.
+    configure_logging()
     initialize_runtime()
     start_background_services()
     application = build_application(runtime=build_app_runtime())
