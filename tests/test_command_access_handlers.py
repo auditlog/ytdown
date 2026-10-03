@@ -160,13 +160,15 @@ class TestStatusAndStatsCommands:
         (tmp_path / "b.mp4").write_bytes(b"b" * 2048)
 
         _set_authorized_users(monkeypatch, {111})
+        # /status is admin-only; pin the admin so the host's ADMIN_CHAT_ID cannot leak in.
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
         monkeypatch.setattr(tc, "DOWNLOAD_PATH", str(tmp_path))
         monkeypatch.setattr(tc, "get_disk_usage", lambda: (80.0, 20.0, 100.0, 80.0))
 
         _async(tc.status_command(update, context))
 
         message = update.message.reply_text.await_args.args[0]
-        assert "**Status systemu**" in message
+        assert "*Status systemu*" in message and "**" not in message
         assert "Przestrzeń dyskowa" in message
         assert "Plików: 2" in message
 
@@ -230,9 +232,73 @@ class TestStatusAndStatsCommands:
         _async(tc.history_command(update, context))
 
         text = update.message.reply_text.await_args.args[0]
-        assert "📊 **Historia pobrań**" in text
+        assert "📊 *Historia pobrań*" in text and "**" not in text
         assert "Łączna liczba pobrań: 1" in text
-        assert "audio_mp3: 1" in text
+        assert "audio\\_mp3: 1" in text
+
+    def test_history_escapes_markdown_in_titles(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+
+        _set_authorized_users(monkeypatch, {111})
+        monkeypatch.setattr(
+            tc,
+            "get_download_stats",
+            lambda user_id=None: {
+                "total_downloads": 1,
+                "total_size_mb": 1.0,
+                "format_counts": {},
+                "success_count": 1,
+                "failure_count": 0,
+                "recent": [
+                    {
+                        "timestamp": "2026-01-01T12:00:00",
+                        "title": "a_b*c [x]",
+                        "format": "audio_mp3",
+                        "file_size_mb": 1,
+                        "status": "success",
+                    }
+                ],
+            },
+        )
+
+        _async(tc.history_command(update, context))
+
+        text = update.message.reply_text.await_args.args[0]
+        assert "a\\_b\\*c \\[x]" in text
+
+    def test_history_escapes_format_ids(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+
+        _set_authorized_users(monkeypatch, {111})
+        monkeypatch.setattr(
+            tc,
+            "get_download_stats",
+            lambda user_id=None: {
+                "total_downloads": 1,
+                "total_size_mb": 1.0,
+                "format_counts": {"audio_mp3": 1},
+                "success_count": 1,
+                "failure_count": 0,
+                "recent": [
+                    {
+                        "timestamp": "2026-01-01T12:00:00",
+                        "title": "Plain",
+                        "format": "audio_mp3",
+                        "file_size_mb": 2,
+                        "status": "success",
+                    }
+                ],
+            },
+        )
+
+        _async(tc.history_command(update, context))
+
+        text = update.message.reply_text.await_args.args[0]
+        assert "- audio\\_mp3: 1" in text
+        assert "(audio\\_mp3, 2.0MB)" in text
+        assert "audio_mp3" not in text.replace("audio\\_mp3", "")
 
     def test_cleanup_command_unauthorized(self, monkeypatch):
         update = _make_update(user_id=111)
@@ -249,6 +315,8 @@ class TestStatusAndStatsCommands:
         context = _make_context()
 
         _set_authorized_users(monkeypatch, {111})
+        # /cleanup is admin-only; pin the admin so the host's ADMIN_CHAT_ID cannot leak in.
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="111")
         monkeypatch.setattr(tc, "cleanup_old_files", lambda *_args, **_kwargs: 0)
         monkeypatch.setattr(tc, "get_disk_usage", lambda: (80.0, 20.0, 100.0, 80.0))
 
@@ -303,7 +371,13 @@ class TestNotifyAdminPinFailure:
 
         bot.send_message.assert_awaited_once()
         text = bot.send_message.await_args.kwargs["text"]
-        assert "[Failed PIN attempt]" in text
+        assert "⚠️ Nieudana próba podania PIN-u" in text
+        assert "ID użytkownika: 999" in text
+        assert "Nazwa użytkownika: @testuser" in text
+        assert "Imię i nazwisko: Test" in text
+        assert "Język: pl" in text
+        assert "Próba: 2/" in text
+        assert "Czas: " in text
         assert "999" in text
         assert "@testuser" in text
 
@@ -368,8 +442,8 @@ class TestNotifyAdminPinFailure:
         _async(tc.notify_admin_pin_failure(bot, user, attempt_count=3, blocked=True))
 
         text = bot.send_message.await_args.kwargs["text"]
-        assert "[BLOCKED]" in text
-        assert "n/a" in text
+        assert "🚫 Zablokowano dostęp" in text
+        assert "Nazwa użytkownika: brak" in text
 
 
 class TestHistoryWithNewFields:
@@ -415,3 +489,60 @@ class TestHistoryWithNewFields:
         assert "✅" in text
         assert "❌" in text
         assert "✂️0:30-5:00" in text
+
+
+NOT_ADMIN_TEXT = "Ta komenda jest dostępna tylko dla administratora bota."
+
+
+class TestAdminOnlyCommandsAndHelp:
+    def test_status_rejects_non_admin(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+        _set_authorized_users(monkeypatch, {111})
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="999")
+
+        _async(tc.status_command(update, context))
+
+        update.message.reply_text.assert_awaited_once_with(NOT_ADMIN_TEXT)
+
+    def test_cleanup_rejects_non_admin_without_deleting(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+        _set_authorized_users(monkeypatch, {111})
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="999")
+        cleanup = Mock(return_value=0)
+        monkeypatch.setattr(tc, "cleanup_old_files", cleanup)
+
+        _async(tc.cleanup_command(update, context))
+
+        update.message.reply_text.assert_awaited_once_with(NOT_ADMIN_TEXT)
+        cleanup.assert_not_called()
+
+    def test_help_for_regular_user_has_no_admin_section_and_no_parse_mode(self, monkeypatch):
+        update = _make_update(user_id=111)
+        context = _make_context()
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="999")
+
+        _async(tc.help_command(update, context))
+
+        update.message.reply_text.assert_awaited_once()
+        assert "parse_mode" not in update.message.reply_text.await_args.kwargs
+        text = update.message.reply_text.await_args.args[0]
+        assert "/stop" in text and "/history" in text and "/logout" in text
+        assert "✂️ Przytnij" in text
+        assert "cookies" not in text
+        assert "/status" not in text and "/cleanup" not in text
+        assert "/users" not in text and "/spotify_login" not in text
+
+    def test_help_for_admin_lists_admin_commands(self, monkeypatch):
+        update = _make_update(user_id=999)
+        context = _make_context()
+        _set_runtime_values(monkeypatch, ADMIN_CHAT_ID="999")
+
+        _async(tc.help_command(update, context))
+
+        assert "parse_mode" not in update.message.reply_text.await_args.kwargs
+        text = update.message.reply_text.await_args.args[0]
+        assert "Komendy administratora" in text
+        for command in ("/status", "/cleanup", "/users", "/spotify_login", "/spotify_logout"):
+            assert command in text

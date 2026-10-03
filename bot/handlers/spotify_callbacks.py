@@ -32,14 +32,20 @@ from bot.services.spotify_video_service import (
     transcript_from_subtitles,
 )
 from bot.services.transcription_service import (
+    MISSING_CLAUDE_KEY_KEEP_TRANSCRIPT_TEXT,
+    MISSING_CLAUDE_KEY_TEXT,
+    MISSING_GROQ_KEY_TEXT,
+    SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
+    TRANSCRIPTION_FAILED_TEXT,
     cleanup_transcription_artifacts,
     generate_summary_artifact,
     load_transcript_result,
+    missing_transcription_key_message,
     run_transcription_with_progress,
     transcript_too_long_for_summary,
 )
 from bot.session_context import (
-    clear_session_context_value as _clear_session_context_value,
+    clear_session_context_value_if as _clear_session_context_value_if,
     get_session_value as _get_session_value,
 )
 from bot.session_store import user_urls
@@ -233,9 +239,18 @@ async def download_spotify_resolved(
     title = resolved.get("title", "Spotify audio")
     artist = resolved.get("artist", "")
     is_music_track = bool(artist or resolved.get("spotify_url"))
+    # Captured up front: a newer link may replace the session URL while this job runs.
+    job_url = _get_session_value(context, chat_id, "current_url", user_urls) or ""
 
     async def update_status(text):
         await safe_edit_message(query, text)
+
+    if transcribe:
+        # Fail fast: check API keys before downloading anything.
+        missing_key_text = missing_transcription_key_message(get_runtime_value, summary=summary)
+        if missing_key_text:
+            await update_status(missing_key_text)
+            return False
 
     await update_status("Pobieranie utworu..." if is_music_track else "Pobieranie odcinka podcastu...")
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
@@ -265,12 +280,18 @@ async def download_spotify_resolved(
         file_size_mb = os.path.getsize(downloaded_file_path) / (1024 * 1024)
 
         if transcribe:
-            await _handle_transcription(
+            summary_notices: list[str] = []
+            transcription_ok = await _handle_transcription(
                 update, context, chat_id, title, downloaded_file_path,
                 file_size_mb, chat_download_path, summary, summary_type,
                 update_status,
+                resolved=resolved, job_url=job_url,
+                notices=summary_notices,
             )
             downloaded_file_path = None
+            if not transcription_ok:
+                # Keep the error message _handle_transcription just showed.
+                return False
         elif trim_after:
             offered = await offer_trim_after_download(
                 context,
@@ -286,7 +307,7 @@ async def download_spotify_resolved(
                     context,
                     chat_id,
                     title,
-                    _get_session_value(context, chat_id, "current_url", user_urls) or "",
+                    job_url,
                     "spotify_trim_source",
                     file_size_mb,
                 )
@@ -305,16 +326,22 @@ async def download_spotify_resolved(
                 context,
                 chat_id,
                 title,
-                _get_session_value(context, chat_id, "current_url", user_urls) or "",
+                job_url,
                 f"spotify_audio_{audio_format}",
                 file_size_mb,
             )
-            _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+            _clear_session_context_value_if(
+                context, chat_id, "spotify_resolved", resolved, legacy_key="spotify_resolved"
+            )
             if trim_source is not None:
                 await update_status(f"Gotowe: {title}\n\n{TRIM_AVAILABLE_HINT}")
                 return True
 
-        await update_status(f"Gotowe: {title}")
+        done_text = f"Gotowe: {title}"
+        if transcribe and summary_notices:
+            # Keep the summary notice in the final status, or it would vanish.
+            done_text += f"\n\n{summary_notices[0]}"
+        await update_status(done_text)
         return True
     except AudioDeliveryError as exc:
         await update_status(str(exc))
@@ -348,6 +375,8 @@ async def download_spotify_video(
     query = update.callback_query
     chat_id = update.effective_chat.id
     title = session_data.get("title", "Spotify episode")
+    # Captured up front: a newer link may replace the session URL while this job runs.
+    job_url = _get_session_value(context, chat_id, "current_url", user_urls) or ""
 
     async def update_status(text):
         await safe_edit_message(query, text)
@@ -442,11 +471,13 @@ async def download_spotify_video(
             context,
             chat_id,
             title,
-            _get_session_value(context, chat_id, "current_url", user_urls) or "",
+            job_url,
             f"spotify_native_{'audio' if height is None else str(height) + 'p'}",
             file_size_mb,
         )
-        _clear_session_context_value(context, chat_id, "spotify_video", legacy_key="spotify_video")
+        _clear_session_context_value_if(
+            context, chat_id, "spotify_video", session_data, legacy_key="spotify_video"
+        )
         if trim_source is not None:
             await update_status(f"Gotowe: {title}\n\n{TRIM_AVAILABLE_HINT}")
         else:
@@ -496,6 +527,8 @@ async def transcribe_spotify_video(
     query = update.callback_query
     chat_id = update.effective_chat.id
     title = session_data.get("title", "Spotify episode")
+    # Captured up front: a newer link may replace the session URL while this job runs.
+    job_url = _get_session_value(context, chat_id, "current_url", user_urls) or ""
 
     async def update_status(text):
         await safe_edit_message(query, text)
@@ -505,6 +538,12 @@ async def transcribe_spotify_video(
 
     downloaded_file_path = None
     transcript_path = None
+
+    if summary and summary_type and not get_runtime_value("CLAUDE_API_KEY", ""):
+        # Fail fast, before any subtitle or audio download. The Groq key is
+        # only needed by the audio fallback below, so it is checked there.
+        await update_status(MISSING_CLAUDE_KEY_TEXT)
+        return
 
     try:
         # Session state can carry a manifest that no longer parses -- a
@@ -559,9 +598,7 @@ async def transcribe_spotify_video(
             # one it advertised -- fall back to downloading the native AAC
             # audio track and transcribing it with Groq.
             if not get_runtime_value("GROQ_API_KEY", ""):
-                await update_status(
-                    "Funkcja niedostępna — brak klucza API do transkrypcji.\nSkontaktuj się z administratorem."
-                )
+                await update_status(MISSING_GROQ_KEY_TEXT)
                 return
 
             await update_status("Pobieranie audio ze Spotify...")
@@ -597,19 +634,22 @@ async def transcribe_spotify_video(
                 status_callback=update_status,
             )
             if not transcript_path or not os.path.exists(transcript_path):
-                await update_status("Wystąpił błąd podczas transkrypcji.")
+                await update_status(TRANSCRIPTION_FAILED_TEXT)
                 return
 
         transcript_result = load_transcript_result(transcript_path)
         transcript_text = transcript_result.display_text
 
+        summary_notice = None
         if summary and summary_type:
-            await _maybe_generate_summary(
+            summary_notice = await _maybe_generate_summary(
                 context, chat_id, title, transcript_text, sanitized_title,
                 chat_download_path, update_status, summary_type=summary_type,
             )
 
-        await update_status("Wysyłanie pliku z transkrypcją...")
+        if not summary_notice:
+            # Otherwise the notice stays visible while the transcript is sent.
+            await update_status("Wysyłanie pliku z transkrypcją...")
         with open(transcript_path, "rb") as file_obj:
             await context.bot.send_document(
                 chat_id=chat_id,
@@ -629,11 +669,13 @@ async def transcribe_spotify_video(
             context,
             chat_id,
             title,
-            _get_session_value(context, chat_id, "current_url", user_urls) or "",
+            job_url,
             "spotify_transcribe",
             record_size_mb,
         )
-        _clear_session_context_value(context, chat_id, "spotify_video", legacy_key="spotify_video")
+        _clear_session_context_value_if(
+            context, chat_id, "spotify_video", session_data, legacy_key="spotify_video"
+        )
 
         if downloaded_file_path:
             cleanup_transcription_artifacts(
@@ -650,7 +692,8 @@ async def transcribe_spotify_video(
             transcript_path=transcript_path,
             title=title,
         )
-        await update_status(f"Gotowe: {title}")
+        # Keep the summary notice in the final status, or it would vanish.
+        await update_status(f"Gotowe: {title}" + (f"\n\n{summary_notice}" if summary_notice else ""))
 
     except SpotifyVideoCancelled:
         await update_status("Pobieranie anulowane.")
@@ -674,18 +717,19 @@ async def transcribe_spotify_video(
 async def _handle_transcription(
     update, context, chat_id, title, downloaded_file_path,
     file_size_mb, chat_download_path, summary, summary_type, update_status,
+    resolved=None, job_url="", notices=None,
 ):
-    """Transcribe and optionally summarise a downloaded Spotify episode."""
+    """Transcribe and optionally summarise a downloaded Spotify episode.
+
+    Returns False when transcription failed (the error is already shown in the
+    status message), True once the transcript has been delivered. A summary
+    notice (summary skipped or failed) is appended to ``notices`` so the caller
+    can keep it in its final status.
+    """
 
     await update_status(
         f"Pobieranie zakończone ({file_size_mb:.1f} MB).\n\nRozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut."
     )
-    if not get_runtime_value("GROQ_API_KEY", ""):
-        await update_status(
-            "Funkcja niedostępna — brak klucza API do transkrypcji.\nSkontaktuj się z administratorem."
-        )
-        return
-
     transcript_path = await run_transcription_with_progress(
         source_path=downloaded_file_path,
         output_dir=chat_download_path,
@@ -693,21 +737,26 @@ async def _handle_transcription(
         status_callback=update_status,
     )
     if not transcript_path or not os.path.exists(transcript_path):
-        await update_status("Wystąpił błąd podczas transkrypcji.")
-        return
+        await update_status(TRANSCRIPTION_FAILED_TEXT)
+        return False
 
     transcript_result = load_transcript_result(transcript_path)
     transcript_text = transcript_result.display_text
     sanitized_title = os.path.splitext(os.path.basename(downloaded_file_path))[0]
 
+    summary_notice = None
     if summary and summary_type:
-        await _maybe_generate_summary(
+        summary_notice = await _maybe_generate_summary(
             context, chat_id, title, transcript_text, sanitized_title,
             chat_download_path, update_status,
             summary_type=summary_type,
         )
+        if summary_notice and notices is not None:
+            notices.append(summary_notice)
 
-    await update_status("Wysyłanie pliku z transkrypcją...")
+    if not summary_notice:
+        # Otherwise the notice stays visible while the transcript is sent.
+        await update_status("Wysyłanie pliku z transkrypcją...")
     with open(transcript_path, "rb") as file_obj:
         await context.bot.send_document(
             chat_id=chat_id,
@@ -722,11 +771,13 @@ async def _handle_transcription(
         context,
         chat_id,
         title,
-        _get_session_value(context, chat_id, "current_url", user_urls) or "",
+        job_url,
         "spotify_transcribe",
         file_size_mb,
     )
-    _clear_session_context_value(context, chat_id, "spotify_resolved", legacy_key="spotify_resolved")
+    _clear_session_context_value_if(
+        context, chat_id, "spotify_resolved", resolved, legacy_key="spotify_resolved"
+    )
     cleanup_transcription_artifacts(
         source_media_path=downloaded_file_path,
         output_dir=chat_download_path,
@@ -739,38 +790,50 @@ async def _handle_transcription(
         transcript_path=transcript_path,
         title=title,
     )
+    return True
 
 
 async def _maybe_generate_summary(
     context, chat_id, title, transcript_text, sanitized_title,
     chat_download_path, update_status, *, summary_type,
 ):
-    """Generate an AI summary if keys are available and text is short enough."""
+    """Generate an AI summary if keys are available and text is short enough.
+
+    Returns a Polish notice when no summary was produced (missing key, text too
+    long, or generation failed), otherwise None. The notice is also shown as a
+    status; callers keep it in their final status.
+    """
 
     if not get_runtime_value("CLAUDE_API_KEY", ""):
-        await update_status(
-            "Transkrypcja zakończona.\n\nPodsumowanie niedostępne — brak klucza CLAUDE_API_KEY.\nWysyłam samą transkrypcję."
-        )
-        return
+        notice = MISSING_CLAUDE_KEY_KEEP_TRANSCRIPT_TEXT
+        await update_status(notice)
+        return notice
     if transcript_too_long_for_summary(transcript_text):
-        await update_status(
-            "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\nWysyłam samą transkrypcję."
-        )
-        return
+        notice = "Transkrypcja zakończona, ale tekst jest zbyt długi na podsumowanie AI.\n\nWysyłam samą transkrypcję."
+        await update_status(notice)
+        return notice
 
     await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
-    summary_result = await generate_summary_artifact(
-        transcript_text=transcript_text,
-        summary_type=summary_type,
-        title=title,
-        sanitized_title=sanitized_title,
-        output_dir=chat_download_path,
-        executor=_executor,
-    )
-    if summary_result:
-        await send_long_message(
-            context.bot,
-            chat_id,
-            summary_result.summary_text,
-            header=f"*Podsumowanie: {escape_md(title)}*\n\n",
+    try:
+        summary_result = await generate_summary_artifact(
+            transcript_text=transcript_text,
+            summary_type=summary_type,
+            title=title,
+            sanitized_title=sanitized_title,
+            output_dir=chat_download_path,
+            executor=_executor,
         )
+    except Exception as exc:
+        logging.error("Summary generation failed: %s", exc)
+        summary_result = None
+    if not summary_result:
+        # The caller still delivers the transcript file right after this.
+        await update_status(SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT)
+        return SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT
+    await send_long_message(
+        context.bot,
+        chat_id,
+        summary_result.summary_text,
+        header=f"*Podsumowanie: {escape_md(title)}*\n\n",
+    )
+    return None

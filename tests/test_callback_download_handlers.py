@@ -320,6 +320,7 @@ def test_offer_archive_or_cancel_registers_pending_job(tmp_path, monkeypatch):
     callback_data = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
     assert any(cb.startswith("arc_split_") for cb in callback_data)
     assert any(cb.startswith("arc_cancel_") for cb in callback_data)
+    assert sent_text[0].endswith("i wysłać części.")
 
     session_store.reset()
 
@@ -448,6 +449,7 @@ def test_arc_resend_calls_send_volumes_with_index(tmp_path, monkeypatch):
 
     assert sent.await_count == 1
     assert sent.await_args.kwargs["start_index"] == 1
+    update.callback_query.edit_message_text.assert_awaited_with("Wysłano części od [2/2].")
     session_store.reset()
 
 
@@ -672,3 +674,264 @@ def test_download_file_video_with_range_keeps_ytdlp_sections(tmp_path, monkeypat
 
     assert plan.kwargs["time_range"] == _SESSION_RANGE
     range_sender.assert_not_awaited()
+
+
+def _markup_of(call):
+    return call.kwargs.get("reply_markup")
+
+
+def test_download_file_progress_has_stop_button_and_final_has_none(tmp_path, monkeypatch):
+    from bot.jobs import JobRegistry
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    registry = JobRegistry()
+    monkeypatch.setattr(dc, "job_registry", registry)
+    monkeypatch.setattr(dc, "send_audio_with_trim", mock.AsyncMock(return_value=None))
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+    seen = {}
+
+    async def spy_download(plan_obj, **kwargs):
+        seen["job_id"] = kwargs["cancellation"].job_id
+        return await download_orig(plan_obj, **kwargs)
+
+    download_orig = dc.execute_download
+    monkeypatch.setattr(dc, "execute_download", spy_download)
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    calls = update.callback_query.edit_message_text.await_args_list
+    progress = [c for c in calls if c.args[0].startswith("Rozpoczynam pobieranie")]
+    assert progress
+    button = _markup_of(progress[0]).inline_keyboard[0][0]
+    assert button.text == "⏹ Zatrzymaj"
+    assert button.callback_data == f"stop_{seen['job_id']}"
+    assert calls[-1].args[0] == "Plik został wysłany!"
+    assert _markup_of(calls[-1]) is None
+
+
+def test_download_file_stopped_mid_download_reports_stop_not_failure(tmp_path, monkeypatch):
+    import yt_dlp
+    from bot.jobs import JobRegistry
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    registry = JobRegistry()
+    monkeypatch.setattr(dc, "job_registry", registry)
+
+    async def stopped_download(plan_obj, **kwargs):
+        kwargs["cancellation"].event.set()
+        raise yt_dlp.utils.DownloadError("cancelled by user")
+
+    monkeypatch.setattr(dc, "execute_download", stopped_download)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0] == "⏹ Zatrzymano pobieranie."
+    assert _markup_of(last) is None
+    dc.record_download_for.assert_not_called()
+
+
+def _patch_transcription_stop(monkeypatch, dc, *, raise_on_stop):
+    from bot.jobs import JobRegistry
+
+    monkeypatch.setattr(dc, "job_registry", JobRegistry())
+    monkeypatch.setattr(dc, "missing_transcription_key_message", lambda *a, **k: None)
+
+    async def stopped_transcription(**kwargs):
+        kwargs["cancellation"].event.set()
+        if raise_on_stop:
+            raise RuntimeError("cancelled by user")
+        return None
+
+    monkeypatch.setattr(dc, "run_transcription_with_progress", stopped_transcription)
+
+
+@pytest.mark.parametrize("raise_on_stop", [False, True], ids=["returns", "raises"])
+def test_download_file_stopped_during_transcription_says_transcription(
+    tmp_path, monkeypatch, raise_on_stop
+):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    _patch_transcription_stop(monkeypatch, dc, raise_on_stop=raise_on_stop)
+    update, context = _make_update("transcribe"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/", transcribe=True,
+    ))
+
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0] == "⏹ Zatrzymano transkrypcję."
+    assert _markup_of(last) is None
+
+
+def test_download_error_without_stop_still_records_failure(tmp_path, monkeypatch):
+    import yt_dlp
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+
+    async def broken_download(plan_obj, **kwargs):
+        raise yt_dlp.utils.DownloadError("boom")
+
+    monkeypatch.setattr(dc, "execute_download", broken_download)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    assert update.callback_query.edit_message_text.await_args.args[0].startswith("Wystąpił błąd")
+    assert dc.record_download_for.call_args.kwargs["status"] == "failure"
+
+
+def test_missing_groq_key_message_has_no_stop_button(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", lambda key, default="": "")
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/", transcribe=True,
+    ))
+
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0].startswith("Funkcja niedostępna")
+    assert _markup_of(last) is None
+
+
+def test_progress_edit_after_stop_signal_has_no_stop_button(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "send_audio_with_trim", mock.AsyncMock(return_value=None))
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+    download_orig = dc.execute_download
+
+    async def stop_then_download(plan_obj, **kwargs):
+        kwargs["cancellation"].event.set()
+        await kwargs["status_callback"]("Pobieranie: 50%")
+        return await download_orig(plan_obj, **kwargs)
+
+    monkeypatch.setattr(dc, "execute_download", stop_then_download)
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    calls = update.callback_query.edit_message_text.await_args_list
+    stopping = [c for c in calls if c.args[0] == "Pobieranie: 50%"]
+    assert stopping and _markup_of(stopping[0]) is None
+
+
+def _fake_keys(**values):
+    return lambda key, default="": values.get(key, default)
+
+
+def test_link_transcription_checks_groq_key_before_downloading(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(CLAUDE_API_KEY="c"))
+    prepare = mock.Mock()
+    monkeypatch.setattr(dc, "prepare_download_plan", prepare)
+    download = mock.AsyncMock()
+    monkeypatch.setattr(dc, "execute_download", download)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/", transcribe=True,
+    ))
+
+    download.assert_not_awaited()
+    prepare.assert_not_called()
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0] == (
+        "Funkcja niedostępna — brak klucza API do transkrypcji. Skontaktuj się z administratorem."
+    )
+    assert _markup_of(last) is None
+
+
+def test_link_summary_checks_claude_key_before_downloading(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g"))
+    download = mock.AsyncMock()
+    monkeypatch.setattr(dc, "execute_download", download)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+
+    download.assert_not_awaited()
+    last = update.callback_query.edit_message_text.await_args
+    assert last.args[0] == (
+        "Podsumowanie jest niedostępne — brak klucza API Claude. "
+        "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
+    )
+    assert _markup_of(last) is None
+
+
+def test_link_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    transcript = tmp_path / "Song_transcript.md"
+    transcript.write_text("# Song\n\nTekst.\n", encoding="utf-8")
+    monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=str(transcript)))
+    monkeypatch.setattr(dc, "generate_summary_artifact", mock.AsyncMock(return_value=None))
+    offer = mock.AsyncMock()
+    monkeypatch.setattr(dc, "offer_custom_transcript_prompt", offer)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+
+    context.bot.send_document.assert_awaited_once()
+    texts = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert (
+        "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
+        "Wysyłam samą transkrypcję."
+    ) in texts
+    assert dc.record_download_for.call_args.args[4] == "transcription"
+    offer.assert_awaited_once()
+
+
+def test_link_summary_exception_still_sends_transcript(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    transcript = tmp_path / "Song_transcript.md"
+    transcript.write_text("# Song\n\nTekst.\n", encoding="utf-8")
+    monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=str(transcript)))
+    monkeypatch.setattr(dc, "generate_summary_artifact", mock.AsyncMock(side_effect=RuntimeError("boom")))
+    monkeypatch.setattr(dc, "offer_custom_transcript_prompt", mock.AsyncMock())
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+
+    context.bot.send_document.assert_awaited_once()
+
+
+def test_plain_audio_download_ignores_missing_api_keys(tmp_path, monkeypatch):
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys())
+    sender = mock.AsyncMock(return_value=None)
+    monkeypatch.setattr(dc, "send_audio_with_trim", sender)
+    update, context = _make_update("dl_audio_mp3"), _make_context()
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://youtube.com/"))
+
+    sender.assert_awaited_once()
+    assert update.callback_query.edit_message_text.await_args.args[0].startswith("Plik został wysłany!")
+
+
+def test_link_transcription_failure_shows_the_concrete_failure_text(tmp_path, monkeypatch):
+    from bot.jobs import JobRegistry
+    from bot.services.transcription_service import TRANSCRIPTION_FAILED_TEXT
+
+    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
+    monkeypatch.setattr(dc, "job_registry", JobRegistry())
+    monkeypatch.setattr(dc, "missing_transcription_key_message", lambda *a, **k: None)
+    # The pipeline returns None when no part could be transcribed.
+    monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=None))
+    update, context = _make_update("transcribe"), _make_context()
+
+    asyncio.run(dc.download_file(
+        update, context, "audio", "mp3", "https://youtube.com/", transcribe=True,
+    ))
+
+    assert update.callback_query.edit_message_text.await_args.args[0] == TRANSCRIPTION_FAILED_TEXT

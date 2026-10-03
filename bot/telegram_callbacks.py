@@ -20,6 +20,7 @@ from bot.handlers import media_extras_callbacks as _media_extras_callbacks_modul
 from bot.handlers import playlist_callbacks as _playlist_callbacks_module
 from bot.handlers import transcription_callbacks as _transcription_callbacks_module
 from bot.handlers.callback_parsing import (
+    is_work_callback,
     parse_download_callback,
     parse_spotify_video_callback,
     parse_summary_option,
@@ -45,6 +46,7 @@ from bot.handlers.media_extras_callbacks import (
     _handle_instagram_download as _extracted_handle_instagram_download,
     _show_spotify_summary_options as _extracted_show_spotify_summary_options,
     handle_formats_list as _extracted_handle_formats_list,
+    handle_thumbnail_download as _extracted_handle_thumbnail_download,
 )
 from bot.handlers.playlist_callbacks import (
     download_playlist as _extracted_download_playlist,
@@ -54,6 +56,7 @@ from bot.handlers.spotify_callbacks import download_spotify_video, transcribe_sp
 from bot.handlers.spotify_collection_callbacks import handle_spotify_collection_callback
 from bot.handlers.transcript_prompt_handlers import handle_transcript_prompt_callback
 from bot.handlers.trim_callbacks import NO_ROOM_TEXT, ensure_trim_authorized, handle_trim_callback
+from bot.jobs import busy_chats, is_chat_busy, job_registry
 from bot.services.trim_store import has_room_for_sources
 from bot.handlers.transcription_callbacks import (
     _handle_subtitle_callback as _extracted_handle_subtitle_callback,
@@ -68,7 +71,7 @@ from bot.handlers.transcription_callbacks import (
 )
 from bot.runtime import get_app_runtime
 from bot.security_policy import get_media_label, normalize_url
-from bot.security_throttling import check_rate_limit
+from bot.security_throttling import RATE_LIMIT_TOAST, check_rate_limit
 from bot.services.playlist_service import build_playlist_message, load_playlist
 from bot.services.spotify_service import download_resolved_audio
 from bot.session_context import (
@@ -102,19 +105,58 @@ def _build_playlist_message(playlist_info: dict, context=None) -> tuple[str, Inl
     return build_playlist_message(playlist_info, archive_available=archive_available)
 
 
+# The busy-chat set lives in bot/jobs.py (shared with /stop). Check-and-add
+# happens without an await in between, so the asyncio event loop cannot
+# interleave two callbacks of one chat. See also: main.py (block=False).
+BUSY_CHAT_TOAST = "Trwa już inna operacja w tym czacie. Poczekaj albo przerwij ją komendą /stop."
+# Many guarded flows (uploads, subtitles, single Spotify, ...) are not in
+# job_registry, so pointing users at /stop would lead nowhere.
+BUSY_CHAT_UNSTOPPABLE_TOAST = "Trwa już inna operacja w tym czacie. Poczekaj, aż się zakończy."
+
+
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle callback queries and route them through extracted flows."""
 
     query = update.callback_query
-    await query.answer()
     data = query.data
 
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
 
-    if not check_rate_limit(user_id):
-        await query.edit_message_text("Przekroczono limit requestów. Spróbuj ponownie za chwilę.")
+    # Only work-starting buttons are rate limited; navigation stays free.
+    # Exactly one query.answer() per callback: toast when limited/busy, else plain.
+    is_work = is_work_callback(data)
+    if is_work:
+        # Busy is checked before the rate limit so rejected clicks cost no quota.
+        if is_chat_busy(chat_id):
+            toast = (
+                BUSY_CHAT_TOAST
+                if job_registry.list_for_chat(chat_id)
+                else BUSY_CHAT_UNSTOPPABLE_TOAST
+            )
+            await query.answer(toast, show_alert=True)
+            return
+        if not check_rate_limit(user_id):
+            await query.answer(RATE_LIMIT_TOAST, show_alert=True)
+            return
+        # No await between the busy check above and this add.
+        busy_chats.add(chat_id)
+        try:
+            await query.answer()
+            await _route_callback(update, context, data)
+        finally:
+            busy_chats.discard(chat_id)
         return
+
+    await query.answer()
+    await _route_callback(update, context, data)
+
+
+async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):
+    """Route an already answered callback to its flow."""
+
+    query = update.callback_query
+    chat_id = update.effective_chat.id
 
     if data.startswith("arc_"):
         await _extracted_handle_archive_callback(update, context, data)
@@ -269,6 +311,9 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if data == "formats":
         await handle_formats_list(update, context, url)
         return
+    if data == "thumbnail":
+        await handle_thumbnail_download(update, context, url)
+        return
     if data == "time_range":
         await show_time_range_options(update, context, url)
         return
@@ -360,6 +405,11 @@ async def download_file(
 async def handle_formats_list(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     _sync_media_extras_dependencies()
     return await _extracted_handle_formats_list(update, context, url)
+
+
+async def handle_thumbnail_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    _sync_media_extras_dependencies()
+    return await _extracted_handle_thumbnail_download(update, context, url)
 
 
 async def handle_playlist_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, data: str):

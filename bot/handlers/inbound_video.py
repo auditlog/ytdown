@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import subprocess
@@ -12,8 +13,8 @@ from telegram.ext import ContextTypes
 
 from bot.config import DOWNLOAD_PATH, get_runtime_value
 from bot.handlers.common_ui import escape_md
-from bot.security_limits import FFMPEG_TIMEOUT, RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
-from bot.security_throttling import check_rate_limit
+from bot.security_limits import FFMPEG_TIMEOUT
+from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.auth_service import store_pending_action
 from bot.session_context import (
     get_auth_state as _get_auth_state,
@@ -92,12 +93,7 @@ async def handle_video_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     if not check_rate_limit(user_id):
-        await message.reply_text(
-            "Przekroczono limit requestów!\n\n"
-            f"Możesz wysłać maksymalnie {RATE_LIMIT_REQUESTS} requestów "
-            f"w ciągu {RATE_LIMIT_WINDOW} sekund.\n"
-            "Spróbuj ponownie za chwilę."
-        )
+        await message.reply_text(RATE_LIMIT_MESSAGE)
         return
 
     await process_video_file(update, context, video_info)
@@ -154,8 +150,10 @@ async def extracted_process_video_file(
         title = video_info["title"]
         ext = video_info["ext"]
         safe_title = "".join(c if c.isalnum() or c in " -_" else "_" for c in title)[:80]
+        # message_id keeps names unique when several uploads arrive in the same
+        # second (e.g. forwarded voice notes with identical titles).
         timestamp = datetime.now().strftime("%Y-%m-%d_%H%M%S")
-        video_path = os.path.join(chat_download_path, f"{timestamp}_{safe_title}{ext}")
+        video_path = os.path.join(chat_download_path, f"{timestamp}_{message.message_id}_{safe_title}{ext}")
 
         if use_mtproto:
             from bot.mtproto import download_file_mtproto
@@ -175,7 +173,8 @@ async def extracted_process_video_file(
 
         await progress_msg.edit_text("Ekstrakcja audio z video...")
         mp3_path = os.path.splitext(video_path)[0] + ".mp3"
-        result = subprocess.run(
+        result = await asyncio.to_thread(
+            subprocess.run,
             ["ffmpeg", "-i", video_path, "-vn", "-acodec", "libmp3lame", "-q:a", "2", mp3_path],
             capture_output=True,
             timeout=FFMPEG_TIMEOUT,

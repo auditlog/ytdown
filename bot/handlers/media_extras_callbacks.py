@@ -13,14 +13,14 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto
 from telegram.ext import ContextTypes
 
 from bot.config import DOWNLOAD_PATH, YTDLP_JS_RUNTIMES, YTDLP_REMOTE_COMPONENTS
-from bot.downloader_media import COOKIES_FILE, download_photo
+from bot.downloader_media import COOKIES_FILE, download_photo, download_thumbnail
 from bot.downloader_metadata import get_video_info
 from bot.downloader_validation import sanitize_filename
 from bot.handlers.common_ui import escape_md, safe_edit_message
 from bot.runtime import record_download_for
 from bot.security_policy import get_media_label
 from bot.session_context import (
-    clear_session_context_value as _clear_session_context_value,
+    clear_session_context_value_if as _clear_session_context_value_if,
     get_session_context_value as _get_session_context_value,
     get_session_value as _get_session_value,
 )
@@ -28,6 +28,44 @@ from bot.session_store import user_urls
 
 
 _executor = ThreadPoolExecutor(max_workers=2)
+
+
+THUMBNAIL_ERROR_TEXT = "Nie udało się pobrać miniaturki tego materiału."
+
+
+async def handle_thumbnail_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
+    """Send the video thumbnail as a new photo message.
+
+    Deliberately leaves the format menu untouched (no edit_message_text) so the
+    user can keep picking a format; both the result and any error go out as new
+    messages.
+    """
+
+    chat_id = update.effective_chat.id
+    chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(chat_download_path, exist_ok=True)
+
+    loop = asyncio.get_event_loop()
+    thumb_path = None
+    try:
+        info = await loop.run_in_executor(_executor, get_video_info, url)
+        if info:
+            thumb_path = await loop.run_in_executor(
+                _executor, download_thumbnail, info, chat_download_path, False
+            )
+        if not thumb_path:
+            await context.bot.send_message(chat_id=chat_id, text=THUMBNAIL_ERROR_TEXT)
+            return
+
+        title = info.get("title") or "Miniaturka"
+        with open(thumb_path, "rb") as photo:
+            await context.bot.send_photo(chat_id=chat_id, photo=photo, caption=title[:200])
+    except Exception as exc:
+        logging.error("Error sending thumbnail: %s", exc)
+        await context.bot.send_message(chat_id=chat_id, text=THUMBNAIL_ERROR_TEXT)
+    finally:
+        if thumb_path and os.path.exists(thumb_path):
+            os.remove(thumb_path)
 
 
 async def _handle_instagram_download(update: Update, context: ContextTypes.DEFAULT_TYPE, url, callback_data: str):
@@ -47,14 +85,14 @@ async def _handle_instagram_download(update: Update, context: ContextTypes.DEFAU
     videos = carousel.get("videos", [])
 
     if callback_data == "dl_ig_photos":
-        await _download_and_send_ig_photos(update, context, photos, title, chat_download_path)
+        await _download_and_send_ig_photos(update, context, photos, title, chat_download_path, url=url, carousel=carousel)
     elif callback_data == "dl_ig_videos":
-        await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path)
+        await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path, carousel=carousel)
     elif callback_data == "dl_ig_all":
         if photos:
-            await _download_and_send_ig_photos(update, context, photos, title, chat_download_path)
+            await _download_and_send_ig_photos(update, context, photos, title, chat_download_path, url=url, carousel=carousel)
         if videos:
-            await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path)
+            await _download_and_send_ig_videos(update, context, videos, title, url, chat_download_path, carousel=carousel)
 
 
 async def _download_and_send_ig_photos(
@@ -63,6 +101,8 @@ async def _download_and_send_ig_photos(
     photo_entries: list,
     title: str,
     download_path: str,
+    url: str = "",
+    carousel=None,
 ):
     query = update.callback_query
     chat_id = update.effective_chat.id
@@ -135,7 +175,7 @@ async def _download_and_send_ig_photos(
             context,
             chat_id,
             title,
-            _get_session_value(context, chat_id, "current_url", user_urls) or "",
+            url,  # captured at job start; the session URL may change meanwhile
             "photo",
             total_size,
         )
@@ -144,7 +184,9 @@ async def _download_and_send_ig_photos(
         logging.error("Error sending Instagram photos: %s", exc)
         await safe_edit_message(query, "Błąd podczas wysyłania zdjęć.")
     finally:
-        _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
+        _clear_session_context_value_if(
+            context, chat_id, "instagram_carousel", carousel, legacy_key="ig_carousel"
+        )
         for path in downloaded_paths:
             try:
                 os.remove(path)
@@ -159,6 +201,7 @@ async def _download_and_send_ig_videos(
     title: str,
     url: str,
     download_path: str,
+    carousel=None,
 ):
     query = update.callback_query
     chat_id = update.effective_chat.id
@@ -227,7 +270,9 @@ async def _download_and_send_ig_videos(
                     except OSError:
                         pass
 
-    _clear_session_context_value(context, chat_id, "instagram_carousel", legacy_key="ig_carousel")
+    _clear_session_context_value_if(
+        context, chat_id, "instagram_carousel", carousel, legacy_key="ig_carousel"
+    )
     if sent_count:
         await safe_edit_message(query, f"Wysłano {sent_count} filmów!")
     else:

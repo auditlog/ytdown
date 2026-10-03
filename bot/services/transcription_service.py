@@ -54,6 +54,55 @@ SUMMARY_TYPE_NAMES = {
 }
 
 
+MISSING_GROQ_KEY_TEXT = (
+    "Funkcja niedostępna — brak klucza API do transkrypcji. "
+    "Skontaktuj się z administratorem."
+)
+MISSING_CLAUDE_KEY_TEXT = (
+    "Podsumowanie jest niedostępne — brak klucza API Claude. "
+    "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
+)
+# Variants of MISSING_CLAUDE_KEY_TEXT for places where "pick transcript only"
+# does not fit: the transcript is already on its way (summary skipped after
+# transcription) or there is no summary choice at all (custom prompt).
+MISSING_CLAUDE_KEY_KEEP_TRANSCRIPT_TEXT = (
+    "Transkrypcja gotowa, ale podsumowanie jest niedostępne — brak klucza API Claude. "
+    "Wysyłam samą transkrypcję."
+)
+MISSING_CLAUDE_KEY_ADMIN_TEXT = (
+    "Funkcja niedostępna — brak klucza API Claude. "
+    "Skontaktuj się z administratorem."
+)
+# Shown when the pipeline returns None (no part could be transcribed or the
+# audio could not be cut into parts). See also: bot/transcription_pipeline.py.
+TRANSCRIPTION_FAILED_TEXT = (
+    "Nie udało się przepisać nagrania. Najczęstsze przyczyny: chwilowa awaria "
+    "lub limit usługi rozpoznawania mowy, uszkodzony plik albo brak wyraźnej mowy "
+    "w nagraniu. Spróbuj ponownie za kilka minut."
+)
+SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT = (
+    "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
+    "Wysyłam samą transkrypcję."
+)
+
+
+def missing_transcription_key_message(
+    get_value: Callable[..., Any], *, summary: bool
+) -> str | None:
+    """Return the Polish error text when a required API key is missing.
+
+    Called before any download or upload work starts so the user is not made
+    to wait for a job that is bound to fail. ``get_value`` is the calling
+    handler module's own ``get_runtime_value`` (kept injectable so the
+    per-module test seams keep working).
+    """
+    if not get_value("GROQ_API_KEY", ""):
+        return MISSING_GROQ_KEY_TEXT
+    if summary and not get_value("CLAUDE_API_KEY", ""):
+        return MISSING_CLAUDE_KEY_TEXT
+    return None
+
+
 async def run_transcription_with_progress(
     *,
     source_path: str,

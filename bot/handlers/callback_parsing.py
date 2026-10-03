@@ -110,3 +110,53 @@ def parse_spotify_video_callback(data):
         return None
 
     return {"media_type": "video", "height": height}
+
+
+# Callback prefixes whose handlers start real work (download, transcription,
+# archive packing, ...). Only these are charged against the rate limit and,
+# later, the per-chat concurrency guard. Navigation (menus, paging, back,
+# cancel, stop_*, time_range*, formats, noop, ...) must never be blocked.
+_WORK_CALLBACK_PREFIXES = (
+    "dl_",
+    "spv_",
+    "thumbnail",
+    "transcribe",  # also covers transcribe_summary
+    "summary_option_",
+    "audio_transcribe",  # also covers audio_transcribe_summary
+    "audio_summary_option_",
+    "sub_lang_",
+    "sub_auto_",
+    "sub_src_ai",
+    "sub_sum_",
+    "pl_dl_",
+    "pl_zip_dl_",
+    "spc_dl_",
+    "arc_split_",
+    "arc_resend_",
+    "arc_pack_partial_",
+)
+_WORK_CALLBACK_EXACT = frozenset({"trim_dl"})
+_SPOTIFY_PACK_SIZES = frozenset({"50", "100", "all"})
+_SPOTIFY_PACK_FORMATS = frozenset({"mp3", "m4a"})
+
+
+def is_work_callback(data) -> bool:
+    """Return True when the callback payload starts work (not navigation).
+
+    Pure helper shared by the rate limiter and the concurrency guard.
+    Unknown or non-string payloads count as navigation.
+    """
+    if not isinstance(data, str):
+        return False
+    if data in _WORK_CALLBACK_EXACT or data.startswith(_WORK_CALLBACK_PREFIXES):
+        return True
+    # Spotify archive size choice: spc_pack_<mp3|m4a>_<50|100|all>.
+    # The bare spc_pack_mp3 / spc_pack_m4a / spc_pack_back only open menus.
+    parts = data.split("_")
+    return (
+        len(parts) == 4
+        and parts[0] == "spc"
+        and parts[1] == "pack"
+        and parts[2] in _SPOTIFY_PACK_FORMATS
+        and parts[3] in _SPOTIFY_PACK_SIZES
+    )

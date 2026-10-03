@@ -50,6 +50,30 @@ def test_post_process_transcript_extracts_text_blocks(monkeypatch):
     assert result == "fixed"
 
 
+def test_post_process_transcript_keeps_raw_text_when_reply_hits_max_tokens(monkeypatch):
+    # A reply cut off at max_tokens is missing the end of the transcript;
+    # returning it would silently replace the full raw text with a shorter one.
+    class Resp:
+        status_code = 200
+
+        def json(self):
+            return {
+                "content": [{"type": "text", "text": "first half of the corrected text"}],
+                "stop_reason": "max_tokens",
+            }
+
+    monkeypatch.setattr(providers.requests, "post", lambda *_args, **_kwargs: Resp())
+
+    result = providers.post_process_transcript(
+        "first half of the raw text and the second half",
+        api_key="key",
+        requests_module=providers.requests,
+        sleep_fn=lambda _seconds: None,
+    )
+
+    assert result is None
+
+
 def test_post_process_transcript_returns_none_without_api_key():
     result = providers.post_process_transcript("text", api_key=None)
     assert result is None
@@ -220,9 +244,82 @@ def test_transcribe_audio_returns_empty_on_connection_timeout(monkeypatch, tmp_p
         str(audio_file),
         "groq-key",
         requests_module=providers.requests,
+        sleep_fn=lambda _seconds: None,
     )
 
     assert result == ""
+
+
+class _GroqResp:
+    def __init__(self, status_code, text="", headers=None):
+        self.status_code = status_code
+        self.text = text
+        self.headers = headers or {}
+
+
+def _transcribe_with_responses(monkeypatch, tmp_path, responses):
+    """Run transcribe_audio against a scripted sequence of Groq responses."""
+
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"x" * 100)
+    remaining = list(responses)
+    calls = []
+    sleeps = []
+
+    def fake_post(*_a, **_k):
+        calls.append(1)
+        return remaining.pop(0)
+
+    monkeypatch.setattr(providers.requests, "post", fake_post)
+    result = providers.transcribe_audio(
+        str(audio_file),
+        "groq-key",
+        requests_module=providers.requests,
+        sleep_fn=sleeps.append,
+    )
+    return result, len(calls), sleeps
+
+
+def test_transcribe_audio_retries_rate_limit_after_the_advertised_delay(monkeypatch, tmp_path):
+    result, calls, sleeps = _transcribe_with_responses(monkeypatch, tmp_path, [
+        _GroqResp(429, "rate limited", headers={"Retry-After": "7"}),
+        _GroqResp(200, "hello world"),
+    ])
+
+    assert result == "hello world"
+    assert calls == 2
+    assert sleeps == [7.0]
+
+
+def test_transcribe_audio_gives_up_after_repeated_server_errors(monkeypatch, tmp_path):
+    attempts = providers.GROQ_API_MAX_RETRIES
+    result, calls, sleeps = _transcribe_with_responses(
+        monkeypatch, tmp_path, [_GroqResp(503, "unavailable")] * attempts
+    )
+
+    assert result == ""
+    assert calls == attempts
+    assert len(sleeps) == attempts - 1
+
+
+def test_transcribe_audio_does_not_retry_a_rejected_api_key(monkeypatch, tmp_path):
+    result, calls, sleeps = _transcribe_with_responses(
+        monkeypatch, tmp_path, [_GroqResp(401, "invalid api key")]
+    )
+
+    assert result == ""
+    assert calls == 1
+    assert sleeps == []
+
+
+def test_transcribe_audio_caps_a_very_long_retry_after(monkeypatch, tmp_path):
+    result, _calls, sleeps = _transcribe_with_responses(monkeypatch, tmp_path, [
+        _GroqResp(429, "rate limited", headers={"Retry-After": "3600"}),
+        _GroqResp(200, "ok"),
+    ])
+
+    assert result == "ok"
+    assert sleeps == [providers.GROQ_RETRY_AFTER_MAX_SEC]
 
 
 def test_post_process_transcript_returns_none_when_api_returns_empty_content(monkeypatch):
@@ -267,3 +364,36 @@ def test_post_process_transcript_returns_none_on_connection_error(monkeypatch):
 
     assert result is None
     assert calls["attempts"] == 3
+
+
+def test_transcribe_audio_retries_a_dropped_connection(monkeypatch, tmp_path):
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"x" * 100)
+    outcomes = [real_requests.exceptions.ConnectionError("reset"), _GroqResp(200, "after reconnect")]
+
+    def fake_post(*_a, **_k):
+        outcome = outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    monkeypatch.setattr(providers.requests, "post", fake_post)
+    sleeps = []
+
+    result = providers.transcribe_audio(
+        str(audio_file), "groq-key", requests_module=providers.requests, sleep_fn=sleeps.append,
+    )
+
+    assert result == "after reconnect"
+    assert sleeps == [providers.GROQ_API_RETRY_BASE_DELAY]
+
+
+def test_transcribe_audio_falls_back_to_backoff_for_a_date_retry_after(monkeypatch, tmp_path):
+    # Retry-After may also be an HTTP date; only the seconds form is parsed.
+    result, _calls, sleeps = _transcribe_with_responses(monkeypatch, tmp_path, [
+        _GroqResp(503, "busy", headers={"Retry-After": "Wed, 21 Oct 2026 07:28:00 GMT"}),
+        _GroqResp(200, "ok"),
+    ])
+
+    assert result == "ok"
+    assert sleeps == [providers.GROQ_API_RETRY_BASE_DELAY]

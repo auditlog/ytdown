@@ -446,6 +446,15 @@ def test_execute_playlist_archive_flow_happy_path(tmp_path, monkeypatch):
 
     # One volume produced and shipped.
     assert len(sent_volumes) == 1
+    texts = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert archive_service.ARCHIVE_UNPACK_HINT in texts[-1]
+    assert not any("vol_size" in t or "Pakowanie OK" in t for t in texts)
+    assert any(t.startswith("Pakuję do 7z w częściach po ") for t in texts)
+    assert any(t.startswith("Spakowano: 1 część.") for t in texts)
+    assert "Spakowano: 2 pliki → 1 część 7z" in texts[-1]
+    keyboard = update.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    buttons = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    assert "Wyślij wszystkie części ponownie" in buttons
     # Workspace persists for retention.
     assert any(p.name.startswith("pl_") for p in (tmp_path / "99").iterdir())
     session_store.reset()
@@ -736,6 +745,12 @@ def test_execute_single_file_archive_flow_consumes_pending_job(tmp_path, monkeyp
     assert pending_archive_jobs.get(33, {}).get(token) is None
     # File migrated into workspace and a volume produced + sent.
     assert len(sent) == 1
+    final_text = update.callback_query.edit_message_text.await_args.args[0]
+    assert archive_service.ARCHIVE_UNPACK_HINT in final_text
+    assert "Plik wysłany w 1 części." in final_text
+    keyboard = update.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    buttons = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    assert "Wyślij wszystkie części ponownie" in buttons
     session_store.reset()
 
 
@@ -787,6 +802,64 @@ def test_execute_partial_archive_flow_packs_remaining(tmp_path, monkeypatch):
 
     pack_called.assert_awaited_once()
     send_called.assert_awaited_once()
+    final_text = update.callback_query.edit_message_text.await_args.args[0]
+    assert archive_service.ARCHIVE_UNPACK_HINT in final_text
+    assert "Częściowa playlista wysłana w 1 części." in final_text
+    keyboard = update.callback_query.edit_message_text.await_args.kwargs["reply_markup"]
+    buttons = [btn.text for row in keyboard.inline_keyboard for btn in row]
+    assert "Wyślij wszystkie części ponownie" in buttons
     # Partial state consumed.
     assert partial_archive_workspaces.get(44, {}).get("tok") is None
     session_store.reset()
+
+
+def test_user_facing_archive_texts_have_no_jargon():
+    import re
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parent.parent / "bot"
+    offenders = []
+    for path in list(root.glob("services/*archive*.py")) + [
+        root / "handlers" / "download_callbacks.py",
+        root / "handlers" / "common_ui.py",
+    ]:
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if re.search(r"logging\.|logger\.", line) or line.lstrip().startswith("#"):
+                continue
+            if (
+                "vol_size" in line
+                or "Pakowanie OK" in line
+                or "olumen" in line
+                # Volumes are "części" in user texts; "paczki" only for Spotify groups.
+                or "paczki ponownie" in line
+                or "Wysyłka anulowana" in line
+            ):
+                offenders.append(f"{path.name}: {line.strip()}")
+    assert not offenders, offenders
+
+
+def test_archive_playlist_item_download_is_bounded_by_size_and_free_space(tmp_path, monkeypatch):
+    import asyncio
+    from types import SimpleNamespace
+
+    from bot.security_limits import MAX_ARCHIVE_ITEM_SIZE_MB
+    from bot.services import archive_service
+
+    captured = {}
+    monkeypatch.setattr(archive_service, "prepare_download_plan", lambda **_kwargs: SimpleNamespace(url="u"))
+    # An unknown size estimate used to skip every limit for the item.
+    monkeypatch.setattr(archive_service, "estimate_download_size", lambda _plan: None)
+
+    async def fake_execute_download(_plan, **kwargs):
+        captured.update(kwargs)
+        return SimpleNamespace(file_path=str(tmp_path / "item.mp3"), file_size_mb=1.0)
+
+    monkeypatch.setattr(archive_service, "execute_download", fake_execute_download)
+
+    asyncio.run(archive_service._download_one_into_workspace(
+        {"url": "u", "title": "t"}, tmp_path,
+        media_type="audio", format_choice="mp3", executor=None,
+    ))
+
+    # max_file_bytes turns on DownloadBudget: byte cap plus the free-disk guard.
+    assert captured["max_file_bytes"] == MAX_ARCHIVE_ITEM_SIZE_MB * 1024**2

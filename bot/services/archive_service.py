@@ -22,6 +22,7 @@ if TYPE_CHECKING:
     from bot.jobs import JobCancellation
 
 from bot.jobs import JobDescriptor, job_registry
+from bot.handlers.common_ui import polish_plural, progress_stop_markup
 from bot.archive import (
     compute_archive_basename,
     is_7z_available,
@@ -51,6 +52,30 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
 
 _SLUG_MAX_LEN = 60
+
+
+ARCHIVE_UNPACK_HINT = (
+    "📦 Jak otworzyć: zapisz wszystkie części (.7z.001, .7z.002…) w jednym "
+    "folderze, nie zmieniaj nazw i otwórz plik .7z.001 w 7-Zip (Windows), "
+    "Keka (macOS) lub ZArchiver (Android)."
+)
+
+def _volumes_phrase(count: int) -> str:
+    """"1 część" / "2 części" / "5 części" -- volumes are "części" in user texts."""
+
+    return polish_plural(count, "część", "części", "części")
+
+
+def _volumes_locative(count: int) -> str:
+    """"(w) 1 części" / "(w) 2 częściach" / "(w) 5 częściach"."""
+
+    return polish_plural(count, "części", "częściach", "częściach")
+
+
+ARCHIVE_EXPIRED_TEXT = (
+    "Paczki wygasły (przechowuję je 60 min) albo bot był restartowany. "
+    "Pobierz plik ponownie."
+)
 
 
 def _build_slug(title: str) -> str:
@@ -153,6 +178,9 @@ async def _download_one_into_workspace(
         status_callback=_noop_status,
         format_bytes=lambda v: str(v),
         format_eta=lambda v: str(v),
+        # Enforced while downloading, so items whose size could not be
+        # estimated are capped too, and the free-disk guard protects the Pi.
+        max_file_bytes=MAX_ARCHIVE_ITEM_SIZE_MB * 1024**2,
     )
     return Path(result.file_path), result.file_size_mb
 
@@ -264,7 +292,7 @@ async def send_volumes(
             reason = mtproto_unavailability_reason()
             if reason is not None:
                 raise RuntimeError(
-                    f"Wolumen {volume.name} przekracza Bot API ({size_mb:.0f} MB), "
+                    f"Część {volume.name} przekracza Bot API ({size_mb:.0f} MB), "
                     f"a MTProto jest niedostępny: {reason}"
                 )
             ok = await send_document_mtproto(
@@ -279,11 +307,15 @@ async def send_volumes(
         logging.info("Sent volume %d/%d: %s (%.1f MB)", idx + 1, total, volume.name, size_mb)
 
 
-async def _safe_status_edit(update, text: str) -> None:
-    """Edit the inline-keyboard message body, ignoring 'message not modified' errors."""
+async def _safe_status_edit(update, text: str, reply_markup=None) -> None:
+    """Edit the inline-keyboard message body, ignoring 'message not modified' errors.
+
+    ``reply_markup`` is typically the stop button of an in-progress job; it is
+    omitted for terminal messages so the button disappears.
+    """
 
     try:
-        await update.callback_query.edit_message_text(text)
+        await update.callback_query.edit_message_text(text, reply_markup=reply_markup)
     except Exception as exc:
         logging.debug("status edit failed (non-fatal): %s", exc)
 
@@ -333,6 +365,11 @@ async def execute_playlist_archive_flow(
     lock_path.touch()
 
     async def status(text: str) -> None:
+        await _safe_status_edit(
+            update, text, reply_markup=progress_stop_markup(cancellation),
+        )
+
+    async def finish_status(text: str) -> None:
         await _safe_status_edit(update, text)
 
     await status(
@@ -366,14 +403,14 @@ async def execute_playlist_archive_flow(
 
         if not downloaded:
             shutil.rmtree(workspace, ignore_errors=True)
-            await status("Nie udało się pobrać żadnego elementu.")
+            await finish_status("Nie udało się pobrać żadnego elementu.")
             return
 
         job_registry.update_label(
             cancellation.job_id,
             f"Playlist 7z ({media_type} {format_choice}) — pakowanie",
         )
-        await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
+        await status(f"Pakuję do 7z w częściach po {volume_size_mb} MB…")
         slug = _build_slug(title)
         dest_basename = workspace / compute_archive_basename(
             f"{slug}_{media_type}_{format_choice}", datetime.now()
@@ -396,7 +433,7 @@ async def execute_playlist_archive_flow(
             cancellation.job_id,
             f"Playlist 7z ({media_type} {format_choice}) — wysyłka [0/{len(volumes)}]",
         )
-        await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
+        await status(f"Spakowano: {_volumes_phrase(len(volumes))}. Wysyłam…")
         await send_volumes(
             context.bot,
             chat_id=chat_id,
@@ -418,17 +455,20 @@ async def execute_playlist_archive_flow(
 
         was_cancelled_in_send = cancellation.event.is_set()
         summary_lines = [
-            "Playlista zakończona." if not was_cancelled_in_send else "⏹ Wysyłka anulowana.",
+            "Playlista zakończona." if not was_cancelled_in_send else "⏹ Wysyłka zatrzymana.",
             f"Pobrano: {len(downloaded)}/{total}",
-            f"Spakowano: {len(downloaded)} plików → {len(volumes)} paczek 7z",
+            f"Spakowano: {polish_plural(len(downloaded), 'plik', 'pliki', 'plików')}"
+            f" → {_volumes_phrase(len(volumes))} 7z",
         ]
         if was_cancelled_in_send:
-            summary_lines.append(f"Wysłano: <{len(volumes)} (anulowano)")
+            summary_lines.append(f"Wysłano: <{len(volumes)} (zatrzymano)")
         else:
             summary_lines.append(f"Wysłano: {len(volumes)}/{len(volumes)}")
         summary_lines.append(
             f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min."
         )
+        if not was_cancelled_in_send:
+            summary_lines.append(ARCHIVE_UNPACK_HINT)
         if failed:
             summary_lines.append("")
             summary_lines.append("Nieudane elementy:")
@@ -437,7 +477,7 @@ async def execute_playlist_archive_flow(
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "Wyślij wszystkie paczki ponownie",
+                "Wyślij wszystkie części ponownie",
                 callback_data=f"arc_resend_{token}_0",
             )],
             [InlineKeyboardButton("Usuń teraz", callback_data=f"arc_purge_{token}")],
@@ -450,7 +490,7 @@ async def execute_playlist_archive_flow(
             logging.debug("summary edit failed: %s", exc)
     except Exception as exc:
         logging.error("Playlist archive flow failed: %s", exc)
-        await status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
+        await finish_status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
     finally:
         try:
             lock_path.unlink()
@@ -537,7 +577,7 @@ async def execute_partial_archive_flow(
     bucket = partial_archive_workspaces.get(chat_id) or {}
     state = bucket.get(token)
     if state is None:
-        await _safe_status_edit(update, "Sesja wygasła.")
+        await _safe_status_edit(update, ARCHIVE_EXPIRED_TEXT)
         return
 
     if not is_7z_available():
@@ -558,10 +598,15 @@ async def execute_partial_archive_flow(
     cancellation = job_registry.register(chat_id, descriptor)
 
     async def status(text: str) -> None:
+        await _safe_status_edit(
+            update, text, reply_markup=progress_stop_markup(cancellation),
+        )
+
+    async def finish_status(text: str) -> None:
         await _safe_status_edit(update, text)
 
     try:
-        await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
+        await status(f"Pakuję do 7z w częściach po {volume_size_mb} MB…")
         slug = _build_slug(state.title)
         dest_basename = state.workspace / compute_archive_basename(
             f"{slug}_{state.media_type}_{state.format_choice}", datetime.now()
@@ -588,7 +633,7 @@ async def execute_partial_archive_flow(
             )
 
         if cancellation.event.is_set():
-            await status("⏹ Zatrzymano w trakcie pakowania.")
+            await finish_status("⏹ Zatrzymano w trakcie pakowania.")
             return
 
         caption_prefix = f"{state.title} ({state.media_type} {state.format_choice})"
@@ -596,7 +641,7 @@ async def execute_partial_archive_flow(
             cancellation.job_id,
             f"Wysyłka częściowej playlisty [0/{len(volumes)}]",
         )
-        await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
+        await status(f"Spakowano: {_volumes_phrase(len(volumes))}. Wysyłam…")
         await send_volumes(
             context.bot, chat_id=chat_id, volumes=volumes,
             caption_prefix=caption_prefix, use_mtproto=use_mtproto,
@@ -612,7 +657,7 @@ async def execute_partial_archive_flow(
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "Wyślij wszystkie paczki ponownie",
+                "Wyślij wszystkie części ponownie",
                 callback_data=f"arc_resend_{delivery_token}_0",
             )],
             [InlineKeyboardButton(
@@ -621,12 +666,13 @@ async def execute_partial_archive_flow(
             )],
         ])
         await update.callback_query.edit_message_text(
-            f"Częściowa playlista wysłana w {len(volumes)} paczkach.",
+            f"Częściowa playlista wysłana w {_volumes_locative(len(volumes))}.\n\n"
+            f"{ARCHIVE_UNPACK_HINT}",
             reply_markup=keyboard,
         )
     except Exception as exc:
         logging.error("Partial archive flow failed: %s", exc)
-        await status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
+        await finish_status(f"Pakowanie/wysyłka nie powiodły się: {exc}")
     finally:
         # Consume partial state regardless of outcome.
         bucket.pop(token, None)
@@ -656,7 +702,7 @@ async def execute_single_file_archive_flow(
     bucket = pending_archive_jobs.get(chat_id) or {}
     state = bucket.get(token)
     if state is None:
-        await _safe_status_edit(update, "Sesja wygasła. Wyślij plik ponownie.")
+        await _safe_status_edit(update, ARCHIVE_EXPIRED_TEXT)
         return
 
     use_mtproto = mtproto_unavailability_reason() is None
@@ -681,14 +727,14 @@ async def execute_single_file_archive_flow(
     async def status(text: str) -> None:
         await _safe_status_edit(update, text)
 
-    await status(f"Pakowanie do 7z (vol_size={volume_size_mb} MB)...")
+    await status(f"Pakuję do 7z w częściach po {volume_size_mb} MB…")
     try:
         slug = _build_slug(state.title)
         dest_basename = workspace / compute_archive_basename(slug, datetime.now())
         volumes = await pack_to_volumes([moved_path], dest_basename, volume_size_mb)
 
         caption_prefix = state.title
-        await status(f"Pakowanie OK: {len(volumes)} paczek. Wysyłanie...")
+        await status(f"Spakowano: {_volumes_phrase(len(volumes))}. Wysyłam…")
         await send_volumes(
             context.bot,
             chat_id=chat_id,
@@ -709,7 +755,7 @@ async def execute_single_file_archive_flow(
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "Wyślij wszystkie paczki ponownie",
+                "Wyślij wszystkie części ponownie",
                 callback_data=f"arc_resend_{delivery_token}_0",
             )],
             [InlineKeyboardButton(
@@ -719,7 +765,9 @@ async def execute_single_file_archive_flow(
         ])
         try:
             await update.callback_query.edit_message_text(
-                f"Plik wysłany w {len(volumes)} paczkach. Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
+                f"Plik wysłany w {_volumes_locative(len(volumes))}. "
+                f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.\n\n"
+                f"{ARCHIVE_UNPACK_HINT}",
                 reply_markup=keyboard,
             )
         except Exception as exc:

@@ -11,6 +11,7 @@ from telegram.ext import ContextTypes
 
 from bot.cleanup import cleanup_old_files, get_disk_usage
 from bot.config import DOWNLOAD_PATH, get_download_stats, get_runtime_value
+from bot.handlers.common_ui import escape_md
 from bot.runtime import (
     add_authorized_user_for,
     get_app_runtime,
@@ -117,17 +118,17 @@ async def notify_admin_pin_failure(bot, user, attempt_count: int, blocked: bool)
 
     try:
         emoji = "\U0001f6ab" if blocked else "\u26a0\ufe0f"
-        label = "[BLOCKED]" if blocked else "[Failed PIN attempt]"
+        label = "Zablokowano dostęp" if blocked else "Nieudana próba podania PIN-u"
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        username = f"@{user.username}" if user.username else "n/a"
+        username = f"@{user.username}" if user.username else "brak"
         text = (
             f"{emoji} {label}\n\n"
-            f"User ID: {user.id}\n"
-            f"Username: {username}\n"
-            f"Name: {user.first_name or 'n/a'}\n"
-            f"Language: {user.language_code or 'n/a'}\n"
-            f"Attempts: {attempt_count}/{MAX_ATTEMPTS}\n"
-            f"Time: {timestamp}"
+            f"ID użytkownika: {user.id}\n"
+            f"Nazwa użytkownika: {username}\n"
+            f"Imię i nazwisko: {user.first_name or 'brak'}\n"
+            f"Język: {user.language_code or 'brak'}\n"
+            f"Próba: {attempt_count}/{MAX_ATTEMPTS}\n"
+            f"Czas: {timestamp}"
         )
         await bot.send_message(chat_id=admin_id, text=text)
     except Exception as exc:
@@ -219,36 +220,58 @@ async def logout_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
 
+HELP_TEXT = (
+    "Jak korzystać z bota\n\n"
+    "📥 Pobieranie\n"
+    "Wyślij link (YouTube, Vimeo, TikTok, Instagram, LinkedIn, X, Spotify, Castbox) "
+    "i wybierz format. Pliki większe niż limit Telegrama przyjdą w częściach 7z.\n\n"
+    "✂️ Przycinanie audio\n"
+    "• Pod każdym wysłanym plikiem audio jest przycisk „✂️ Przytnij” (działa 24 h).\n"
+    "• Podcasty i Spotify: „✂️ Pobierz i przytnij”.\n"
+    "• Własny plik: wyślij MP3 lub wiadomość głosową i wybierz „✂️ Przytnij”.\n"
+    "• Zapis: 1:30-4:45 · 2:15- (do końca) · -5:00 (od początku) · "
+    "kilka zakresów po przecinku.\n\n"
+    "📝 Transkrypcja i podsumowanie\n"
+    "Pod linkiem wybierz „Transkrypcja audio” lub „Transkrypcja + Podsumowanie” "
+    "albo wyślij plik audio/wideo.\n\n"
+    "🎵 Spotify\n"
+    "Odcinki, utwory, albumy i playlisty — przy albumach zaznacz utwory i pobierz je "
+    "pojedynczo albo w paczkach 7z.\n\n"
+    "Komendy\n"
+    "/stop — zatrzymaj trwające pobieranie lub przetwarzanie\n"
+    "/history — historia pobrań\n"
+    "/logout — wyloguj się"
+)
+
+HELP_ADMIN_SECTION = (
+    "\n\nKomendy administratora\n"
+    "/status — miejsce na dysku i stan plików\n"
+    "/cleanup — usuń pliki starsze niż 24 h\n"
+    "/users — lista autoryzowanych użytkowników\n"
+    "/spotify_login — połącz konto Spotify\n"
+    "/spotify_logout — odłącz konto Spotify"
+)
+
+NOT_ADMIN_TEXT = "Ta komenda jest dostępna tylko dla administratora bota."
+
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Jak korzystać z bota:\n\n"
-        "📹 *Pobieranie video/audio:*\n"
-        "1. Wyślij link z obsługiwanej platformy\n"
-        "2. Wybierz format (video lub audio) i jakość\n"
-        "3. Poczekaj na pobranie pliku\n\n"
-        "🎤 *Transkrypcja plików audio/video:*\n"
-        "1. Wyślij wiadomość głosową, plik audio lub video\n"
-        "2. Wybierz: transkrypcja lub transkrypcja + podsumowanie\n"
-        "3. Obsługiwane formaty audio: OGG, MP3, M4A, WAV, FLAC, OPUS\n"
-        "4. Obsługiwane formaty video: MP4, MOV, MKV, AVI, WEBM\n\n"
-        "🌐 *Obsługiwane platformy:*\n"
-        f"{_format_supported_platforms_block()}\n\n"
-        "🔒 *Platformy wymagające logowania:*\n"
-        f"{_format_cookies_required_names()} mogą wymagać pliku cookies.txt\n"
-        "do pobierania treści z ograniczonym dostępem.\n\n"
-        "Komendy administracyjne:\n"
-        "- /status - sprawdź przestrzeń dyskową\n"
-        "- /cleanup - usuń stare pliki (>24h)\n"
-        "- /spotify_login - połącz konto Spotify dla playlist\n"
-        "- /spotify_logout - odłącz konto Spotify",
-        parse_mode="Markdown",
-    )
+    # Open to unauthorized users too. Sent without parse_mode: the text contains
+    # underscores in command names (/spotify_login) that would break Markdown.
+    text = HELP_TEXT
+    if _is_admin(update.effective_user.id):
+        text += HELP_ADMIN_SECTION
+    await update.message.reply_text(text)
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
+        return
+
+    if not _is_admin(user_id):
+        await update.message.reply_text(NOT_ADMIN_TEXT)
         return
 
     used_gb, free_gb, total_gb, usage_percent = get_disk_usage()
@@ -265,26 +288,26 @@ async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     status_msg = (
-        f"**Status systemu**\n\n"
-        f"**Przestrzeń dyskowa:**\n"
+        f"*Status systemu*\n\n"
+        f"*Przestrzeń dyskowa:*\n"
         f"- Używane: {used_gb:.1f} GB / {total_gb:.1f} GB ({usage_percent:.1f}%)\n"
         f"- Wolne: {free_gb:.1f} GB\n\n"
-        f"**Katalog downloads:**\n"
+        f"*Katalog downloads:*\n"
         f"- Plików: {file_count}\n"
         f"- Rozmiar: {total_size_mb:.1f} MB\n\n"
     )
 
     if free_gb < 10:
-        status_msg += "**Uwaga:** Mało wolnej przestrzeni!\n"
+        status_msg += "*Uwaga:* Mało wolnej przestrzeni!\n"
     if free_gb < 5:
-        status_msg += "**KRYTYCZNIE mało miejsca!**\n"
+        status_msg += "*KRYTYCZNIE mało miejsca!*\n"
 
     from bot.downloader_media import COOKIES_FILE
     if os.path.exists(COOKIES_FILE):
         cookie_size = os.path.getsize(COOKIES_FILE)
-        status_msg += f"\n**cookies.txt:** ✅ ({cookie_size} B)\n"
+        status_msg += f"\n*cookies.txt:* ✅ ({cookie_size} B)\n"
     else:
-        status_msg += f"\n**cookies.txt:** ❌ brak ({_format_cookies_required_names()} mogą wymagać)\n"
+        status_msg += f"\n*cookies.txt:* ❌ brak ({_format_cookies_required_names()} mogą wymagać)\n"
 
     await update.message.reply_text(status_msg, parse_mode="Markdown")
 
@@ -300,30 +323,31 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Brak historii pobrań.")
         return
 
-    msg = "📊 **Historia pobrań**\n\n"
-    msg += f"**Twoje statystyki:**\n"
+    msg = "📊 *Historia pobrań*\n\n"
+    msg += f"*Twoje statystyki:*\n"
     msg += f"- Łączna liczba pobrań: {stats['total_downloads']}\n"
     msg += f"- Udane: {stats['success_count']} ✅  Nieudane: {stats['failure_count']} ❌\n"
     msg += f"- Łączny rozmiar: {stats['total_size_mb']:.1f} MB\n\n"
 
     if stats["format_counts"]:
-        msg += "**Formaty:**\n"
+        msg += "*Formaty:*\n"
         for fmt, count in sorted(stats["format_counts"].items(), key=lambda item: -item[1]):
-            msg += f"- {fmt}: {count}\n"
+            msg += f"- {escape_md(fmt)}: {count}\n"
         msg += "\n"
 
     if stats["recent"]:
-        msg += "**Ostatnie pobrania:**\n"
+        msg += "*Ostatnie pobrania:*\n"
         for record in stats["recent"][:5]:
-            title = record.get("title", "Nieznany")[:40]
-            if len(record.get("title", "")) > 40:
+            raw_title = record.get("title", "Nieznany")
+            title = escape_md(raw_title[:40])
+            if len(raw_title) > 40:
                 title += "..."
             timestamp = record.get("timestamp", "")[:10]
             fmt = record.get("format", "?")
             size = record.get("file_size_mb", 0)
             status_icon = "✅" if record.get("status", "success") == "success" else "❌"
             time_range_str = f" ✂️{record['time_range']}" if record.get("time_range") else ""
-            msg += f"- {status_icon} `{timestamp}` {title} ({fmt}, {size:.1f}MB){time_range_str}\n"
+            msg += f"- {status_icon} `{timestamp}` {title} ({escape_md(fmt)}, {size:.1f}MB){time_range_str}\n"
 
     await update.message.reply_text(msg, parse_mode="Markdown")
 
@@ -332,6 +356,10 @@ async def cleanup_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     if not _is_authorized(context, user_id):
         await update.message.reply_text("Brak autoryzacji. Użyj /start aby się zalogować.")
+        return
+
+    if not _is_admin(user_id):
+        await update.message.reply_text(NOT_ADMIN_TEXT)
         return
 
     await update.message.reply_text("Rozpoczynam czyszczenie starych plików...")

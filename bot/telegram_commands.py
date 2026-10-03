@@ -13,7 +13,7 @@ from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import ContextTypes
 
-from bot.jobs import job_registry
+from bot.jobs import is_chat_busy, job_registry
 
 from bot.cleanup import cleanup_old_files, get_disk_usage
 from bot.config import DOWNLOAD_PATH, get_download_stats, get_runtime_value
@@ -317,6 +317,9 @@ async def process_video_file(
     return await _extracted_process_video_file(update, context, video_info)
 
 
+STOP_UNSTOPPABLE_TEXT = "Trwa operacja, której nie da się przerwać — poczekaj, aż się zakończy."
+
+
 def _build_stop_list_message(descriptors: list) -> tuple[str, InlineKeyboardMarkup]:
     """Build the /stop list text + keyboard from active job descriptors.
 
@@ -358,7 +361,12 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     descriptors = job_registry.list_for_chat(chat_id)
 
     if not descriptors:
-        await update.effective_message.reply_text("Brak aktywnych operacji.")
+        # A guarded flow outside job_registry (upload transcription, subtitles,
+        # ...) may still hold the chat; say so instead of "nothing running".
+        if is_chat_busy(chat_id):
+            await update.effective_message.reply_text(STOP_UNSTOPPABLE_TEXT)
+        else:
+            await update.effective_message.reply_text("Brak aktywnych operacji.")
         return
 
     text, keyboard = _build_stop_list_message(descriptors)
@@ -408,9 +416,12 @@ async def handle_stop_callback(update: Update, context: ContextTypes.DEFAULT_TYP
 
     if data.startswith("stop_"):
         job_id = data[len("stop_"):]
-        ok = await job_registry.cancel_async(job_id, reason="user via /stop")
+        # Only jobs owned by this chat may be stopped; unknown or foreign ids
+        # look the same as finished jobs.
+        owned = any(d.job_id == job_id for d in job_registry.list_for_chat(chat_id))
+        ok = owned and await job_registry.cancel_async(job_id, reason="user via /stop")
         text = (
-            "Wysłano sygnał zatrzymania. Czekam na potwierdzenie..."
+            "Wysłano sygnał zatrzymania…"
             if ok else "Operacja już zakończona."
         )
         try:

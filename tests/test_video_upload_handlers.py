@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+import threading
 from pathlib import Path
 from unittest.mock import AsyncMock, Mock
 
@@ -43,7 +44,7 @@ class TestVideoUpload:
 
         _async(tc.handle_video_upload(update, context))
 
-        assert "Przekroczono limit requestów" in update.message.reply_text.await_args.args[0]
+        assert "Przekroczono limit żądań" in update.message.reply_text.await_args.args[0]
 
     def test_handle_video_upload_triggers_processing(self, monkeypatch):
         update = _make_update(user_id=888, chat_id=888)
@@ -142,8 +143,11 @@ class TestVideoUpload:
 
         original_run = subprocess.run
 
+        ffmpeg_threads = []
+
         def fake_subprocess_run(cmd, **kwargs):
             if cmd[0] == "ffmpeg":
+                ffmpeg_threads.append(threading.get_ident())
                 mp3_path = cmd[-1]
                 Path(mp3_path).write_bytes(b"fake-mp3-data")
                 result = Mock()
@@ -163,6 +167,8 @@ class TestVideoUpload:
             "ext": ".mp4",
         }))
 
+        # ffmpeg must not run on the event loop thread (it would block all updates).
+        assert ffmpeg_threads and ffmpeg_threads[0] != threading.get_ident()
         assert "audio_file_path" in context.user_data
         assert context.user_data["audio_file_title"] == "test_video"
         assert context.user_data["audio_file_path"].endswith(".mp3")

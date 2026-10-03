@@ -25,6 +25,10 @@ MAX_MP3_PART_SIZE_MB = 20
 # Timeout for ffmpeg operations (in seconds)
 FFMPEG_TIMEOUT = 180
 
+# Timeout for re-encoding a whole non-MP3 recording before it is split for
+# transcription; multi-hour audio takes minutes on a Raspberry Pi.
+FFMPEG_TRANSCODE_TIMEOUT = 1800
+
 # Maximum number of playlist items to download (default / expanded)
 MAX_PLAYLIST_ITEMS = 10
 MAX_PLAYLIST_ITEMS_EXPANDED = 50

@@ -24,6 +24,31 @@ def test_stop_command_returns_empty_message_when_no_jobs():
     assert "Brak aktywnych operacji" in text
 
 
+def test_stop_command_explains_a_busy_chat_without_stoppable_jobs():
+    import asyncio
+    from bot import telegram_commands
+    from bot.jobs import JobRegistry, busy_chats
+
+    registry = JobRegistry()
+    update = mock.MagicMock()
+    update.effective_chat.id = 3
+    update.effective_user.id = 3
+    update.effective_message.reply_text = mock.AsyncMock()
+    context = mock.MagicMock()
+
+    busy_chats.add(3)
+    try:
+        with mock.patch("bot.telegram_commands.job_registry", registry), \
+             mock.patch("bot.telegram_commands._is_authorized", return_value=True):
+            asyncio.run(telegram_commands.stop_command(update, context))
+    finally:
+        busy_chats.discard(3)
+
+    update.effective_message.reply_text.assert_awaited_once_with(
+        "Trwa operacja, której nie da się przerwać — poczekaj, aż się zakończy."
+    )
+
+
 def test_stop_command_lists_active_jobs():
     import asyncio
     from datetime import datetime
@@ -115,3 +140,51 @@ def test_stop_all_callback_cancels_every_job_in_chat():
 
     assert c1.event.is_set()
     assert c2.event.is_set()
+
+
+def test_stop_callback_ignores_job_of_another_chat():
+    import asyncio
+    from datetime import datetime
+    from bot.jobs import JobDescriptor, JobRegistry
+
+    registry = JobRegistry()
+    foreign = registry.register(99, JobDescriptor(
+        job_id="", chat_id=99, kind="single_dl",
+        label="x", started_at=datetime.now(),
+    ))
+
+    update = mock.MagicMock()
+    update.effective_chat.id = 5
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+    context = mock.MagicMock()
+
+    with mock.patch("bot.telegram_commands.job_registry", registry):
+        from bot.telegram_commands import handle_stop_callback
+        asyncio.run(handle_stop_callback(update, context, f"stop_{foreign.job_id}"))
+
+    assert not foreign.event.is_set()
+    update.callback_query.edit_message_text.assert_awaited_once_with("Operacja już zakończona.")
+
+
+def test_stop_callback_on_progress_message_confirms_signal():
+    import asyncio
+    from datetime import datetime
+    from bot.jobs import JobDescriptor, JobRegistry
+
+    registry = JobRegistry()
+    own = registry.register(5, JobDescriptor(
+        job_id="", chat_id=5, kind="single_dl",
+        label="x", started_at=datetime.now(),
+    ))
+    update = mock.MagicMock()
+    update.effective_chat.id = 5
+    update.callback_query = mock.MagicMock()
+    update.callback_query.edit_message_text = mock.AsyncMock()
+
+    with mock.patch("bot.telegram_commands.job_registry", registry):
+        from bot.telegram_commands import handle_stop_callback
+        asyncio.run(handle_stop_callback(update, mock.MagicMock(), f"stop_{own.job_id}"))
+
+    assert own.event.is_set()
+    update.callback_query.edit_message_text.assert_awaited_once_with("Wysłano sygnał zatrzymania…")

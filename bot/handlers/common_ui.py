@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import math
 
-from telegram import InlineKeyboardButton
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.error import BadRequest, NetworkError, TimedOut
 from telegram.helpers import escape_markdown
 
@@ -14,6 +14,43 @@ def escape_md(text: str) -> str:
     """Escape Markdown v1 special characters in text."""
 
     return escape_markdown(text, version=1)
+
+
+def polish_plural(count: int, one: str, few: str, many: str) -> str:
+    """Return "<count> <noun>" with the Polish plural form for ``count``.
+
+    ``one`` for 1, ``few`` for 2-4, 22-24, 32-34, ... (but not 12-14) and
+    ``many`` otherwise (0, 5-21, 25-31, ...): 1 plik, 2 pliki, 5 plików,
+    22 pliki, 112 plików.
+    """
+
+    if count == 1:
+        return f"{count} {one}"
+    if 2 <= count % 10 <= 4 and not 12 <= count % 100 <= 14:
+        return f"{count} {few}"
+    return f"{count} {many}"
+
+
+def stop_button_markup(job_id: str) -> InlineKeyboardMarkup:
+    """Single "stop" button for a progress message of the job ``job_id``.
+
+    Handled by handle_stop_callback (bot/telegram_commands.py).
+    """
+
+    return InlineKeyboardMarkup(
+        [[InlineKeyboardButton("⏹ Zatrzymaj", callback_data=f"stop_{job_id}")]]
+    )
+
+
+def progress_stop_markup(cancellation) -> InlineKeyboardMarkup | None:
+    """Stop button for an in-progress edit, or None once the job is stopping.
+
+    Keeps a progress edit from re-adding the button after the user pressed it.
+    """
+
+    if cancellation.event.is_set():
+        return None
+    return stop_button_markup(cancellation.job_id)
 
 
 def trim_download_button() -> InlineKeyboardButton:
@@ -254,7 +291,7 @@ def build_spotify_archive_batch_view(
         f"*Spotify → {format_label} → 7z*\n"
         f"Zaznaczono: {selected_count}\n\n"
         "Ile utworów ma zawierać jedno archiwum?\n"
-        "Archiwa większe niż około 1 GB zostaną dodatkowo podzielone na wolumeny."
+        "Archiwa większe niż około 1 GB zostaną dodatkowo podzielone na części."
     )
     prefix = f"spc_pack_{audio_format}"
     keyboard = [
@@ -331,7 +368,10 @@ async def send_long_message(bot, chat_id, text, header="", parse_mode="Markdown"
             line = line[split_at:]
 
         if len(current) + len(line) + 2 > max_length:
-            parts.append(current)
+            # Telegram rejects empty messages: current can be blank here when
+            # the previous line was split and left a near-limit remainder.
+            if current.strip():
+                parts.append(current)
             current = line + "\n"
         else:
             current += line + "\n"
@@ -340,6 +380,8 @@ async def send_long_message(bot, chat_id, text, header="", parse_mode="Markdown"
         parts.append(current)
 
     for part in parts:
+        if not part.strip():
+            continue
         try:
             await bot.send_message(
                 chat_id=chat_id,

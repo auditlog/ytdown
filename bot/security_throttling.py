@@ -7,6 +7,15 @@ import time
 from bot.security_limits import RATE_LIMIT_REQUESTS, RATE_LIMIT_WINDOW
 from bot.session_store import user_requests
 
+RATE_LIMIT_MESSAGE = (
+    f"Przekroczono limit żądań ({RATE_LIMIT_REQUESTS} na {RATE_LIMIT_WINDOW} s). "
+    "Poczekaj chwilę i spróbuj ponownie."
+)
+
+# Short text for callback-query toasts (answer(..., show_alert=True)); the menu
+# message stays untouched. Telegram caps alert text at 200 characters.
+RATE_LIMIT_TOAST = "Za dużo żądań — poczekaj chwilę i spróbuj ponownie."
+
 
 def check_rate_limit(
     user_id: int,

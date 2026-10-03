@@ -81,30 +81,36 @@ def test_pipeline_skips_correction_when_text_too_long(tmp_path):
     assert correction_called == []
 
 
-def test_pipeline_uses_placeholder_for_empty_transcription(tmp_path):
+def test_pipeline_marks_a_failed_part_among_good_ones(tmp_path):
     source = tmp_path / "audio.mp3"
     source.write_bytes(b"x" * 100)
-
-    part = tmp_path / "audio_part1.mp3"
-    part.write_bytes(b"a")
+    part1 = tmp_path / "audio_part1.mp3"
+    part2 = tmp_path / "audio_part2.mp3"
+    part1.write_bytes(b"a")
+    part2.write_bytes(b"b")
+    texts = {str(part1): "first part text", str(part2): ""}
+    progress = []
 
     result = pipeline.transcribe_mp3_file(
         str(source),
         str(tmp_path),
+        progress_callback=progress.append,
         get_api_key_fn=lambda: "groq",
         get_claude_api_key_fn=lambda: "",
-        split_mp3_fn=lambda *_args, **_kwargs: [str(part)],
-        get_part_number_fn=lambda _filename: 1,
-        transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: "",
+        split_mp3_fn=lambda *_args, **_kwargs: [str(part1), str(part2)],
+        get_part_number_fn=lambda filename: 1 if "part1" in filename else 2,
+        transcribe_audio_fn=lambda path, _key, language=None, prompt=None: texts[path],
         post_process_transcript_fn=lambda text, api_key=None: None,
         estimate_token_count_fn=lambda text: len(text),
         is_text_too_long_for_correction_fn=lambda _text: False,
         rmtree_fn=lambda _path: None,
     )
 
-    assert result is not None
     content = Path(result).read_text(encoding="utf-8")
-    assert "No transcription for this part" in content
+    assert "first part text" in content
+    assert content.count(pipeline.EMPTY_PART_MARKER) == 1
+    # The user is told how many parts are missing, not just shown a marker.
+    assert any("Części bez transkrypcji: 1 z 2" in status for status in progress)
 
 
 def test_split_mp3_failure_propagates_exception(tmp_path):
@@ -133,12 +139,11 @@ def test_split_mp3_failure_propagates_exception(tmp_path):
         )
 
 
-def test_all_parts_empty_transcript_writes_placeholder_content(tmp_path):
-    """All parts returning empty string should produce placeholder text in the output file.
+def test_pipeline_fails_when_every_part_fails(tmp_path):
+    """A run where Groq returned nothing for every part is a failure, not a transcript.
 
-    The pipeline inserts '[No transcription for this part]' rather than creating an
-    error document, because each placeholder is non-empty text. The real error file
-    is only written when *all* placeholders are also stripped away (whitespace-only).
+    Delivering a file made only of placeholders would be reported to the user as
+    success and could then be sent to paid Claude correction and summaries.
     """
 
     source = tmp_path / "audio.mp3"
@@ -164,10 +169,29 @@ def test_all_parts_empty_transcript_writes_placeholder_content(tmp_path):
         rmtree_fn=lambda _path: None,
     )
 
-    assert result is not None
-    content = Path(result).read_text(encoding="utf-8")
-    # Pipeline appends placeholder text for each empty part — verify both are present
-    assert content.count("[No transcription for this part]") == 2
+    assert result is None
+    assert not (tmp_path / "audio_transcript.md").exists()
+
+
+def test_pipeline_fails_when_no_audio_parts_are_produced(tmp_path):
+    # e.g. ffmpeg could not cut the source file into parts
+    source = tmp_path / "audio.m4a"
+    source.write_bytes(b"x" * 100)
+    removed = []
+
+    result = pipeline.transcribe_mp3_file(
+        str(source),
+        str(tmp_path),
+        get_api_key_fn=lambda: "groq",
+        get_claude_api_key_fn=lambda: "",
+        split_mp3_fn=lambda *_args, **_kwargs: [],
+        transcribe_audio_fn=lambda *_args, **_kwargs: "unused",
+        rmtree_fn=removed.append,
+    )
+
+    assert result is None
+    assert not (tmp_path / "audio_transcript.md").exists()
+    assert removed == [str(tmp_path / "temp_parts")]
 
 
 def test_api_timeout_during_post_processing_uses_raw_transcript(tmp_path):
@@ -240,3 +264,39 @@ def test_transcribe_mp3_file_breaks_on_cancel(tmp_path):
     assert api_called["n"] == 0
     # Result must indicate cancel (None or "cancelled"/"anulowano" string).
     assert result is None or "anulowano" in str(result).lower() or "cancelled" in str(result).lower()
+
+
+def _run_single_part(tmp_path, transcription):
+    source = tmp_path / "audio.mp3"
+    source.write_bytes(b"x" * 100)
+    part1 = tmp_path / "audio_part1.mp3"
+    part1.write_bytes(b"a")
+    return pipeline.transcribe_mp3_file(
+        str(source),
+        str(tmp_path),
+        get_api_key_fn=lambda: "groq",
+        get_claude_api_key_fn=lambda: "",
+        split_mp3_fn=lambda *_args, **_kwargs: [str(part1)],
+        get_part_number_fn=lambda _filename: 1,
+        transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: transcription,
+        post_process_transcript_fn=lambda text, api_key=None: None,
+        estimate_token_count_fn=lambda text: len(text),
+        is_text_too_long_for_correction_fn=lambda _text: False,
+        rmtree_fn=lambda _path: None,
+    )
+
+
+def test_whitespace_only_transcription_is_a_failure(tmp_path):
+    # Whitespace-only text is dropped while merging, leaving nothing to deliver;
+    # callers then show TRANSCRIPTION_FAILED_TEXT instead of an error document.
+    result = _run_single_part(tmp_path, "   ")
+
+    assert result is None
+    assert not (tmp_path / "audio_transcript.md").exists()
+
+
+def test_empty_part_file_marker_is_polish(tmp_path):
+    _run_single_part(tmp_path, "")
+
+    part_text = (tmp_path / "audio_part1_transcript.txt").read_text(encoding="utf-8")
+    assert part_text == "[brak transkrypcji tego fragmentu]"

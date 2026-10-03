@@ -10,6 +10,7 @@ from bot.downloader_validation import sanitize_filename
 from bot.handlers import audio_delivery
 from bot.handlers import spotify_callbacks as sc
 from bot.services.spotify_video_service import get_video_error_message
+from bot.services.transcription_service import TRANSCRIPTION_FAILED_TEXT
 from bot.spotify_video import SpotifyVideoCancelled, SpotifyVideoError
 from tests.telegram_callbacks_support import _attach_runtime, _make_context, _make_update
 
@@ -1783,3 +1784,364 @@ def test_download_spotify_resolved_trim_after_skips_send(monkeypatch, tmp_path):
     assert result is True
     assert offer.await_args.kwargs["performer"] == "Host"
     sender.assert_not_awaited()
+
+
+# --- Task 7: keys are checked before work, transcripts survive summary failures ---
+
+from unittest.mock import Mock
+
+from bot.handlers import transcription_callbacks as _trc
+
+
+def _keys(**values):
+    return lambda key, default="": values.get(key, default)
+
+
+def _upload_context(tmp_path, chat_id=700):
+    audio = tmp_path / "talk.mp3"
+    audio.write_bytes(b"fake mp3")
+    context = _make_context()
+    context.user_data["audio_file_path"] = str(audio)
+    context.user_data["audio_file_title"] = "Talk"
+    return context, audio
+
+
+def test_upload_summary_checks_claude_key_before_transcribing(tmp_path, monkeypatch):
+    context, _audio = _upload_context(tmp_path)
+    monkeypatch.setattr(_trc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
+    transcribe = AsyncMock()
+    monkeypatch.setattr(_trc, "run_transcription_with_progress", transcribe)
+    update = _make_update("audio_summary_option_1", chat_id=700)
+
+    asyncio.run(_trc.transcribe_audio_file(update, context, summary=True, summary_type=1))
+
+    transcribe.assert_not_awaited()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages == [
+        "Podsumowanie jest niedostępne — brak klucza API Claude. "
+        "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
+    ]
+
+
+def test_upload_missing_groq_key_blocks_before_transcribing(tmp_path, monkeypatch):
+    context, _audio = _upload_context(tmp_path)
+    monkeypatch.setattr(_trc, "get_runtime_value", _keys())
+    transcribe = AsyncMock()
+    monkeypatch.setattr(_trc, "run_transcription_with_progress", transcribe)
+    update = _make_update("audio_transcribe", chat_id=700)
+
+    asyncio.run(_trc.transcribe_audio_file(update, context))
+
+    transcribe.assert_not_awaited()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages == [
+        "Funkcja niedostępna — brak klucza API do transkrypcji. Skontaktuj się z administratorem."
+    ]
+
+
+def test_upload_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
+    context, audio = _upload_context(tmp_path)
+    transcript = tmp_path / "talk_transcript.md"
+    transcript.write_text("# Talk\n\nTekst.\n", encoding="utf-8")
+    monkeypatch.setattr(_trc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(_trc, "get_runtime_value", _keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(_trc, "run_transcription_with_progress", AsyncMock(return_value=str(transcript)))
+    monkeypatch.setattr(_trc, "generate_summary_artifact", AsyncMock(return_value=None))
+    offer = AsyncMock()
+    monkeypatch.setattr(_trc, "offer_custom_transcript_prompt", offer)
+    record = Mock()
+    monkeypatch.setattr(_trc, "record_download_for", record)
+    update = _make_update("audio_summary_option_1", chat_id=700)
+
+    asyncio.run(_trc.transcribe_audio_file(update, context, summary=True, summary_type=1))
+
+    context.bot.send_document.assert_awaited_once()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert (
+        "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
+        "Wysyłam samą transkrypcję."
+    ) in messages
+    assert record.call_args.args[4] == "audio_upload_transcription"
+    offer.assert_awaited_once()
+    # The job's own audio is cleared, as in the other delivery branches.
+    assert "audio_file_path" not in context.user_data
+
+
+def _spotify_resolved():
+    return {"source": "itunes", "title": "Episode", "artist": "Host"}
+
+
+def test_spotify_transcription_checks_keys_before_downloading(tmp_path, monkeypatch):
+    monkeypatch.setattr(sc, "DOWNLOAD_PATH", str(tmp_path))
+    download = AsyncMock()
+    monkeypatch.setattr(sc, "download_resolved_audio", download)
+    update = _make_update("transcribe", chat_id=123)
+
+    monkeypatch.setattr(sc, "get_runtime_value", _keys())
+    result = asyncio.run(sc.download_spotify_resolved(
+        update, _make_context(), _spotify_resolved(), "mp3", transcribe=True,
+    ))
+    assert result is False
+    assert update.callback_query.edit_message_text.await_args.args[0].startswith("Funkcja niedostępna")
+
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
+    result = asyncio.run(sc.download_spotify_resolved(
+        update, _make_context(), _spotify_resolved(), "mp3",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+    assert result is False
+    assert update.callback_query.edit_message_text.await_args.args[0].startswith(
+        "Podsumowanie jest niedostępne"
+    )
+    download.assert_not_awaited()
+
+
+def test_spotify_transcription_failure_is_not_overwritten_by_done(tmp_path, monkeypatch):
+    produced = tmp_path / "Host - Episode.mp3"
+    produced.write_bytes(b"X" * 1024)
+    monkeypatch.setattr(sc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
+    monkeypatch.setattr(sc, "download_resolved_audio", AsyncMock(return_value=str(produced)))
+    monkeypatch.setattr(sc, "run_transcription_with_progress", AsyncMock(return_value=None))
+    update = _make_update("transcribe", chat_id=123)
+
+    result = asyncio.run(sc.download_spotify_resolved(
+        update, _make_context(), _spotify_resolved(), "mp3", transcribe=True,
+    ))
+
+    assert result is False
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages[-1] == TRANSCRIPTION_FAILED_TEXT
+    assert not any(m.startswith("Gotowe") for m in messages)
+
+
+def test_spotify_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
+    produced = tmp_path / "Host - Episode.mp3"
+    produced.write_bytes(b"X" * 1024)
+    transcript = tmp_path / "Host - Episode_transcript.md"
+    transcript.write_text("# Episode\n\nTekst.\n", encoding="utf-8")
+    monkeypatch.setattr(sc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(sc, "download_resolved_audio", AsyncMock(return_value=str(produced)))
+    monkeypatch.setattr(sc, "run_transcription_with_progress", AsyncMock(return_value=str(transcript)))
+    monkeypatch.setattr(sc, "generate_summary_artifact", AsyncMock(return_value=None))
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "offer_custom_transcript_prompt", AsyncMock())
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    result = asyncio.run(sc.download_spotify_resolved(
+        update, context, _spotify_resolved(), "mp3",
+        transcribe=True, summary=True, summary_type=1,
+    ))
+
+    assert result is True
+    context.bot.send_document.assert_awaited_once()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    notice = (
+        "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
+        "Wysyłam samą transkrypcję."
+    )
+    assert notice in messages
+    # The notice must survive into the final status, not be replaced by a bare "Gotowe".
+    assert messages[-1] == f"Gotowe: Episode\n\n{notice}"
+
+
+def test_spotify_video_summary_failure_keeps_notice_in_final_status(tmp_path, monkeypatch):
+    transcript = tmp_path / "t.md"
+    transcript.write_text("# Test Episode\n\nTekst.\n", encoding="utf-8")
+    monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **kw: str(transcript))
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(sc, "generate_summary_artifact", AsyncMock(return_value=None))
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "offer_custom_transcript_prompt", AsyncMock())
+    session = _spotify_video_session()
+    session["subtitle_languages"] = ["pl-pl"]
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session, summary=True, summary_type=1))
+
+    context.bot.send_document.assert_awaited_once()
+    last = update.callback_query.edit_message_text.await_args.args[0]
+    assert last.startswith("Gotowe: Test Episode")
+    assert "nie udało się wygenerować podsumowania" in last
+
+
+def test_spotify_video_transcription_checks_claude_key_before_any_download(monkeypatch):
+    async def must_not_download(*a, **kw):
+        raise AssertionError("must not download before confirming the Claude key")
+
+    def must_not_fetch_subtitles(**kw):
+        raise AssertionError("must not fetch subtitles before confirming the Claude key")
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", must_not_fetch_subtitles)
+    monkeypatch.setattr(sc, "download_episode_media", must_not_download)
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
+    session = _spotify_video_session()
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session, summary=True, summary_type=1))
+
+    assert update.callback_query.edit_message_text.await_args.args[0].startswith(
+        "Podsumowanie jest niedostępne"
+    )
+    context.bot.send_document.assert_not_awaited()
+
+
+def _subtitle_setup(tmp_path, monkeypatch, *, keys):
+    sub = tmp_path / "subs.vtt"
+    sub.write_text("x", encoding="utf-8")
+    monkeypatch.setattr(_trc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(_trc, "get_runtime_value", keys)
+    monkeypatch.setattr(_trc, "get_video_info", lambda url: {"title": "Clip"})
+    download = Mock(return_value=str(sub))
+    monkeypatch.setattr(_trc, "download_subtitles", download)
+    monkeypatch.setattr(_trc, "parse_subtitle_file", lambda path: "Tekst napisów.")
+    monkeypatch.setattr(_trc, "record_download_for", Mock())
+    offer = AsyncMock()
+    monkeypatch.setattr(_trc, "offer_custom_transcript_prompt", offer)
+    return download, offer
+
+
+def test_subtitle_summary_checks_claude_key_before_downloading(tmp_path, monkeypatch):
+    download, _offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys())
+    update = _make_update("sub_sum_1", chat_id=701)
+    update.effective_user.id = 1
+
+    asyncio.run(_trc.handle_subtitle_download(
+        update, _make_context(), "https://youtube.com/watch?v=x", "pl", False,
+        summary=True, summary_type=1,
+    ))
+
+    download.assert_not_called()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages == [
+        "Podsumowanie jest niedostępne — brak klucza API Claude. "
+        "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
+    ]
+
+
+def test_subtitle_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
+    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(_trc, "generate_summary_artifact", AsyncMock(return_value=None))
+    update = _make_update("sub_sum_1", chat_id=701)
+    update.effective_user.id = 1
+    context = _make_context()
+
+    asyncio.run(_trc.handle_subtitle_download(
+        update, context, "https://youtube.com/watch?v=x", "pl", False,
+        summary=True, summary_type=1,
+    ))
+
+    context.bot.send_document.assert_awaited_once()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages[-1] == (
+        "Transkrypcja gotowa, ale nie udało się wygenerować podsumowania. "
+        "Wysyłam samą transkrypcję."
+    )
+    offer.assert_awaited_once()
+
+
+def test_subtitle_too_long_for_summary_keeps_notice_in_final_status(tmp_path, monkeypatch):
+    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(_trc, "transcript_too_long_for_summary", lambda text: True)
+    summarize = AsyncMock()
+    monkeypatch.setattr(_trc, "generate_summary_artifact", summarize)
+    update = _make_update("sub_sum_1", chat_id=701)
+    update.effective_user.id = 1
+    context = _make_context()
+
+    asyncio.run(_trc.handle_subtitle_download(
+        update, context, "https://youtube.com/watch?v=x", "pl", False,
+        summary=True, summary_type=1,
+    ))
+
+    summarize.assert_not_awaited()
+    context.bot.send_document.assert_awaited_once()
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert "zbyt długi na podsumowanie AI" in messages[-1]
+    assert messages[-1] == (
+        "Napisy pobrane, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
+        "Wysłano samą transkrypcję z napisów."
+    )
+    offer.assert_awaited_once()
+
+
+def test_subtitle_summary_exception_still_sends_transcript(tmp_path, monkeypatch):
+    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(_trc, "generate_summary_artifact", AsyncMock(side_effect=RuntimeError("boom")))
+    update = _make_update("sub_sum_1", chat_id=701)
+    update.effective_user.id = 1
+    context = _make_context()
+
+    asyncio.run(_trc.handle_subtitle_download(
+        update, context, "https://youtube.com/watch?v=x", "pl", False,
+        summary=True, summary_type=1,
+    ))
+
+    context.bot.send_document.assert_awaited_once()
+    offer.assert_awaited_once()
+
+
+def test_spotify_summary_without_claude_key_names_no_variable(monkeypatch):
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
+    statuses = []
+
+    async def update_status(text):
+        statuses.append(text)
+
+    notice = asyncio.run(sc._maybe_generate_summary(
+        _make_context(), 123, "Ep", "text", "ep", "/tmp", update_status, summary_type=1,
+    ))
+
+    assert notice == (
+        "Transkrypcja gotowa, ale podsumowanie jest niedostępne — brak klucza API Claude. "
+        "Wysyłam samą transkrypcję."
+    )
+    assert statuses == [notice]
+    assert "CLAUDE_API_KEY" not in notice
+
+
+def test_upload_transcription_failure_shows_the_concrete_failure_text(tmp_path, monkeypatch):
+    from bot.handlers import transcription_callbacks as tcb
+
+    audio_file = tmp_path / "audio.mp3"
+    audio_file.write_bytes(b"fake mp3 content")
+    update = _make_update("audio_transcribe", chat_id=777)
+    context = _make_context()
+    context.user_data["audio_file_path"] = str(audio_file)
+    monkeypatch.setattr(tcb, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(tcb, "missing_transcription_key_message", lambda *a, **k: None)
+    # The pipeline returns None when no part could be transcribed.
+    monkeypatch.setattr(tcb, "run_transcription_with_progress", AsyncMock(return_value=None))
+
+    asyncio.run(tcb.transcribe_audio_file(update, context))
+
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages[-1] == TRANSCRIPTION_FAILED_TEXT
+
+
+def test_spotify_video_transcription_failure_shows_the_concrete_failure_text(monkeypatch, tmp_path):
+    audio_file = tmp_path / "episode.m4a"
+    audio_file.write_bytes(b"fake-audio-bytes")
+
+    async def fake_download_episode_media(*, episode, height, output_dir, executor, **kw):
+        return str(audio_file)
+
+    monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **_kw: None)
+    monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
+    # The pipeline returns None when no part could be transcribed.
+    monkeypatch.setattr(sc, "run_transcription_with_progress", AsyncMock(return_value=None))
+    monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    session = _spotify_video_session()
+    update = _make_update("transcribe", chat_id=123)
+    context = _make_context()
+
+    asyncio.run(sc.transcribe_spotify_video(update, context, session))
+
+    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
+    assert messages[-1] == TRANSCRIPTION_FAILED_TEXT
+    context.bot.send_document.assert_not_awaited()

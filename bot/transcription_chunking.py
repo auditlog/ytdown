@@ -11,7 +11,7 @@ import subprocess
 
 from mutagen.mp3 import MP3
 
-from bot.security_limits import FFMPEG_TIMEOUT, MAX_MP3_PART_SIZE_MB
+from bot.security_limits import FFMPEG_TIMEOUT, FFMPEG_TRANSCODE_TIMEOUT, MAX_MP3_PART_SIZE_MB
 
 
 def find_silence_points(file_path, num_parts, min_duration=0.5, *, subprocess_module=subprocess):
@@ -50,6 +50,33 @@ def get_part_number(filename):
     return 0
 
 
+def transcode_to_mp3(file_path, output_dir, *, subprocess_module=subprocess, timeout=FFMPEG_TRANSCODE_TIMEOUT):
+    """Re-encode any audio to constant-bitrate MP3 in output_dir; None on failure.
+
+    128 kbps CBR keeps speech intelligible, gives part sizes that follow the
+    duration, and lets mutagen read an exact length for the split points.
+    """
+
+    base_name = os.path.splitext(os.path.basename(file_path))[0]
+    output_path = os.path.join(output_dir, f"{base_name}.mp3")
+    cmd = [
+        "ffmpeg", "-y", "-i", file_path,
+        "-vn", "-c:a", "libmp3lame", "-b:a", "128k",
+        output_path,
+    ]
+    logging.info("Converting %s to MP3 before splitting", file_path)
+    try:
+        result = subprocess_module.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=timeout)
+    except subprocess.SubprocessError as e:
+        logging.error("Error converting %s to MP3: %s", file_path, e)
+        return None
+    if result.returncode != 0 or not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
+        stderr = result.stderr.decode("utf-8", errors="replace")[-300:] if result.stderr else ""
+        logging.error("ffmpeg could not convert %s to MP3 (exit %s): %s", file_path, result.returncode, stderr)
+        return None
+    return output_path
+
+
 def split_mp3(
     file_path,
     output_dir,
@@ -68,6 +95,22 @@ def split_mp3(
         output_path = os.path.join(output_dir, os.path.basename(file_path))
         shutil.copy(file_path, output_path)
         return [output_path]
+
+    if not file_path.lower().endswith(".mp3"):
+        # Parts below are cut with stream copy into .mp3 files and timed with
+        # mutagen's MP3 reader; both need MP3 input. ffmpeg refuses to copy
+        # e.g. AAC (Spotify .m4a) into an .mp3 container and leaves 0-byte parts.
+        file_path = transcode_to_mp3(
+            file_path,
+            output_dir,
+            subprocess_module=subprocess_module,
+            timeout=FFMPEG_TRANSCODE_TIMEOUT,
+        )
+        if file_path is None:
+            return []
+        file_size = os.path.getsize(file_path) / (1024 * 1024)
+        if file_size <= max_size_mb:
+            return [file_path]
 
     num_parts = math.ceil(file_size / max_size_mb)
     logging.info("File size: %.2fMB. Splitting into %s parts...", file_size, num_parts)

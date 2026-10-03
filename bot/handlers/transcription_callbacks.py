@@ -31,7 +31,11 @@ from bot.downloader_validation import sanitize_filename
 from bot.services.transcription_service import (
     cleanup_transcription_artifacts,
     generate_summary_artifact,
+    MISSING_CLAUDE_KEY_TEXT,
+    SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
+    TRANSCRIPTION_FAILED_TEXT,
     load_transcript_result,
+    missing_transcription_key_message,
     run_transcription_with_progress,
     save_transcript_markdown,
     transcript_too_long_for_summary,
@@ -96,7 +100,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
     if not mp3_path or not os.path.exists(mp3_path):
-        _clear_uploaded_audio_state(context, chat_id)
+        _clear_uploaded_audio_state(context, chat_id, mp3_path)
         await query.edit_message_text("Plik audio nie został znaleziony. Wyślij go ponownie.")
         return
 
@@ -106,14 +110,13 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     chat_download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
     file_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
 
-    await update_status("Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut.")
-
-    if not get_runtime_value("GROQ_API_KEY", ""):
-        await update_status(
-            "Funkcja niedostępna — brak klucza API do transkrypcji.\n"
-            "Skontaktuj się z administratorem."
-        )
+    # Fail fast: check API keys before starting any transcription work.
+    missing_key_text = missing_transcription_key_message(get_runtime_value, summary=summary)
+    if missing_key_text:
+        await update_status(missing_key_text)
         return
+
+    await update_status("Rozpoczynanie transkrypcji audio...\nTo może potrwać kilka minut.")
 
     transcript_path = await run_transcription_with_progress(
         source_path=mp3_path,
@@ -123,17 +126,10 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     )
 
     if not transcript_path or not os.path.exists(transcript_path):
-        await update_status("Wystąpił błąd podczas transkrypcji.")
+        await update_status(TRANSCRIPTION_FAILED_TEXT)
         return
 
     if summary:
-        if not get_runtime_value("CLAUDE_API_KEY", ""):
-            await update_status(
-                "Funkcja niedostępna — brak klucza API do podsumowań.\n"
-                "Skontaktuj się z administratorem."
-            )
-            return
-
         transcript_result = load_transcript_result(transcript_path)
         transcript_text = transcript_result.display_text
 
@@ -152,7 +148,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
                     write_timeout=60,
                 )
             record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
-            _clear_uploaded_audio_state(context, chat_id)
+            _clear_uploaded_audio_state(context, chat_id, mp3_path)
             await offer_custom_transcript_prompt(
                 context,
                 chat_id=chat_id,
@@ -164,16 +160,39 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
 
         await update_status("Transkrypcja zakończona.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
         safe_title = sanitize_filename(title)
-        summary_result = await generate_summary_artifact(
-            transcript_text=transcript_text,
-            summary_type=summary_type,
-            title=title,
-            sanitized_title=safe_title,
-            output_dir=chat_download_path,
-            executor=_executor,
-        )
+        try:
+            summary_result = await generate_summary_artifact(
+                transcript_text=transcript_text,
+                summary_type=summary_type,
+                title=title,
+                sanitized_title=safe_title,
+                output_dir=chat_download_path,
+                executor=_executor,
+            )
+        except Exception as exc:
+            logging.error("Summary generation failed: %s", exc)
+            summary_result = None
         if not summary_result:
-            await update_status("Wystąpił błąd podczas generowania podsumowania.")
+            # Never lose the finished transcript because the summary failed.
+            await update_status(SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT)
+            with open(transcript_path, "rb") as file_obj:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=file_obj,
+                    filename=os.path.basename(transcript_path),
+                    caption=f"Transkrypcja: {title} (podsumowanie nie powiodło się)",
+                    read_timeout=60,
+                    write_timeout=60,
+                )
+            record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
+            _clear_uploaded_audio_state(context, chat_id, mp3_path)
+            await offer_custom_transcript_prompt(
+                context,
+                chat_id=chat_id,
+                requester_id=update.effective_user.id,
+                transcript_path=transcript_path,
+                title=title,
+            )
             return
 
         await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
@@ -204,7 +223,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
             file_size_mb,
             None,
         )
-        _clear_uploaded_audio_state(context, chat_id)
+        _clear_uploaded_audio_state(context, chat_id, mp3_path)
         await update_status("Transkrypcja i podsumowanie zostały wysłane!")
         await offer_custom_transcript_prompt(
             context,
@@ -251,7 +270,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
         logging.error("Error deleting audio files: %s", exc)
 
     record_download_for(context, chat_id, title, "audio_upload", "audio_upload_transcription", file_size_mb, None)
-    _clear_uploaded_audio_state(context, chat_id)
+    _clear_uploaded_audio_state(context, chat_id, mp3_path)
     await update_status("Transkrypcja została wysłana!")
     await offer_custom_transcript_prompt(
         context,
@@ -483,6 +502,11 @@ async def handle_subtitle_download(
     async def update_status(text):
         await safe_edit_message(query, text)
 
+    if summary and not get_runtime_value("CLAUDE_API_KEY", ""):
+        # Fail fast: do not download subtitles for a summary that cannot be made.
+        await update_status(MISSING_CLAUDE_KEY_TEXT)
+        return
+
     sub_type = "automatycznych" if auto else "manualnych"
     await update_status(f"Pobieranie napisów YouTube ({lang.upper()}, {sub_type})...")
 
@@ -516,32 +540,62 @@ async def handle_subtitle_download(
         dated=True,
     )
 
+    # Set when the requested summary is skipped; kept in the final status so the
+    # user still sees why no summary arrived (same idea as the Spotify path in
+    # bot/handlers/spotify_callbacks.py).
+    summary_notice = None
     if summary and transcript_too_long_for_summary(transcript_text):
-        await update_status(
-            "Napisy pobrane, ale tekst jest zbyt długi na podsumowanie AI.\n\n"
-            "Wysyłam samą transkrypcję z napisów."
-        )
+        summary_notice = "Napisy pobrane, ale tekst jest zbyt długi na podsumowanie AI."
+        await update_status(f"{summary_notice}\n\nWysyłam samą transkrypcję z napisów.")
         summary = False
 
     if summary:
-        if not get_runtime_value("CLAUDE_API_KEY", ""):
-            await update_status(
-                "Funkcja niedostępna — brak klucza API do podsumowań.\n"
-                "Skontaktuj się z administratorem."
-            )
-            return
-
         await update_status("Napisy pobrane.\n\nGeneruję podsumowanie AI...\nTo może potrwać około minuty.")
-        summary_result = await generate_summary_artifact(
-            transcript_text=transcript_text,
-            summary_type=summary_type,
-            title=title,
-            sanitized_title=f"{datetime.now().strftime('%Y-%m-%d')} {sanitized_title}",
-            output_dir=chat_download_path,
-            executor=_executor,
-        )
+        try:
+            summary_result = await generate_summary_artifact(
+                transcript_text=transcript_text,
+                summary_type=summary_type,
+                title=title,
+                sanitized_title=f"{datetime.now().strftime('%Y-%m-%d')} {sanitized_title}",
+                output_dir=chat_download_path,
+                executor=_executor,
+            )
+        except Exception as exc:
+            logging.error("Summary generation failed: %s", exc)
+            summary_result = None
         if not summary_result:
-            await update_status("Wystąpił błąd podczas generowania podsumowania.")
+            # Never lose the subtitle transcript because the summary failed.
+            await update_status(SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT)
+            with open(transcript_path, "rb") as file_obj:
+                await context.bot.send_document(
+                    chat_id=chat_id,
+                    document=file_obj,
+                    filename=os.path.basename(transcript_path),
+                    caption=f"Napisy YouTube ({lang.upper()}): {title} (podsumowanie nie powiodło się)",
+                    read_timeout=60,
+                    write_timeout=60,
+                )
+            try:
+                os.remove(sub_path)
+            except Exception as exc:
+                logging.error("Error deleting subtitle file: %s", exc)
+            record_download_for(
+                context,
+                chat_id,
+                title,
+                url,
+                f"yt_subtitles_{lang}",
+                0,
+                None,
+                selected_format=f"sub_{lang}",
+            )
+            await offer_custom_transcript_prompt(
+                context,
+                chat_id=chat_id,
+                requester_id=update.effective_user.id,
+                transcript_path=transcript_path,
+                title=title,
+            )
             return
 
         await update_status("Podsumowanie wygenerowane.\n\nWysyłanie wyników...")
@@ -588,7 +642,9 @@ async def handle_subtitle_download(
         )
         return
 
-    await update_status("Napisy pobrane.\n\nWysyłanie transkrypcji...")
+    if summary_notice is None:
+        # Otherwise the notice stays visible while the transcript is sent.
+        await update_status("Napisy pobrane.\n\nWysyłanie transkrypcji...")
     display_text = transcript_text
     if len(display_text) <= 30000:
         await send_long_message(
@@ -627,7 +683,10 @@ async def handle_subtitle_download(
         None,
         selected_format=f"sub_{lang}",
     )
-    await update_status("Napisy zostały wysłane!")
+    if summary_notice:
+        await update_status(f"{summary_notice}\n\nWysłano samą transkrypcję z napisów.")
+    else:
+        await update_status("Napisy zostały wysłane!")
     await offer_custom_transcript_prompt(
         context,
         chat_id=chat_id,

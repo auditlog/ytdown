@@ -425,13 +425,14 @@ python -m pytest tests/test_subtitles.py -v
 |---------|------|
 | `/start` | Rozpocznij korzystanie z bota |
 | `/help` | Pomoc i instrukcje |
-| `/status` | Sprawdź przestrzeń dyskową i statystyki |
+| `/stop` | Zatrzymaj trwające pobieranie lub przetwarzanie |
 | `/history` | Historia pobrań i statystyki użytkownika |
-| `/cleanup` | Ręczne usunięcie starych plików |
-| `/users` | Zarządzanie autoryzowanymi użytkownikami |
+| `/logout` | Wyloguj się z bota (zakończ sesję) |
+| `/status` | Miejsce na dysku i statystyki (administrator) |
+| `/cleanup` | Ręczne usunięcie plików starszych niż 24 h (administrator) |
+| `/users` | Lista autoryzowanych użytkowników (administrator) |
 | `/spotify_login` | Połącz konto Spotify do odczytu prywatnych i współdzielonych playlist (administrator) |
 | `/spotify_logout` | Usuń zapisaną autoryzację Spotify (administrator) |
-| `/logout` | Wyloguj się z bota (zakończ sesję) |
 
 ## Używanie bota
 

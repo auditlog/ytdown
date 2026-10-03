@@ -26,7 +26,7 @@ from bot.handlers.audio_delivery import (
     send_audio_file,
     trim_button,
 )
-from bot.handlers.common_ui import escape_md, safe_edit_message
+from bot.handlers.common_ui import escape_md, polish_plural, safe_edit_message
 from bot.handlers.time_range import (
     TimeRangeError,
     format_timestamp,
@@ -38,7 +38,7 @@ from bot.jobs import JobCancellation, JobDescriptor, job_registry
 from bot.runtime import record_download_for
 from bot.security_limits import TRIM_PENDING_INPUT_TIMEOUT_MIN
 from bot.security_policy import extract_url_from_text
-from bot.security_throttling import check_rate_limit
+from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.audio_trim_service import (
     AudioTrimError,
     cut_fragment,
@@ -68,7 +68,7 @@ PROMPT_EXPIRED_TEXT = (
     f"Prośba o zakres wygasła (minęło {TRIM_PENDING_INPUT_TIMEOUT_MIN} minut). "
     f"Kliknij „{TRIM_BUTTON_LABEL}”, żeby przyciąć ten plik."
 )
-RATE_LIMIT_TEXT = "Przekroczono limit requestów. Spróbuj ponownie za chwilę."
+RATE_LIMIT_TEXT = RATE_LIMIT_MESSAGE
 NO_ROOM_TEXT = (
     "Na serwerze brakuje miejsca, żeby przechować plik do cięcia. "
     "Pobierz całość przyciskiem Audio (MP3)."
@@ -110,11 +110,7 @@ def _set_pending(context: ContextTypes.DEFAULT_TYPE, chat_id: int, pending: Pend
 def fragments_phrase(count: int) -> str:
     """Polish count phrase: 1 fragment, 2 fragmenty, 5 fragmentów."""
 
-    if count == 1:
-        return "1 fragment"
-    if 2 <= count % 10 <= 4 and not 12 <= count % 100 <= 14:
-        return f"{count} fragmenty"
-    return f"{count} fragmentów"
+    return polish_plural(count, "fragment", "fragmenty", "fragmentów")
 
 
 def _format_expiry(source: TrimSource) -> str:

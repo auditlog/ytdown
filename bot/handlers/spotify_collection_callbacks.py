@@ -12,6 +12,7 @@ from bot.handlers.common_ui import (
     build_spotify_archive_batch_view,
     build_spotify_collection_view,
     safe_edit_message,
+    progress_stop_markup,
 )
 from bot.handlers.spotify_callbacks import download_spotify_resolved
 from bot.jobs import JobDescriptor, job_registry
@@ -22,13 +23,19 @@ from bot.session_context import get_session_context_value, set_session_context_v
 _executor = ThreadPoolExecutor(max_workers=2)
 
 
-def _get_collection(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> dict | None:
-    collection = get_session_context_value(
+def _get_raw_collection(context: ContextTypes.DEFAULT_TYPE, chat_id: int):
+    """Return the session object itself (not a copy) for identity checks."""
+
+    return get_session_context_value(
         context,
         chat_id,
         "spotify_collection",
         legacy_key="spotify_collection",
     )
+
+
+def _get_collection(context: ContextTypes.DEFAULT_TYPE, chat_id: int) -> dict | None:
+    collection = _get_raw_collection(context, chat_id)
     return dict(collection) if isinstance(collection, dict) else None
 
 
@@ -44,6 +51,25 @@ def _store_collection(
         collection,
         legacy_key="spotify_collection",
     )
+
+
+def _store_collection_if_current(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    collection: dict,
+    expected,
+) -> bool:
+    """Store a job's collection only if the session still holds ``expected``.
+
+    Long jobs run while the user may send a newer album/playlist link; identity
+    (``is``) keeps the finishing job from overwriting that newer collection.
+    See also: bot/session_context.py ``clear_session_context_value_if``.
+    """
+
+    if _get_raw_collection(context, chat_id) is not expected:
+        return False
+    _store_collection(context, chat_id, collection)
+    return True
 
 
 async def _render_collection(update: Update, collection: dict, *, prefix: str = "") -> None:
@@ -89,6 +115,7 @@ async def _download_selected(
     collection: dict,
     *,
     audio_format: str,
+    session_collection,
 ) -> None:
     chat_id = update.effective_chat.id
     tracks = collection.get("tracks") or []
@@ -129,6 +156,7 @@ async def _download_selected(
             await safe_edit_message(
                 update.callback_query,
                 f"[{position}/{len(selected)}] Dopasowywanie w YT Music:\n{label}",
+                reply_markup=progress_stop_markup(cancellation),
             )
 
             resolved = await resolve_track_info(track, executor=_executor)
@@ -151,10 +179,16 @@ async def _download_selected(
         job_registry.unregister(cancellation.job_id)
 
     collection["selected"] = failed
-    _store_collection(context, chat_id, collection)
     summary = (
         f"{'Zatrzymano. ' if cancelled else ''}Pobrano: {succeeded}/{len(selected)}."
     )
+    if not _store_collection_if_current(context, chat_id, collection, session_collection):
+        # A newer collection replaced this one during the job: report the
+        # result without redrawing the old track list over the newer menu.
+        if failed:
+            summary += f" Niepowodzenia: {len(failed)}."
+        await safe_edit_message(update.callback_query, summary)
+        return
     if failed:
         summary += f" Niepowodzenia: {len(failed)} — pozostawiłem je zaznaczone do ponowienia."
     await _render_collection(update, collection, prefix=summary)
@@ -168,6 +202,9 @@ async def handle_spotify_collection_callback(
     """Update Spotify selection state or download the selected tracks."""
 
     chat_id = update.effective_chat.id
+    # Captured before copying: long jobs store their result only while the
+    # session still holds this exact object.
+    session_collection = _get_raw_collection(context, chat_id)
     collection = _get_collection(context, chat_id)
     if not collection:
         await update.callback_query.edit_message_text(
@@ -231,7 +268,7 @@ async def handle_spotify_collection_callback(
             executor=_executor,
         )
         collection["selected"] = list(result.failed_indices)
-        _store_collection(context, chat_id, collection)
+        _store_collection_if_current(context, chat_id, collection, session_collection)
         return
     elif data in {"spc_dl_mp3", "spc_dl_m4a"}:
         await _download_selected(
@@ -239,6 +276,7 @@ async def handle_spotify_collection_callback(
             context,
             collection,
             audio_format=data.rsplit("_", 1)[-1],
+            session_collection=session_collection,
         )
         return
     else:

@@ -203,3 +203,19 @@ class JobRegistry:
 
 # Global singleton consumed by handlers/services.
 job_registry = JobRegistry()
+
+
+# Chats currently running a guarded work callback (download, playlist,
+# transcription...). Lives here so both the callback guard
+# (bot/telegram_callbacks.py) and /stop (bot/telegram_commands.py) can read it
+# without an import cycle. Not every guarded flow registers in job_registry, so
+# a busy chat may have nothing /stop can cancel.
+# NOTE: callers must check and add without an await in between (asyncio-only,
+# no lock needed); see handle_callback in bot/telegram_callbacks.py.
+busy_chats: set[int] = set()
+
+
+def is_chat_busy(chat_id: int) -> bool:
+    """Return True while a guarded work callback runs in ``chat_id``."""
+
+    return chat_id in busy_chats

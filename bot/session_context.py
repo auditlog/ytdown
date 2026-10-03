@@ -245,6 +245,25 @@ def clear_session_value(
     legacy_map.pop(chat_id, None)
 
 
+def clear_session_value_if(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    legacy_map,
+    expected,
+) -> bool:
+    """Clear a chat-scoped value only if it is still the object a job captured.
+
+    Long jobs run while newer links/uploads may overwrite the session; identity
+    (``is``) keeps a finishing job from wiping that newer value.
+    """
+
+    if get_session_value(context, chat_id, field_name, legacy_map) is not expected:
+        return False
+    clear_session_value(context, chat_id, field_name, legacy_map)
+    return True
+
+
 def get_session_context_value(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -295,6 +314,23 @@ def clear_session_context_value(
     context.user_data.pop(legacy_key, None)
 
 
+def clear_session_context_value_if(
+    context: ContextTypes.DEFAULT_TYPE,
+    chat_id: int,
+    field_name: str,
+    expected,
+    *,
+    legacy_key: str,
+) -> bool:
+    """Clear a session value only if it still ``is`` the object the job captured."""
+
+    current = get_session_context_value(context, chat_id, field_name, legacy_key=legacy_key)
+    if current is not expected:
+        return False
+    clear_session_context_value(context, chat_id, field_name, legacy_key=legacy_key)
+    return True
+
+
 def clear_transient_flow_state(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
@@ -321,8 +357,20 @@ def clear_transient_flow_state(
 def clear_uploaded_audio_state(
     context: ContextTypes.DEFAULT_TYPE,
     chat_id: int,
+    expected_path: str | None = None,
 ) -> None:
-    """Clear temporary audio-upload state after transcription completion or failure."""
+    """Clear temporary audio-upload state after transcription completion or failure.
+
+    When ``expected_path`` is given, the state is kept if a newer upload replaced
+    the file the finishing job used.
+    """
+
+    if expected_path is not None:
+        current = get_session_context_value(
+            context, chat_id, "audio_file_path", legacy_key="audio_file_path"
+        )
+        if current != expected_path:
+            return
 
     clear_session_context_value(
         context,

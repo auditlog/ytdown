@@ -14,8 +14,9 @@ from telegram.ext import ContextTypes
 from bot.downloader_validation import sanitize_filename
 from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_message
 from bot.runtime import get_config_value_for, record_download_for
-from bot.security_throttling import check_rate_limit
+from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.transcription_service import (
+    MISSING_CLAUDE_KEY_ADMIN_TEXT,
     generate_custom_analysis_artifact,
     load_transcript_result,
 )
@@ -299,9 +300,7 @@ async def handle_pending_transcript_prompt(
         )
         return True
     if not check_rate_limit(requester_id):
-        await update.message.reply_text(
-            "Przekroczono limit requestów. Spróbuj ponownie za chwilę."
-        )
+        await update.message.reply_text(RATE_LIMIT_MESSAGE)
         return True
 
     _clear_pending_prompt(context, chat_id)
@@ -314,10 +313,7 @@ async def handle_pending_transcript_prompt(
 
     claude_api_key = get_config_value_for(context, "CLAUDE_API_KEY", "")
     if not claude_api_key:
-        await update.message.reply_text(
-            "Funkcja niedostępna — brak klucza CLAUDE_API_KEY. "
-            "Skontaktuj się z administratorem."
-        )
+        await update.message.reply_text(MISSING_CLAUDE_KEY_ADMIN_TEXT)
         return True
 
     try:
@@ -341,6 +337,47 @@ async def handle_pending_transcript_prompt(
         "To może potrwać około minuty."
     )
     repeat_markup = _prompt_keyboard(pending.transcript_token, repeat=True)
+    job = _run_custom_analysis(
+        context,
+        chat_id=chat_id,
+        requester_id=requester_id,
+        prompt=prompt,
+        transcript_context=transcript_context,
+        transcript_text=transcript_text,
+        claude_api_key=claude_api_key,
+        status_message=status_message,
+        repeat_markup=repeat_markup,
+    )
+    try:
+        # Non-blocking, like the trim job: the Claude call can take a minute and
+        # must not hold up /stop or other chats. See bot/handlers/trim_callbacks.py.
+        context.application.create_task(job, update=update)
+    except Exception as exc:
+        logging.error("Could not schedule custom transcript analysis: %s", exc)
+        job.close()  # never started; closing avoids a "never awaited" warning
+        try:
+            await status_message.edit_text(
+                "Nie udało się uruchomić analizy. Spróbuj ponownie.",
+                reply_markup=repeat_markup,
+            )
+        except Exception as edit_exc:
+            logging.warning("Custom analysis status update failed: %s", edit_exc)
+    return True
+
+
+async def _run_custom_analysis(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int,
+    requester_id: int,
+    prompt: str,
+    transcript_context: TranscriptContext,
+    transcript_text: str,
+    claude_api_key: str,
+    status_message,
+    repeat_markup: InlineKeyboardMarkup,
+) -> None:
+    """Generate the custom analysis and deliver it (runs as a background task)."""
 
     try:
         result = await generate_custom_analysis_artifact(
@@ -358,7 +395,7 @@ async def handle_pending_transcript_prompt(
                 "Nie udało się wykonać polecenia. Spróbuj ponownie.",
                 reply_markup=repeat_markup,
             )
-            return True
+            return
 
         await send_long_message(
             context.bot,
@@ -393,5 +430,3 @@ async def handle_pending_transcript_prompt(
             "Wystąpił błąd podczas wykonywania polecenia. Spróbuj ponownie.",
             reply_markup=repeat_markup,
         )
-
-    return True

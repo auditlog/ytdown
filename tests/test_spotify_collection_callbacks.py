@@ -178,3 +178,98 @@ def test_archive_all_choice_uses_single_logical_archive(monkeypatch):
 
     assert execute.await_args.kwargs["audio_format"] == "m4a"
     assert execute.await_args.kwargs["files_per_archive"] is None
+
+
+# --- a newer collection sent while a job runs must survive the job end ----
+
+
+def _resolved_track(track, **kwargs):
+    return {
+        "source": "youtube_music",
+        "title": track["title"],
+        "artist": track["artist"],
+        "youtube_url": "https://youtube.com/watch?v=x",
+    }
+
+
+def test_download_job_end_keeps_a_newer_collection(monkeypatch):
+    context = _make_context()
+    runtime = _attach_runtime(context)
+    collection = _collection()
+    collection["selected"] = [0, 1]
+    runtime.session_store.set_field(5, "spotify_collection", collection)
+    newer = _collection()
+    newer["title"] = "Newer"
+    update = _make_update("spc_dl_mp3", chat_id=5)
+
+    async def fake_resolve(track, **kwargs):
+        return _resolved_track(track)
+
+    async def fake_download(*args, **kwargs):
+        # A newer album link arrives while the job is sending tracks.
+        runtime.session_store.set_field(5, "spotify_collection", newer)
+        return True
+
+    monkeypatch.setattr(callbacks, "resolve_track_info", fake_resolve)
+    monkeypatch.setattr(callbacks, "download_spotify_resolved", fake_download)
+
+    asyncio.run(
+        callbacks.handle_spotify_collection_callback(update, context, "spc_dl_mp3")
+    )
+
+    assert runtime.session_store.get_field(5, "spotify_collection") is newer
+    assert newer["selected"] == []
+    last = update.callback_query.edit_message_text.await_args
+    assert "Pobrano: 2/2." in last.args[0]
+    # The old collection keyboard must not be drawn over the newer menu.
+    assert last.kwargs.get("reply_markup") is None
+    assert "Mix" not in last.args[0]
+
+
+def test_archive_job_end_keeps_a_newer_collection(monkeypatch):
+    context = _make_context()
+    runtime = _attach_runtime(context)
+    collection = _collection()
+    collection["selected"] = [0, 1]
+    runtime.session_store.set_field(5, "spotify_collection", collection)
+    newer = _collection()
+    newer["title"] = "Newer"
+    update = _make_update("spc_pack_mp3_50", chat_id=5)
+
+    async def fake_execute(*args, **kwargs):
+        runtime.session_store.set_field(5, "spotify_collection", newer)
+        return SimpleNamespace(failed_indices=(1,))
+
+    monkeypatch.setattr(callbacks, "execute_spotify_collection_archive_flow", fake_execute)
+
+    asyncio.run(
+        callbacks.handle_spotify_collection_callback(update, context, "spc_pack_mp3_50")
+    )
+
+    assert runtime.session_store.get_field(5, "spotify_collection") is newer
+    assert newer["selected"] == []
+
+
+def test_download_job_end_without_runtime_keeps_a_newer_collection(monkeypatch):
+    context = _make_context()
+    collection = _collection()
+    collection["selected"] = [0]
+    context.user_data["spotify_collection"] = collection
+    newer = _collection()
+    update = _make_update("spc_dl_m4a", chat_id=5)
+
+    async def fake_resolve(track, **kwargs):
+        return _resolved_track(track)
+
+    async def fake_download(*args, **kwargs):
+        context.user_data["spotify_collection"] = newer
+        return True
+
+    monkeypatch.setattr(callbacks, "resolve_track_info", fake_resolve)
+    monkeypatch.setattr(callbacks, "download_spotify_resolved", fake_download)
+
+    asyncio.run(
+        callbacks.handle_spotify_collection_callback(update, context, "spc_dl_m4a")
+    )
+
+    assert context.user_data["spotify_collection"] is newer

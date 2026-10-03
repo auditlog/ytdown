@@ -20,6 +20,7 @@ from bot.archive import (
     volume_size_for,
 )
 from bot.downloader_validation import sanitize_filename
+from bot.handlers.common_ui import polish_plural, progress_stop_markup
 from bot.jobs import JobDescriptor, job_registry
 from bot.mtproto import mtproto_unavailability_reason
 from bot.security_limits import (
@@ -28,6 +29,7 @@ from bot.security_limits import (
     SPOTIFY_ARCHIVE_VOLUME_SIZE_MB,
 )
 from bot.services.archive_service import (
+    ARCHIVE_UNPACK_HINT,
     prepare_playlist_workspace,
     register_archived_delivery,
     save_partial_archive_after_cancel,
@@ -66,6 +68,12 @@ def _track_label(track: dict[str, Any]) -> str:
     artist = str(track.get("artist") or "").strip()
     title = str(track.get("title") or "Utwór").strip()
     return f"{artist} — {title}" if artist else title
+
+
+def _archives_phrase(count: int) -> str:
+    """"1 archiwum" / "2 archiwa" / "5 archiwów" (Spotify groups, not volumes)."""
+
+    return polish_plural(count, "archiwum", "archiwa", "archiwów")
 
 
 def _archive_slug(title: str) -> str:
@@ -295,6 +303,7 @@ async def execute_spotify_collection_archive_flow(
                 update,
                 f"Spotify → 7z ({audio_format.upper()})\n"
                 f"[{position}/{total}] Dopasowywanie i pobieranie:\n{label}",
+                reply_markup=progress_stop_markup(cancellation),
             )
 
             temp_dir = workspace / f".spotify_{track_index:04d}"
@@ -453,7 +462,9 @@ async def execute_spotify_collection_archive_flow(
             await _safe_status_edit(
                 update,
                 f"Pakowanie archiwum {group_index}/{archive_count} "
-                f"({len(group)} utworów, wolumeny do {volume_size_mb} MB)...",
+                f"({polish_plural(len(group), 'utwór', 'utwory', 'utworów')}, "
+                f"części po {volume_size_mb} MB)...",
+                reply_markup=progress_stop_markup(cancellation),
             )
             packed_volumes.extend(
                 await pack_to_volumes(
@@ -496,8 +507,9 @@ async def execute_spotify_collection_archive_flow(
         )
         await _safe_status_edit(
             update,
-            f"Pakowanie zakończone: {archive_count} archiwów, "
-            f"{len(packed_volumes)} plików do wysłania.",
+            f"Pakowanie zakończone: {_archives_phrase(archive_count)}, "
+            f"{polish_plural(len(packed_volumes), 'część', 'części', 'części')} do wysłania.",
+            reply_markup=progress_stop_markup(cancellation),
         )
         await send_volumes(
             context.bot,
@@ -505,7 +517,9 @@ async def execute_spotify_collection_archive_flow(
             volumes=packed_volumes,
             caption_prefix=caption_prefix,
             use_mtproto=use_mtproto,
-            status_cb=lambda text: _safe_status_edit(update, text),
+            status_cb=lambda text: _safe_status_edit(
+                update, text, reply_markup=progress_stop_markup(cancellation),
+            ),
             cancellation=cancellation,
         )
 
@@ -536,12 +550,14 @@ async def execute_spotify_collection_archive_flow(
         summary = [
             "⏹ Wysyłka zatrzymana." if cancelled else "Spotify: archiwa gotowe.",
             f"Pobrano: {len(downloaded)}/{len(selected)} utworów",
-            f"Logiczne archiwa 7z: {archive_count}",
-            f"Wolumeny wysłane do Telegrama: {len(packed_volumes)}",
+            f"Spakowano: {_archives_phrase(archive_count)} 7z",
+            f"Części wysłane do Telegrama: {len(packed_volumes)}",
             f"Rozmiar grupy: {batch_label}",
-            "Każde archiwum zaczyna numerację wolumenów od .7z.001.",
+            "Każde archiwum ma własną numerację części, od .7z.001.",
             f"Folder zostanie usunięty po {PLAYLIST_ARCHIVE_RETENTION_MIN} min.",
         ]
+        if not cancelled:
+            summary.append(ARCHIVE_UNPACK_HINT)
         if failures:
             summary.extend(["", f"Nieudane utwory: {len(failures)}"])
             summary.extend(f"- {failure.label[:70]}" for failure in failures[:5])
@@ -556,7 +572,7 @@ async def execute_spotify_collection_archive_flow(
 
         keyboard = InlineKeyboardMarkup([
             [InlineKeyboardButton(
-                "Wyślij wszystkie paczki ponownie",
+                "Wyślij wszystkie części ponownie",
                 callback_data=f"arc_resend_{token}_0",
             )],
             [InlineKeyboardButton("Usuń teraz", callback_data=f"arc_purge_{token}")],

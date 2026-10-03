@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import types
 from unittest.mock import MagicMock
 
 import pytest
+from mutagen.mp3 import MP3
 
 from bot.transcription_chunking import find_silence_points, get_part_number, split_mp3
 
@@ -328,3 +330,42 @@ def test_split_mp3_falls_back_to_equal_parts_when_mutagen_fails(tmp_path):
     )
 
     assert isinstance(result, list)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_split_mp3_cuts_non_mp3_audio_into_playable_mp3_parts(tmp_path):
+    # Spotify audio arrives as AAC in .m4a; parts are cut with stream copy into
+    # .mp3 files, which ffmpeg refuses for AAC (exit 234, 0-byte part), so a
+    # long episode used to produce no parts at all.
+    source = tmp_path / "episode.m4a"
+    subprocess.run(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
+            "-f", "lavfi", "-i", "sine=frequency=440:duration=20",
+            "-c:a", "aac", "-b:a", "128k", str(source),
+        ],
+        check=True,
+    )
+    parts_dir = tmp_path / "parts"
+    parts_dir.mkdir()
+    source_mb = source.stat().st_size / (1024 * 1024)
+
+    parts = split_mp3(str(source), str(parts_dir), max_size_mb=source_mb / 2.5)
+
+    assert len(parts) >= 2
+    assert all(part.endswith(".mp3") for part in parts)
+    total_seconds = sum(MP3(part).info.length for part in parts)
+    assert total_seconds == pytest.approx(20, abs=1.5)
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="needs ffmpeg")
+def test_split_mp3_returns_no_parts_when_non_mp3_audio_cannot_be_converted(tmp_path):
+    # The pipeline turns an empty part list into a reported failure.
+    source = tmp_path / "broken.m4a"
+    source.write_bytes(b"not audio at all" * 4096)
+    parts_dir = tmp_path / "parts"
+    parts_dir.mkdir()
+
+    parts = split_mp3(str(source), str(parts_dir), max_size_mb=0.01)
+
+    assert parts == []
