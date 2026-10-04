@@ -71,11 +71,61 @@ ssh rpi5a 'sudo systemctl status ytdown-mcp.service'
 ```
 
 Direct HTTP clients must supply the MCP bearer token over HTTPS. The SSH bridge
-reads it on the server, so client JSON contains no token. SSH access and tailnet
+reads it on the server and the local HTTPS bridge reads it from a private file,
+so client JSON contains no token. SSH access and tailnet
 grants control which devices can reach the service; all permitted MCP clients
 belong to the same owner and share job history.
 
 ## Claude Desktop and other local MCP clients
+
+### Recommended: local HTTPS bridge
+
+`bot/mcp/local_bridge.py` is a standard-library-only stdio bridge that runs on
+the client machine and sends every JSON-RPC message as its own HTTPS POST to the
+tailnet endpoint. The server is stateless (`stateless_http=True`,
+`json_response=True`), so nothing is lost between requests. When the network
+drops (laptop sleep, Wi-Fi change, a DNS hiccup in WSL) only the request in
+flight fails: it is retried once and then answered with a JSON-RPC error, and
+the bridge keeps running, so the next call works once the network is back.
+
+Why not SSH: the SSH variant below keeps one long-lived SSH session per client
+session. sshd on the Pi drops it after about 10 minutes without an answer from a
+sleeping laptop, the client then exits with `Broken pipe`, and Claude Desktop
+does not restart a server that exited, so ytdown stays "unavailable" until the
+app is restarted. Between 2026-09-05 and 2026-10-04 this happened about once a
+day.
+
+Install in Debian WSL (or any Linux/macOS client with Python 3.10+ on the tailnet):
+
+```bash
+umask 077
+mkdir -p ~/.config/ytdown ~/.local/share/ytdown-mcp
+ssh rpi5a 'grep "^YTDOWN_MCP_TOKEN=" ~/.config/ytdown/mcp.env' > ~/.config/ytdown/mcp.env
+install -m 644 bot/mcp/local_bridge.py ~/.local/share/ytdown-mcp/local_bridge.py
+```
+
+The token stays in that mode-600 file; the client JSON contains no secret.
+Claude Desktop on Windows:
+
+```json
+{
+  "mcpServers": {
+    "ytdown": {
+      "command": "wsl.exe",
+      "args": ["--distribution", "Debian", "--exec", "/usr/bin/python3",
+               "/home/pi/.local/share/ytdown-mcp/local_bridge.py",
+               "--url", "https://rpi5a.tail3e20a0.ts.net:9443/mcp",
+               "--token-file", "/home/pi/.config/ytdown/mcp.env"]
+    }
+  }
+}
+```
+
+The installed copy does not follow the repository; re-run the `install` line
+after changing `bot/mcp/local_bridge.py`. Bridge errors go to stderr, which
+Claude Desktop writes to `%LOCALAPPDATA%\Claude\Logs\mcp-server-ytdown.log`.
+
+### Alternative: SSH bridge
 
 For a Linux/macOS client with the existing `rpi5a` SSH configuration:
 
@@ -103,10 +153,10 @@ For Claude Desktop on Windows, using the configured SSH identity in Debian WSL:
 }
 ```
 
-Merge this entry with existing client settings, then restart the client. SSH
-host trust and key access must already work. This is a local MCP connection
-whose tools execute remotely on the Raspberry Pi; it is distinct from the
-Claude cloud Connectors UI.
+Merge the chosen entry with existing client settings, then restart the client.
+For the SSH variant, host trust and key access must already work. Either way
+this is a local MCP connection whose tools execute remotely on the Raspberry
+Pi; it is distinct from the Claude cloud Connectors UI.
 
 ## ChatGPT
 
