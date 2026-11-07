@@ -203,8 +203,7 @@ class JobStore:
                     "PYTHONDONTWRITEBYTECODE",
                     "SSL_CERT_FILE",
                     "SSL_CERT_DIR",
-                    "GROQ_API_KEY",
-                    "CLAUDE_API_KEY",
+                    "OPENROUTER_API_KEY",
                 }
             }
             # Shield process creation so cancellation cannot orphan a just-spawned worker.

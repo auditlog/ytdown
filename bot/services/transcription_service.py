@@ -12,12 +12,19 @@ if TYPE_CHECKING:
     from bot.jobs import JobCancellation
 
 from bot.services.download_service import send_progress_update
+from bot.speakers import (
+    format_speaker_summary,
+    identify_speakers,
+    load_speaker_parts,
+    name_speakers,
+    render_labeled_transcript,
+)
 from bot.transcription_limits import is_text_too_long_for_summary
 from bot.transcription_pipeline import transcribe_mp3_file
 from bot.transcription_providers import (
     generate_custom_analysis,
     generate_summary,
-    get_claude_api_key,
+    get_api_key,
 )
 
 
@@ -47,6 +54,14 @@ class CustomAnalysisResult:
     analysis_path: str
 
 
+@dataclass
+class SpeakerLabelsResult:
+    """Who-is-who list for the chat and the transcript file with speaker names."""
+
+    summary_text: str
+    labeled_path: str
+
+
 SUMMARY_TYPE_NAMES = {
     1: "Krótkie podsumowanie",
     2: "Szczegółowe podsumowanie",
@@ -55,23 +70,23 @@ SUMMARY_TYPE_NAMES = {
 }
 
 
-MISSING_GROQ_KEY_TEXT = (
+MISSING_TRANSCRIPTION_KEY_TEXT = (
     "Funkcja niedostępna — brak klucza API do transkrypcji. "
     "Skontaktuj się z administratorem."
 )
-MISSING_CLAUDE_KEY_TEXT = (
-    "Podsumowanie jest niedostępne — brak klucza API Claude. "
+MISSING_AI_KEY_TEXT = (
+    "Podsumowanie jest niedostępne — brak klucza API OpenRouter. "
     "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
 )
-# Variants of MISSING_CLAUDE_KEY_TEXT for places where "pick transcript only"
+# Variants of MISSING_AI_KEY_TEXT for places where "pick transcript only"
 # does not fit: the transcript is already on its way (summary skipped after
 # transcription) or there is no summary choice at all (custom prompt).
-MISSING_CLAUDE_KEY_KEEP_TRANSCRIPT_TEXT = (
-    "Transkrypcja gotowa, ale podsumowanie jest niedostępne — brak klucza API Claude. "
+MISSING_AI_KEY_KEEP_TRANSCRIPT_TEXT = (
+    "Transkrypcja gotowa, ale podsumowanie jest niedostępne — brak klucza API OpenRouter. "
     "Wysyłam samą transkrypcję."
 )
-MISSING_CLAUDE_KEY_ADMIN_TEXT = (
-    "Funkcja niedostępna — brak klucza API Claude. "
+MISSING_AI_KEY_ADMIN_TEXT = (
+    "Funkcja niedostępna — brak klucza API OpenRouter. "
     "Skontaktuj się z administratorem."
 )
 # Shown when the pipeline returns None (no part could be transcribed or the
@@ -87,20 +102,17 @@ SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT = (
 )
 
 
-def missing_transcription_key_message(
-    get_value: Callable[..., Any], *, summary: bool
-) -> str | None:
-    """Return the Polish error text when a required API key is missing.
+def missing_transcription_key_message(get_value: Callable[..., Any]) -> str | None:
+    """Return the Polish error text when the OpenRouter API key is missing.
 
+    Transcription and summaries share one key, so one check covers both.
     Called before any download or upload work starts so the user is not made
     to wait for a job that is bound to fail. ``get_value`` is the calling
     handler module's own ``get_runtime_value`` (kept injectable so the
     per-module test seams keep working).
     """
-    if not get_value("GROQ_API_KEY", ""):
-        return MISSING_GROQ_KEY_TEXT
-    if summary and not get_value("CLAUDE_API_KEY", ""):
-        return MISSING_CLAUDE_KEY_TEXT
+    if not get_value("OPENROUTER_API_KEY", ""):
+        return MISSING_TRANSCRIPTION_KEY_TEXT
     return None
 
 
@@ -186,7 +198,7 @@ async def generate_summary_artifact(
     loop = asyncio.get_event_loop()
     summary_text = await loop.run_in_executor(
         executor,
-        lambda: generate_summary(transcript_text, summary_type, api_key=get_claude_api_key()),
+        lambda: generate_summary(transcript_text, summary_type, api_key=get_api_key()),
     )
     if not summary_text:
         return None
@@ -218,23 +230,21 @@ async def generate_custom_analysis_artifact(
     """Apply a custom instruction and persist the complete result as Markdown."""
 
     loop = asyncio.get_event_loop()
-    claude_api_key = api_key if api_key is not None else get_claude_api_key()
+    openrouter_api_key = api_key if api_key is not None else get_api_key()
     analysis_text = await loop.run_in_executor(
         executor,
         lambda: generate_custom_analysis(
             transcript_text,
             prompt,
-            api_key=claude_api_key,
+            api_key=openrouter_api_key,
         ),
     )
     if not analysis_text:
         return None
 
-    suffix = artifact_id or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    safe_suffix = "".join(char for char in suffix if char.isalnum() or char in "-_")[:32]
     analysis_path = os.path.join(
         output_dir,
-        f"{sanitized_title}_custom_analysis_{safe_suffix}.md",
+        f"{sanitized_title}_custom_analysis_{_artifact_suffix(artifact_id)}.md",
     )
     with open(analysis_path, "w", encoding="utf-8") as file_obj:
         file_obj.write(f"# {title} - Własna analiza transkrypcji\n\n")
@@ -244,6 +254,54 @@ async def generate_custom_analysis_artifact(
         analysis_text=analysis_text,
         analysis_path=analysis_path,
     )
+
+
+def _artifact_suffix(artifact_id: str | None) -> str:
+    suffix = artifact_id or datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    return "".join(char for char in suffix if char.isalnum() or char in "-_")[:32]
+
+
+async def generate_speaker_labels_artifact(
+    *,
+    transcript_path: str,
+    title: str,
+    sanitized_title: str,
+    hints: str,
+    output_dir: str,
+    executor: Any,
+    api_key: str,
+    artifact_id: str | None = None,
+) -> SpeakerLabelsResult | None:
+    """Name the speakers of a transcript with Sonnet and save a labelled copy.
+
+    Returns None when the transcript has no speaker data or naming fails.
+    See also: bot/speakers.py.
+    """
+
+    parts = load_speaker_parts(transcript_path)
+    if not parts:
+        return None
+
+    loop = asyncio.get_event_loop()
+    identification = await loop.run_in_executor(
+        executor,
+        lambda: identify_speakers(parts, hints, api_key=api_key),
+    )
+    if identification is None:
+        return None
+
+    named = name_speakers(identification, parts)
+    summary_text = format_speaker_summary(identification, named)
+    labeled_path = os.path.join(
+        output_dir,
+        f"{sanitized_title}_speakers_{_artifact_suffix(artifact_id)}.md",
+    )
+    with open(labeled_path, "w", encoding="utf-8") as file_obj:
+        file_obj.write(f"# {title} – transkrypcja z rozmówcami\n\n")
+        file_obj.write(f"Rozmówcy:\n{summary_text}\n\n---\n\n")
+        file_obj.write(render_labeled_transcript(parts, named))
+
+    return SpeakerLabelsResult(summary_text=summary_text, labeled_path=labeled_path)
 
 
 def cleanup_transcription_artifacts(

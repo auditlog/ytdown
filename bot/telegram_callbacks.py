@@ -54,7 +54,7 @@ from bot.handlers.playlist_callbacks import (
 )
 from bot.handlers.spotify_callbacks import download_spotify_video, transcribe_spotify_video
 from bot.handlers.spotify_collection_callbacks import handle_spotify_collection_callback
-from bot.handlers.transcript_prompt_handlers import handle_transcript_prompt_callback
+from bot.handlers.transcript_prompt_handlers import handle_speaker_callback, handle_transcript_prompt_callback
 from bot.handlers.trim_callbacks import NO_ROOM_TEXT, ensure_trim_authorized, handle_trim_callback
 from bot.jobs import busy_chats, is_chat_busy, job_registry
 from bot.services.trim_store import has_room_for_sources
@@ -173,6 +173,10 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, da
 
     if data.startswith("tr_prompt_"):
         await handle_transcript_prompt_callback(update, context, data)
+        return
+
+    if data.startswith("tr_spk_"):
+        await handle_speaker_callback(update, context, data)
         return
 
     # trim_dl needs the session URL and is routed next to dl_ below.
@@ -484,7 +488,7 @@ async def _route_spotify_transcription(
     """Route a Spotify transcription request to its best available source.
 
     Preference order: a native video session (subtitles when the episode
-    has them -- no audio download at all; native audio + Groq otherwise),
+    has them -- no audio download at all; native audio + Scribe otherwise),
     then the legacy resolved-audio fallback unchanged, then "session
     expired" once neither survived. A video session always wins over a
     stale resolved fallback still sitting in the session, since it is the

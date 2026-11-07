@@ -137,7 +137,7 @@ def test_env_variables():
     print("=== Test Zmiennych Środowiskowych ===")
 
     # Sprawdź które zmienne są ustawione
-    env_vars = ["TELEGRAM_BOT_TOKEN", "GROQ_API_KEY", "CLAUDE_API_KEY", "PIN_CODE"]
+    env_vars = ["TELEGRAM_BOT_TOKEN", "OPENROUTER_API_KEY", "PIN_CODE"]
 
     print("Sprawdzanie zmiennych środowiskowych:")
     for var in env_vars:

@@ -1,49 +1,102 @@
 """Tests for stable orchestration in transcription_pipeline."""
 
+import json
 from pathlib import Path
 
+import pytest
+
 from bot import transcription_pipeline as pipeline
+from bot.transcription_providers import SpeakerTurn, TranscribedPart
 
 
-def test_transcribe_mp3_file_pipeline_uses_injected_dependencies(tmp_path):
-    source = tmp_path / "audio.mp3"
-    source.write_bytes(b"x" * 1024)
+def _part_result(text, turns=()):
+    return TranscribedPart(text=text, turns=tuple(turns)) if text is not None else None
 
+
+def _two_parts(tmp_path):
     part1 = tmp_path / "audio_part1.mp3"
     part2 = tmp_path / "audio_part2.mp3"
     part1.write_bytes(b"a")
     part2.write_bytes(b"b")
+    return part1, part2
 
+
+def _source(tmp_path, name="audio.mp3"):
+    source = tmp_path / name
+    source.write_bytes(b"x" * 100)
+    return source
+
+
+def _run(tmp_path, transcribe, parts, **overrides):
+    kwargs = dict(
+        get_api_key_fn=lambda: "or-key",
+        split_mp3_fn=lambda *_args, **_kwargs: [str(part) for part in parts],
+        get_part_number_fn=lambda filename: 1 if "part1" in filename else 2,
+        transcribe_audio_fn=transcribe,
+        rmtree_fn=lambda _path: None,
+    )
+    kwargs.update(overrides)
+    return pipeline.transcribe_mp3_file(str(_source(tmp_path)), str(tmp_path), **kwargs)
+
+
+def test_transcribe_mp3_file_pipeline_uses_injected_dependencies(tmp_path):
+    part1, part2 = _two_parts(tmp_path)
     removed = []
+    seen = []
+
+    def transcribe(path, key, language=None):
+        seen.append((Path(path).stem, key, language))
+        return _part_result(f"{Path(path).stem} text")
 
     result = pipeline.transcribe_mp3_file(
-        str(source),
+        str(_source(tmp_path)),
         str(tmp_path),
         progress_callback=lambda _text: None,
         language="pl",
-        get_api_key_fn=lambda: "groq",
-        get_claude_api_key_fn=lambda: "claude",
+        get_api_key_fn=lambda: "or-key",
         split_mp3_fn=lambda *_args, **_kwargs: [str(part1), str(part2)],
         get_part_number_fn=lambda filename: 1 if "part1" in filename else 2,
-        transcribe_audio_fn=lambda path, _key, language=None, prompt=None: f"{Path(path).stem}:{language}:{prompt or ''}",
-        post_process_transcript_fn=lambda text, api_key=None: f"CLEAN:{text}",
-        estimate_token_count_fn=lambda text: len(text),
-        is_text_too_long_for_correction_fn=lambda _text: False,
+        transcribe_audio_fn=transcribe,
         rmtree_fn=lambda path: removed.append(path),
     )
 
     assert result == str(tmp_path / "audio_transcript.md")
-    assert Path(result).exists()
-    assert "CLEAN:" in Path(result).read_text(encoding="utf-8")
+    content = Path(result).read_text(encoding="utf-8")
+    assert "audio_part1 text\n\naudio_part2 text" in content
+    assert seen == [("audio_part1", "or-key", "pl"), ("audio_part2", "or-key", "pl")]
     assert removed == [str(tmp_path / "temp_parts")]
 
 
-def test_pipeline_returns_none_when_api_key_missing(tmp_path):
-    source = tmp_path / "audio.mp3"
-    source.write_bytes(b"x" * 100)
+def test_pipeline_saves_speaker_turns_of_every_part(tmp_path):
+    part1, part2 = _two_parts(tmp_path)
+    turns = {
+        str(part1): [SpeakerTurn(0, 0.0, 1.0, "Pytanie?"), SpeakerTurn(1, 1.0, 2.0, "Odpowiedź.")],
+        str(part2): [SpeakerTurn(0, 0.0, 1.0, "Dalej.")],
+    }
 
+    result = _run(
+        tmp_path,
+        lambda path, _key, language=None: _part_result("tekst", turns[path]),
+        [part1, part2],
+    )
+
+    data = json.loads((tmp_path / "audio_speakers.json").read_text(encoding="utf-8"))
+    assert result == str(tmp_path / "audio_transcript.md")
+    assert [part["part"] for part in data["parts"]] == [1, 2]
+    assert data["parts"][0]["turns"][1] == {"speaker": 1, "start": 1.0, "end": 2.0, "text": "Odpowiedź."}
+
+
+def test_pipeline_writes_no_speaker_file_without_speaker_numbers(tmp_path):
+    part1, _part2 = _two_parts(tmp_path)
+
+    _run(tmp_path, lambda _path, _key, language=None: _part_result("tekst"), [part1])
+
+    assert not (tmp_path / "audio_speakers.json").exists()
+
+
+def test_pipeline_returns_none_when_api_key_missing(tmp_path):
     result = pipeline.transcribe_mp3_file(
-        str(source),
+        str(_source(tmp_path)),
         str(tmp_path),
         get_api_key_fn=lambda: "",
     )
@@ -51,59 +104,16 @@ def test_pipeline_returns_none_when_api_key_missing(tmp_path):
     assert result is None
 
 
-def test_pipeline_skips_correction_when_text_too_long(tmp_path):
-    source = tmp_path / "audio.mp3"
-    source.write_bytes(b"x" * 100)
-
-    part = tmp_path / "audio_part1.mp3"
-    part.write_bytes(b"a")
-
-    correction_called = []
-
-    result = pipeline.transcribe_mp3_file(
-        str(source),
-        str(tmp_path),
-        get_api_key_fn=lambda: "groq",
-        get_claude_api_key_fn=lambda: "claude",
-        split_mp3_fn=lambda *_args, **_kwargs: [str(part)],
-        get_part_number_fn=lambda _filename: 1,
-        transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: "some transcription",
-        post_process_transcript_fn=lambda text, api_key=None: correction_called.append(text) or f"CLEAN:{text}",
-        estimate_token_count_fn=lambda text: len(text),
-        is_text_too_long_for_correction_fn=lambda _text: True,
-        rmtree_fn=lambda _path: None,
-    )
-
-    assert result is not None
-    assert Path(result).exists()
-    content = Path(result).read_text(encoding="utf-8")
-    assert "CLEAN:" not in content
-    assert correction_called == []
-
-
 def test_pipeline_marks_a_failed_part_among_good_ones(tmp_path):
-    source = tmp_path / "audio.mp3"
-    source.write_bytes(b"x" * 100)
-    part1 = tmp_path / "audio_part1.mp3"
-    part2 = tmp_path / "audio_part2.mp3"
-    part1.write_bytes(b"a")
-    part2.write_bytes(b"b")
-    texts = {str(part1): "first part text", str(part2): ""}
+    part1, part2 = _two_parts(tmp_path)
+    texts = {str(part1): "first part text", str(part2): None}
     progress = []
 
-    result = pipeline.transcribe_mp3_file(
-        str(source),
-        str(tmp_path),
+    result = _run(
+        tmp_path,
+        lambda path, _key, language=None: _part_result(texts[path]),
+        [part1, part2],
         progress_callback=progress.append,
-        get_api_key_fn=lambda: "groq",
-        get_claude_api_key_fn=lambda: "",
-        split_mp3_fn=lambda *_args, **_kwargs: [str(part1), str(part2)],
-        get_part_number_fn=lambda filename: 1 if "part1" in filename else 2,
-        transcribe_audio_fn=lambda path, _key, language=None, prompt=None: texts[path],
-        post_process_transcript_fn=lambda text, api_key=None: None,
-        estimate_token_count_fn=lambda text: len(text),
-        is_text_too_long_for_correction_fn=lambda _text: False,
-        rmtree_fn=lambda _path: None,
     )
 
     content = Path(result).read_text(encoding="utf-8")
@@ -116,58 +126,23 @@ def test_pipeline_marks_a_failed_part_among_good_ones(tmp_path):
 def test_split_mp3_failure_propagates_exception(tmp_path):
     """ffmpeg failure during splitting should propagate as-is, not be swallowed."""
 
-    source = tmp_path / "audio.mp3"
-    source.write_bytes(b"x" * 100)
-
     def failing_split(*_args, **_kwargs):
         raise RuntimeError("ffmpeg exited with code 1")
 
-    import pytest
     with pytest.raises(RuntimeError, match="ffmpeg exited with code 1"):
-        pipeline.transcribe_mp3_file(
-            str(source),
-            str(tmp_path),
-            get_api_key_fn=lambda: "groq",
-            get_claude_api_key_fn=lambda: "",
-            split_mp3_fn=failing_split,
-            get_part_number_fn=lambda _filename: 1,
-            transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: "text",
-            post_process_transcript_fn=lambda text, api_key=None: None,
-            estimate_token_count_fn=lambda text: len(text),
-            is_text_too_long_for_correction_fn=lambda _text: False,
-            rmtree_fn=lambda _path: None,
-        )
+        _run(tmp_path, lambda *_a, **_k: _part_result("text"), [], split_mp3_fn=failing_split)
 
 
 def test_pipeline_fails_when_every_part_fails(tmp_path):
-    """A run where Groq returned nothing for every part is a failure, not a transcript.
+    """A run where every part came back empty is a failure, not a transcript.
 
     Delivering a file made only of placeholders would be reported to the user as
-    success and could then be sent to paid Claude correction and summaries.
+    success and could then be sent to paid summaries.
     """
 
-    source = tmp_path / "audio.mp3"
-    source.write_bytes(b"x" * 100)
+    part1, part2 = _two_parts(tmp_path)
 
-    part1 = tmp_path / "audio_part1.mp3"
-    part2 = tmp_path / "audio_part2.mp3"
-    part1.write_bytes(b"a")
-    part2.write_bytes(b"b")
-
-    result = pipeline.transcribe_mp3_file(
-        str(source),
-        str(tmp_path),
-        get_api_key_fn=lambda: "groq",
-        get_claude_api_key_fn=lambda: "",
-        split_mp3_fn=lambda *_args, **_kwargs: [str(part1), str(part2)],
-        get_part_number_fn=lambda filename: 1 if "part1" in filename else 2,
-        # Both parts return empty string — simulates total API failure
-        transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: "",
-        post_process_transcript_fn=lambda text, api_key=None: None,
-        estimate_token_count_fn=lambda text: len(text),
-        is_text_too_long_for_correction_fn=lambda _text: False,
-        rmtree_fn=lambda _path: None,
-    )
+    result = _run(tmp_path, lambda _path, _key, language=None: None, [part1, part2])
 
     assert result is None
     assert not (tmp_path / "audio_transcript.md").exists()
@@ -175,53 +150,20 @@ def test_pipeline_fails_when_every_part_fails(tmp_path):
 
 def test_pipeline_fails_when_no_audio_parts_are_produced(tmp_path):
     # e.g. ffmpeg could not cut the source file into parts
-    source = tmp_path / "audio.m4a"
-    source.write_bytes(b"x" * 100)
     removed = []
 
     result = pipeline.transcribe_mp3_file(
-        str(source),
+        str(_source(tmp_path, "audio.m4a")),
         str(tmp_path),
-        get_api_key_fn=lambda: "groq",
-        get_claude_api_key_fn=lambda: "",
+        get_api_key_fn=lambda: "or-key",
         split_mp3_fn=lambda *_args, **_kwargs: [],
-        transcribe_audio_fn=lambda *_args, **_kwargs: "unused",
+        transcribe_audio_fn=lambda *_args, **_kwargs: _part_result("unused"),
         rmtree_fn=removed.append,
     )
 
     assert result is None
     assert not (tmp_path / "audio_transcript.md").exists()
     assert removed == [str(tmp_path / "temp_parts")]
-
-
-def test_api_timeout_during_post_processing_uses_raw_transcript(tmp_path):
-    """When post-processing raises Timeout, the raw transcript should still be saved."""
-
-    source = tmp_path / "audio.mp3"
-    source.write_bytes(b"x" * 100)
-
-    part = tmp_path / "audio_part1.mp3"
-    part.write_bytes(b"a")
-
-    def timeout_post_process(text, api_key=None):
-        # Simulate connection timeout during assembly/post-processing
-        raise TimeoutError("API request timed out after 300s")
-
-    import pytest
-    with pytest.raises(TimeoutError):
-        pipeline.transcribe_mp3_file(
-            str(source),
-            str(tmp_path),
-            get_api_key_fn=lambda: "groq",
-            get_claude_api_key_fn=lambda: "claude",
-            split_mp3_fn=lambda *_args, **_kwargs: [str(part)],
-            get_part_number_fn=lambda _filename: 1,
-            transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: "raw transcript",
-            post_process_transcript_fn=timeout_post_process,
-            estimate_token_count_fn=lambda text: len(text),
-            is_text_too_long_for_correction_fn=lambda _text: False,
-            rmtree_fn=lambda _path: None,
-        )
 
 
 def test_transcribe_mp3_file_breaks_on_cancel(tmp_path):
@@ -232,71 +174,48 @@ def test_transcribe_mp3_file_breaks_on_cancel(tmp_path):
 
     cancellation = JobCancellation(job_id="t", event=asyncio.Event())
     cancellation.event.set()
-
-    part = tmp_path / "audio_part1.mp3"
-    part.write_bytes(b"x")
-
-    source = tmp_path / "audio.mp3"
-    source.write_bytes(b"x" * 100)
-
+    part1, _part2 = _two_parts(tmp_path)
     api_called = {"n": 0}
 
-    def fake_transcribe(_path, _key, language=None, prompt=None):
+    def fake_transcribe(_path, _key, language=None):
         api_called["n"] += 1
-        return "should not be called"
+        return _part_result("should not be called")
 
-    result = pipeline.transcribe_mp3_file(
-        str(source),
-        str(tmp_path),
-        cancellation=cancellation,
-        get_api_key_fn=lambda: "groq",
-        get_claude_api_key_fn=lambda: "",
-        split_mp3_fn=lambda *_args, **_kwargs: [str(part)],
-        get_part_number_fn=lambda _filename: 1,
-        transcribe_audio_fn=fake_transcribe,
-        post_process_transcript_fn=lambda text, api_key=None: None,
-        estimate_token_count_fn=lambda text: len(text),
-        is_text_too_long_for_correction_fn=lambda _text: False,
-        rmtree_fn=lambda _path: None,
-    )
+    result = _run(tmp_path, fake_transcribe, [part1], cancellation=cancellation)
 
     # API must NOT be called for any chunk when cancellation is already set.
     assert api_called["n"] == 0
-    # Result must indicate cancel (None or "cancelled"/"anulowano" string).
-    assert result is None or "anulowano" in str(result).lower() or "cancelled" in str(result).lower()
-
-
-def _run_single_part(tmp_path, transcription):
-    source = tmp_path / "audio.mp3"
-    source.write_bytes(b"x" * 100)
-    part1 = tmp_path / "audio_part1.mp3"
-    part1.write_bytes(b"a")
-    return pipeline.transcribe_mp3_file(
-        str(source),
-        str(tmp_path),
-        get_api_key_fn=lambda: "groq",
-        get_claude_api_key_fn=lambda: "",
-        split_mp3_fn=lambda *_args, **_kwargs: [str(part1)],
-        get_part_number_fn=lambda _filename: 1,
-        transcribe_audio_fn=lambda _path, _key, language=None, prompt=None: transcription,
-        post_process_transcript_fn=lambda text, api_key=None: None,
-        estimate_token_count_fn=lambda text: len(text),
-        is_text_too_long_for_correction_fn=lambda _text: False,
-        rmtree_fn=lambda _path: None,
-    )
-
-
-def test_whitespace_only_transcription_is_a_failure(tmp_path):
-    # Whitespace-only text is dropped while merging, leaving nothing to deliver;
-    # callers then show TRANSCRIPTION_FAILED_TEXT instead of an error document.
-    result = _run_single_part(tmp_path, "   ")
-
     assert result is None
-    assert not (tmp_path / "audio_transcript.md").exists()
 
 
 def test_empty_part_file_marker_is_polish(tmp_path):
-    _run_single_part(tmp_path, "")
+    part1, _part2 = _two_parts(tmp_path)
+
+    _run(tmp_path, lambda _path, _key, language=None: None, [part1])
 
     part_text = (tmp_path / "audio_part1_transcript.txt").read_text(encoding="utf-8")
     assert part_text == "[brak transkrypcji tego fragmentu]"
+
+
+def test_speaker_data_keeps_failed_and_unlabelled_parts_in_place(tmp_path):
+    # A labelled transcript must not silently skip audio that the plain one marks as missing.
+    part1, part2 = _two_parts(tmp_path)
+    part3 = tmp_path / "audio_part3.mp3"
+    part3.write_bytes(b"c")
+    results = {
+        str(part1): _part_result("Pytanie? Odpowiedź.", [SpeakerTurn(0, 0.0, 1.0, "Pytanie?"), SpeakerTurn(1, 1.0, 2.0, "Odpowiedź.")]),
+        str(part2): None,
+        str(part3): _part_result("Tekst bez mówców."),
+    }
+
+    _run(
+        tmp_path,
+        lambda path, _key, language=None: results[path],
+        [part1, part2, part3],
+        get_part_number_fn=lambda filename: int(filename.split("part")[1].split(".")[0]),
+    )
+
+    data = json.loads((tmp_path / "audio_speakers.json").read_text(encoding="utf-8"))
+    assert [part["part"] for part in data["parts"]] == [1, 2, 3]
+    assert data["parts"][1]["turns"] == [{"speaker": None, "start": 0.0, "end": 0.0, "text": pipeline.EMPTY_PART_MARKER}]
+    assert data["parts"][2]["turns"] == [{"speaker": None, "start": 0.0, "end": 0.0, "text": "Tekst bez mówców."}]

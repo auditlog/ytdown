@@ -2,31 +2,39 @@
 
 from __future__ import annotations
 
-# Claude Haiku 4.5 limits
+# Claude Haiku 4.5 limits (summaries and custom analyses, served through OpenRouter)
 CLAUDE_MAX_OUTPUT_TOKENS = 64_000
 CLAUDE_CONTEXT_WINDOW_TOKENS = 200_000
 
 # Conservative thresholds (leave room for prompt overhead)
-POST_PROCESS_MAX_INPUT_TOKENS = 50_000
 SUMMARY_MAX_INPUT_TOKENS = 175_000
 CUSTOM_PROMPT_MAX_CHARS = 4_000
 CUSTOM_ANALYSIS_MAX_OUTPUT_TOKENS = 16_384
 
-# Approximate speech duration thresholds (minutes) for user-facing warnings
-CORRECTION_DURATION_LIMIT_MIN = 270
+# Speaker naming (Claude Sonnet 5.5 through OpenRouter). The reply is a small
+# JSON map, but the budget also covers the model's reasoning tokens.
+SPEAKER_HINTS_MAX_CHARS = 1_000
+SPEAKER_MAX_INPUT_TOKENS = SUMMARY_MAX_INPUT_TOKENS
+SPEAKER_MAX_OUTPUT_TOKENS = 8_000
+
+# Approximate speech duration threshold (minutes) for user-facing warnings
 SUMMARY_DURATION_LIMIT_MIN = 840
 
-# Retry settings for Claude API calls
+# Retry settings for chat (Claude) calls
 CLAUDE_API_MAX_RETRIES = 3
 CLAUDE_API_RETRY_BASE_DELAY = 10
 
-# Retry settings for Groq transcription calls. Retry-After can ask for minutes
-# once an hourly audio quota is used up; waiting longer than the cap would
-# stall the whole transcription, so such a part fails and is marked instead.
-GROQ_API_MAX_RETRIES = 3
-GROQ_API_RETRY_BASE_DELAY = 5
-GROQ_RETRY_AFTER_MAX_SEC = 60
-GROQ_RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504})
+# Retry settings for transcription calls. Retry-After can ask for minutes once a
+# quota is used up; waiting longer than the cap would stall the whole
+# transcription, so such a part fails and is marked instead.
+TRANSCRIPTION_API_MAX_RETRIES = 3
+TRANSCRIPTION_API_RETRY_BASE_DELAY = 5
+RETRY_AFTER_MAX_SEC = 60
+RETRYABLE_STATUS_CODES = frozenset({408, 429, 500, 502, 503, 504, 529})
+
+# OpenRouter rejects multipart uploads above 25 MB. Parts are cut to
+# MAX_MP3_PART_SIZE_MB (bot/security_limits.py), which stays below it.
+TRANSCRIPTION_UPLOAD_MAX_MB = 25
 
 
 def estimate_token_count(text: str) -> int:
@@ -35,12 +43,6 @@ def estimate_token_count(text: str) -> int:
     if not text:
         return 0
     return len(text) // 4
-
-
-def is_text_too_long_for_correction(text: str) -> bool:
-    """Return True if text exceeds the post-processing input limit."""
-
-    return estimate_token_count(text) > POST_PROCESS_MAX_INPUT_TOKENS
 
 
 def is_text_too_long_for_summary(text: str) -> bool:

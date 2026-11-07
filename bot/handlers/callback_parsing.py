@@ -133,6 +133,7 @@ _WORK_CALLBACK_PREFIXES = (
     "spc_dl_",
     "arc_split_",
     "arc_resend_",
+    "tr_spk_auto_",  # speaker naming runs inside the callback (a paid model call)
     "arc_pack_partial_",
 )
 _WORK_CALLBACK_EXACT = frozenset({"trim_dl"})

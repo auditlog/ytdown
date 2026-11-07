@@ -767,7 +767,7 @@ def test_transcript_from_subtitles_returns_none_when_fetch_unavailable(monkeypat
     the actual track (stale manifest, expired CDN URL, transient failure).
     fetch_subtitles already returns None rather than raising for this --
     transcript_from_subtitles must propagate that as None too, so its
-    caller can fall back to the Groq audio pipeline instead of crashing."""
+    caller can fall back to the Scribe audio pipeline instead of crashing."""
 
     episode = svs.VideoEpisode(
         episode_id="abc", title="Odcinek", show_name="Podcast",

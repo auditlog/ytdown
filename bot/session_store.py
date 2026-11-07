@@ -69,10 +69,15 @@ class TranscriptContext:
 
 @dataclass(frozen=True)
 class PendingTranscriptPrompt:
-    """One chat waiting for a specific user to provide a custom instruction."""
+    """One chat waiting for a specific user to type text about a transcript.
+
+    ``kind`` says what the text is for: a custom instruction ("analysis") or
+    the participants used as hints for speaker naming ("speakers").
+    """
 
     transcript_token: str
     requester_id: int
+    kind: str = "analysis"
 
 
 @dataclass(frozen=True)

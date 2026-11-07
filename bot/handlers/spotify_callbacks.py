@@ -32,9 +32,9 @@ from bot.services.spotify_video_service import (
     transcript_from_subtitles,
 )
 from bot.services.transcription_service import (
-    MISSING_CLAUDE_KEY_KEEP_TRANSCRIPT_TEXT,
-    MISSING_CLAUDE_KEY_TEXT,
-    MISSING_GROQ_KEY_TEXT,
+    MISSING_AI_KEY_KEEP_TRANSCRIPT_TEXT,
+    MISSING_AI_KEY_TEXT,
+    MISSING_TRANSCRIPTION_KEY_TEXT,
     SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
     TRANSCRIPTION_FAILED_TEXT,
     cleanup_transcription_artifacts,
@@ -247,7 +247,7 @@ async def download_spotify_resolved(
 
     if transcribe:
         # Fail fast: check API keys before downloading anything.
-        missing_key_text = missing_transcription_key_message(get_runtime_value, summary=summary)
+        missing_key_text = missing_transcription_key_message(get_runtime_value)
         if missing_key_text:
             await update_status(missing_key_text)
             return False
@@ -518,7 +518,7 @@ async def transcribe_spotify_video(
 
     Prefers Spotify's own WebVTT subtitles when the episode ships them --
     that skips downloading any audio at all. Falls back to downloading the
-    native AAC audio track and running it through Groq, the same pipeline
+    native AAC audio track and running it through Scribe, the same pipeline
     the legacy (``spotify_resolved``) audio transcription path uses, when
     the episode has no subtitles or Spotify fails to serve the one it
     advertised.
@@ -539,10 +539,11 @@ async def transcribe_spotify_video(
     downloaded_file_path = None
     transcript_path = None
 
-    if summary and summary_type and not get_runtime_value("CLAUDE_API_KEY", ""):
-        # Fail fast, before any subtitle or audio download. The Groq key is
-        # only needed by the audio fallback below, so it is checked there.
-        await update_status(MISSING_CLAUDE_KEY_TEXT)
+    if summary and summary_type and not get_runtime_value("OPENROUTER_API_KEY", ""):
+        # Fail fast, before any subtitle or audio download. Without a summary
+        # the same key is only needed by the audio fallback below, so it is
+        # checked there.
+        await update_status(MISSING_AI_KEY_TEXT)
         return
 
     try:
@@ -578,7 +579,7 @@ async def transcribe_spotify_video(
         # be an empty string (Spotify's embed entity can carry one), and if
         # this diverged from that formula, cleanup_transcription_artifacts's
         # transcript_prefix would stop matching the real per-part chunk
-        # files on the audio+Groq fallback path, leaking them until the
+        # files on the audio+Scribe fallback path, leaking them until the
         # 24h sweep.
         sanitized_title = sanitize_filename(title or "spotify_episode")
 
@@ -596,9 +597,9 @@ async def transcribe_spotify_video(
         if transcript_path is None:
             # No subtitles on this episode, or Spotify failed to serve the
             # one it advertised -- fall back to downloading the native AAC
-            # audio track and transcribing it with Groq.
-            if not get_runtime_value("GROQ_API_KEY", ""):
-                await update_status(MISSING_GROQ_KEY_TEXT)
+            # audio track and transcribing it with Scribe.
+            if not get_runtime_value("OPENROUTER_API_KEY", ""):
+                await update_status(MISSING_TRANSCRIPTION_KEY_TEXT)
                 return
 
             await update_status("Pobieranie audio ze Spotify...")
@@ -698,7 +699,7 @@ async def transcribe_spotify_video(
     except SpotifyVideoCancelled:
         await update_status("Pobieranie anulowane.")
     except SpotifyVideoError as exc:
-        # Same reasoning as download_spotify_video's branch above: the Groq
+        # Same reasoning as download_spotify_video's branch above: the Scribe
         # fallback downloads the native audio track through the very same
         # segment fetcher, so it reaches this branch the same way.
         logging.error("Spotify video transcription failed: %s", exc)
@@ -804,8 +805,8 @@ async def _maybe_generate_summary(
     status; callers keep it in their final status.
     """
 
-    if not get_runtime_value("CLAUDE_API_KEY", ""):
-        notice = MISSING_CLAUDE_KEY_KEEP_TRANSCRIPT_TEXT
+    if not get_runtime_value("OPENROUTER_API_KEY", ""):
+        notice = MISSING_AI_KEY_KEEP_TRANSCRIPT_TEXT
         await update_status(notice)
         return notice
     if transcript_too_long_for_summary(transcript_text):

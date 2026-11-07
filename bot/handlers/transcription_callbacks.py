@@ -20,7 +20,7 @@ from bot.session_context import (
     get_session_context_value as _get_session_context_value,
     set_session_context_value as _set_session_context_value,
 )
-from bot.transcription_limits import CORRECTION_DURATION_LIMIT_MIN, SUMMARY_DURATION_LIMIT_MIN
+from bot.transcription_limits import SUMMARY_DURATION_LIMIT_MIN
 from bot.downloader_metadata import get_video_info
 from bot.downloader_subtitles import (
     download_subtitles,
@@ -31,7 +31,7 @@ from bot.downloader_validation import sanitize_filename
 from bot.services.transcription_service import (
     cleanup_transcription_artifacts,
     generate_summary_artifact,
-    MISSING_CLAUDE_KEY_TEXT,
+    MISSING_AI_KEY_TEXT,
     SUMMARY_FAILED_KEEP_TRANSCRIPT_TEXT,
     TRANSCRIPTION_FAILED_TEXT,
     load_transcript_result,
@@ -111,7 +111,7 @@ async def transcribe_audio_file(update: Update, context: ContextTypes.DEFAULT_TY
     file_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
 
     # Fail fast: check API keys before starting any transcription work.
-    missing_key_text = missing_transcription_key_message(get_runtime_value, summary=summary)
+    missing_key_text = missing_transcription_key_message(get_runtime_value)
     if missing_key_text:
         await update_status(missing_key_text)
         return
@@ -361,20 +361,14 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
         for lang in subs["auto"]:
             keyboard.append([InlineKeyboardButton(_lang_label(lang, "(auto)"), callback_data=f"sub_auto_{lang}{summary_suffix}")])
 
-    keyboard.append([InlineKeyboardButton("Transkrypcja AI (Whisper)", callback_data=f"sub_src_ai{summary_suffix}")])
+    keyboard.append([InlineKeyboardButton("Transkrypcja AI (Scribe)", callback_data=f"sub_src_ai{summary_suffix}")])
     keyboard.append([InlineKeyboardButton("Powrót", callback_data="back")])
 
     duration_warning = ""
     if duration_min > SUMMARY_DURATION_LIMIT_MIN:
         duration_warning = (
             f"\n\nUwaga: film trwa {duration_min:.0f} min — podsumowanie "
-            f"i korekta AI niedostępne (limit ~{SUMMARY_DURATION_LIMIT_MIN} min)."
-        )
-    elif duration_min > CORRECTION_DURATION_LIMIT_MIN:
-        duration_warning = (
-            f"\n\nUwaga: film trwa {duration_min:.0f} min — korekta AI "
-            f"transkrypcji niedostępna (limit ~{CORRECTION_DURATION_LIMIT_MIN} min). "
-            f"Podsumowanie działa normalnie."
+            f"AI niedostępne (limit ~{SUMMARY_DURATION_LIMIT_MIN} min)."
         )
 
     await safe_edit_message(
@@ -382,7 +376,7 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
         f"*{escape_md(title)}*\n\n"
         f"Film ma dostępne napisy! Wybierz źródło transkrypcji:\n\n"
         f"Napisy YouTube — natychmiastowo, 0 tokenów\n"
-        f"AI Whisper — kilka minut, zużywa tokeny"
+        f"Transkrypcja AI — kilka minut, płatna"
         f"{duration_warning}",
         reply_markup=InlineKeyboardMarkup(keyboard),
         parse_mode="Markdown",
@@ -502,9 +496,9 @@ async def handle_subtitle_download(
     async def update_status(text):
         await safe_edit_message(query, text)
 
-    if summary and not get_runtime_value("CLAUDE_API_KEY", ""):
+    if summary and not get_runtime_value("OPENROUTER_API_KEY", ""):
         # Fail fast: do not download subtitles for a summary that cannot be made.
-        await update_status(MISSING_CLAUDE_KEY_TEXT)
+        await update_status(MISSING_AI_KEY_TEXT)
         return
 
     sub_type = "automatycznych" if auto else "manualnych"

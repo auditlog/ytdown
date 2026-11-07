@@ -103,8 +103,8 @@ Required credentials depend on the operation:
 | `info` | Title, duration, canonical URL | None |
 | `audio` | MP3 at 192 kbps | None |
 | `video` | Video at the highest available source resolution by default | None |
-| `transcribe` | Markdown transcript | `GROQ_API_KEY` |
-| `summarize` | Transcript and Markdown summary | `GROQ_API_KEY`, `CLAUDE_API_KEY` |
+| `transcribe` | Markdown transcript | `OPENROUTER_API_KEY` |
+| `summarize` | Transcript and Markdown summary | `OPENROUTER_API_KEY` |
 
 Video accepts `quality`: `best` (default), `4320p`, `2160p`, `1440p`, `1080p`,
 `720p`, `480p`, or `360p`. `best` has no resolution ceiling: it selects the
@@ -124,9 +124,9 @@ Missing 7z, insufficient disk space, or exceeding the media limit produces a saf
 job error instead of advertising an incomplete output.
 The requested video quality is retained in the job record.
 
-Transcription skips
-Claude correction. Choose `transcribe` and let the calling assistant summarize
-the result to avoid an extra Anthropic API call. Provider subscriptions in the
+Transcription uses ElevenLabs Scribe v2 through OpenRouter and has no AI
+correction step. Choose `transcribe` and let the calling assistant summarize
+the result to avoid an extra paid Claude call. Provider subscriptions in the
 ChatGPT/Claude UI do not supply these server-side API credentials.
 
 YouTube cookies are disabled by default. `--use-youtube-cookies` explicitly
