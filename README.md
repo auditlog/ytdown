@@ -73,9 +73,10 @@ folders, retaining files only when handed to the pending archive workflow.
 - **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp), podcastów Spotify oraz utworów dopasowanych w YT Music
 - Video at the highest available source resolution, including 4K/8K, plus lower-quality presets
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
-- Automatyczna transkrypcja audio (Groq API - Whisper Large v3)
+- Automatyczna transkrypcja audio (ElevenLabs Scribe v2 przez OpenRouter), z rozróżnianiem mówców
+- **Rozpoznawanie rozmówców** — gdy w nagraniu słychać kilka osób, bot może je podpisać (Claude Sonnet 5.5), także na podstawie podanej listy uczestników
 - **Napisy YouTube jako źródło transkrypcji** — natychmiastowe pobieranie napisów (manualnych lub automatycznych) bez zużycia tokenów AI
-- Generowanie podsumowań transkrypcji (Claude API - Haiku 4.5)
+- Generowanie podsumowań transkrypcji (Claude Haiku 4.5 przez OpenRouter)
 - **Transkrypcja przesłanych plików audio** — wiadomości głosowe, pliki audio i dokumenty audio (np. notatki głosowe z WhatsApp)
 - **Transkrypcja przesłanych plików video** — ekstrakcja audio z MP4, MKV, AVI, MOV, WebM
 - Przycinanie audio według znaczników czasu (✂️), także kilku fragmentów naraz
@@ -223,8 +224,7 @@ Utwórz plik `api_key.md` w głównym katalogu:
 
 ```
 TELEGRAM_BOT_TOKEN=twój_token_bota
-GROQ_API_KEY=twój_klucz_groq
-CLAUDE_API_KEY=twój_klucz_claude
+OPENROUTER_API_KEY=twój_klucz_openrouter
 PIN_CODE=12345678
 ADMIN_CHAT_ID=twój_telegram_user_id
 SPOTIFY_CLIENT_ID=twój_spotify_client_id
@@ -244,8 +244,7 @@ ich nie używa — wymaga za to pliku `spotify_cookies.txt` (patrz [Cookies](#co
 **Linux/macOS/WSL:**
 ```bash
 export TELEGRAM_BOT_TOKEN="twój_token"
-export GROQ_API_KEY="twój_klucz"
-export CLAUDE_API_KEY="twój_klucz"
+export OPENROUTER_API_KEY="twój_klucz"
 export PIN_CODE="12345678"
 export ADMIN_CHAT_ID="twój_telegram_user_id"
 export SPOTIFY_CLIENT_ID="twój_spotify_client_id"
@@ -255,8 +254,7 @@ export SPOTIFY_CLIENT_SECRET="twój_spotify_client_secret"
 **Windows (PowerShell):**
 ```powershell
 $env:TELEGRAM_BOT_TOKEN="twój_token"
-$env:GROQ_API_KEY="twój_klucz"
-$env:CLAUDE_API_KEY="twój_klucz"
+$env:OPENROUTER_API_KEY="twój_klucz"
 $env:PIN_CODE="12345678"
 $env:ADMIN_CHAT_ID="twój_telegram_user_id"
 $env:SPOTIFY_CLIENT_ID="twój_spotify_client_id"
@@ -443,7 +441,7 @@ python -m pytest tests/test_subtitles.py -v
 4. Wyślij link z obsługiwanej platformy (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Spotify)
 5. Wybierz format i jakość
 6. Opcjonalnie: wybierz transkrypcję lub streszczenie
-   - Jeśli film ma napisy YouTube — możesz wybrać gotowe napisy (natychmiastowo, 0 tokenów) lub transkrypcję AI (minuty, tokeny Groq/Claude)
+   - Jeśli film ma napisy YouTube — możesz wybrać gotowe napisy (natychmiastowo, 0 tokenów) lub transkrypcję AI (minuty, płatne modele przez OpenRouter)
 
 ### Podcasty Spotify
 1. Wyślij link do odcinka podcastu ze Spotify (`open.spotify.com/episode/...`)
@@ -457,7 +455,7 @@ python -m pytest tests/test_subtitles.py -v
    `SPOTIFY_CLIENT_ID` i `SPOTIFY_CLIENT_SECRET`
 5. Transkrypcja: gdy odcinek ma napisy WebVTT, bot używa ich jako źródła transkrypcji —
    wynik jest natychmiast, bez kosztu API i bez limitu długości nagrania. Gdy napisów nie ma,
-   bot pobiera ścieżkę audio i przepuszcza ją przez Groq, tak jak dotąd
+   bot pobiera ścieżkę audio i przepuszcza ją przez Scribe, tak jak dotąd
 6. Odcinki oznaczone jako chronione DRM są odrzucane — bot nie obchodzi zabezpieczeń
 
 **Wysyłka plików wideo wymaga skonfigurowanego MTProto.** Każda jakość wideo przekracza limit
@@ -554,7 +552,8 @@ ytdown/
 │   ├── transcription.py            # Fasada kompatybilności — deleguje do wyspecjalizowanych transcription_*
 │   ├── transcription_limits.py     # Stałe limitów, heurystyki tokenów, progi czasowe
 │   ├── transcription_chunking.py   # Dzielenie MP3 na części (silence detection, split)
-│   ├── transcription_providers.py  # Adaptery API: Groq Whisper i Claude (transkrypcja, korekta, podsumowania)
+│   ├── transcription_providers.py  # Adaptery OpenRouter: Scribe v2 (transkrypcja) i Claude (podsumowania)
+│   ├── speakers.py                 # Dane o mówcach przy transkrypcji i ich nazywanie przez Claude Sonnet
 │   ├── transcription_pipeline.py   # Orkiestracja pipeline'u transkrypcji MP3
 │   ├── mcp/                         # MCP tools, jobs, private HTTP/stdio and SSH bridge
 │   ├── download_budget.py           # Runtime download size and free-space checks
@@ -640,7 +639,8 @@ ytdown/
 │   ├── test_security_pin_module.py # Testy blokowania PIN
 │   ├── test_security_throttling.py # Testy rate limitingu
 │   ├── test_security_authorization.py # Testy manage_authorized_user + thread safety
-│   ├── test_transcription_providers.py # Testy adapterów Groq/Claude (retry, extraction)
+│   ├── test_transcription_providers.py # Testy adapterów OpenRouter (retry, extraction)
+│   ├── test_speakers.py            # Testy danych o mówcach i ich nazywania
 │   ├── test_transcription_pipeline.py  # Testy orkiestracji pipeline transkrypcji
 │   ├── test_transcription_chunking.py  # Testy split_mp3, find_silence_points, get_part_number
 │   ├── test_downloader_media.py    # Testy is_photo_entry, download_photo, thumbnails, Instagram
@@ -670,9 +670,8 @@ ytdown/
 - Max 20MB dla pojedynczej części transkrypcji (większe pliki są dzielone automatycznie)
 - Max 20MB dla przesyłanych plików audio/video (limit Telegram Bot API dla pobierania plików przez bota)
 - Telegram Bot API uploads use a 50 MiB application threshold; MTProto and multipart 7z handle larger downloads. Text messages remain limited to 4096 characters.
-- Korekta AI transkrypcji: do ~4.5h materiału audio (powyżej automatycznie pomijana)
 - Podsumowanie AI: do ~14h materiału audio (powyżej automatycznie pomijane)
-- Telegram Whisper/subtitle transcription has no fixed duration cap; MCP processing accepts known durations up to two hours by default.
+- Telegram Scribe/subtitle transcription has no fixed duration cap; MCP processing accepts known durations up to two hours by default.
 - Instagram, LinkedIn, TikTok mogą wymagać cookies.txt do pobierania
 - Instagram zdjęcia/karuzele wymagają instaloader z ważną sesją w cookies.txt
 - YouTube wymaga deno jako JS runtime — bez niego część filmów zwróci "This video is not available"
@@ -690,7 +689,7 @@ ytdown/
 - YouTube wymaga JS runtime do rozwiązywania challenges — bez deno część filmów nie zadziała
 
 **Błąd transkrypcji:**
-- Sprawdź klucz API Groq
+- Sprawdź klucz `OPENROUTER_API_KEY` i saldo konta OpenRouter
 - Sprawdź rozmiar pliku audio
 
 **File too large:**
@@ -721,8 +720,9 @@ Ten projekt jest dostępny na licencji MIT.
 - [yt-dlp](https://github.com/yt-dlp/yt-dlp) - pobieranie mediów z platform (YouTube, Vimeo, TikTok, Instagram, LinkedIn)
 - [instaloader](https://github.com/instaloader/instaloader) - pobieranie zdjęć i karuzel z Instagrama
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - API Telegram
-- [Groq](https://groq.com/) - transkrypcja audio (Whisper)
-- [Anthropic Claude](https://www.anthropic.com/) - generowanie podsumowań (Haiku 4.5)
+- [OpenRouter](https://openrouter.ai/) - dostęp do wszystkich modeli AI jednym kluczem
+- [ElevenLabs Scribe](https://elevenlabs.io/) - transkrypcja audio z rozróżnianiem mówców
+- [Anthropic Claude](https://www.anthropic.com/) - podsumowania (Haiku 4.5) i rozpoznawanie rozmówców (Sonnet 5.5)
 
 ## Language Policy
 

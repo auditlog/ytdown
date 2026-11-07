@@ -350,7 +350,7 @@ def transcript_from_subtitles(
     Returns the markdown path, or None when the episode ships no subtitles
     at all, or Spotify fails to serve the one it advertised -- callers then
     fall back to downloading the native audio track and running it through
-    Groq. Using subtitles when they exist skips that download entirely:
+    Scribe. Using subtitles when they exist skips that download entirely:
     instant, free, and not bound by audio length limits.
     """
 

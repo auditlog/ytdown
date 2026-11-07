@@ -1,4 +1,4 @@
-"""Follow-up custom-prompt actions for completed transcripts."""
+"""Follow-up actions for completed transcripts: custom prompts and speaker naming."""
 
 from __future__ import annotations
 
@@ -16,8 +16,9 @@ from bot.handlers.common_ui import escape_md, safe_edit_message, send_long_messa
 from bot.runtime import get_config_value_for, record_download_for
 from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.transcription_service import (
-    MISSING_CLAUDE_KEY_ADMIN_TEXT,
+    MISSING_AI_KEY_ADMIN_TEXT,
     generate_custom_analysis_artifact,
+    generate_speaker_labels_artifact,
     load_transcript_result,
 )
 from bot.session_context import (
@@ -26,13 +27,20 @@ from bot.session_context import (
     set_session_context_value,
 )
 from bot.session_store import PendingTranscriptPrompt, TranscriptContext
+from bot.speakers import has_multiple_speakers, load_speaker_parts, speaker_input_too_long
 from bot.transcription_limits import (
     CUSTOM_PROMPT_MAX_CHARS,
+    SPEAKER_HINTS_MAX_CHARS,
     is_custom_analysis_input_too_long,
 )
 
+# PendingTranscriptPrompt.kind of a chat waiting for meeting participants.
+SPEAKER_HINTS_KIND = "speakers"
+
 TRANSCRIPT_CONTEXT_TTL = timedelta(hours=24)
-MAX_TRANSCRIPT_CONTEXTS = 3
+# Each speaker naming registers its labelled file too, so a few rounds must
+# not push the original transcript (and its retry buttons) out.
+MAX_TRANSCRIPT_CONTEXTS = 6
 
 _CONTEXTS_FIELD = "transcript_contexts"
 _CONTEXTS_LEGACY_KEY = "transcript_contexts"
@@ -138,11 +146,21 @@ def register_transcript_context(
     return token
 
 
-def _prompt_keyboard(token: str, *, repeat: bool = False) -> InlineKeyboardMarkup:
+def _transcript_has_speakers(transcript_path: str) -> bool:
+    """True when Scribe heard at least two voices in this transcript."""
+
+    return has_multiple_speakers(load_speaker_parts(transcript_path))
+
+
+def _prompt_keyboard(token: str, *, repeat: bool = False, speakers: bool = False) -> InlineKeyboardMarkup:
     label = "✍️ Zadaj kolejne polecenie" if repeat else "✍️ Własne polecenie"
-    return InlineKeyboardMarkup(
-        [[InlineKeyboardButton(label, callback_data=f"tr_prompt_{token}")]]
-    )
+    rows = [[InlineKeyboardButton(label, callback_data=f"tr_prompt_{token}")]]
+    if speakers:
+        rows.append([
+            InlineKeyboardButton("🗣 Rozpoznaj rozmówców", callback_data=f"tr_spk_auto_{token}"),
+            InlineKeyboardButton("👥 Podaj uczestników", callback_data=f"tr_spk_hint_{token}"),
+        ])
+    return InlineKeyboardMarkup(rows)
 
 
 async def offer_custom_transcript_prompt(
@@ -165,11 +183,18 @@ async def offer_custom_transcript_prompt(
     if token is None:
         return None
 
+    speakers = _transcript_has_speakers(transcript_path)
+    text = "Możesz teraz wykonać własne polecenie na tej transkrypcji."
+    if speakers:
+        text += (
+            "\n\nW nagraniu słychać kilka osób. Mogę spróbować je rozpoznać i podpisać, "
+            "także na podstawie listy uczestników, którą podasz."
+        )
     try:
         await context.bot.send_message(
             chat_id=chat_id,
-            text="Możesz teraz wykonać własne polecenie na tej transkrypcji.",
-            reply_markup=_prompt_keyboard(token),
+            text=text,
+            reply_markup=_prompt_keyboard(token, speakers=speakers),
         )
     except Exception as exc:
         logging.warning("Could not send custom transcript prompt button: %s", exc)
@@ -281,7 +306,7 @@ async def handle_pending_transcript_prompt(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
 ) -> bool:
-    """Consume a pending custom instruction before normal URL/text handling."""
+    """Consume pending text (instruction or participants) before normal URL/text handling."""
 
     chat_id = update.effective_chat.id
     requester_id = update.effective_user.id
@@ -289,14 +314,23 @@ async def handle_pending_transcript_prompt(
     if pending is None or pending.requester_id != requester_id:
         return False
 
+    wants_speakers = pending.kind == SPEAKER_HINTS_KIND
     prompt = (update.message.text or "").strip()
     if not prompt:
-        await update.message.reply_text("Polecenie nie może być puste. Spróbuj ponownie.")
-        return True
-    if len(prompt) > CUSTOM_PROMPT_MAX_CHARS:
         await update.message.reply_text(
-            f"Polecenie jest za długie ({len(prompt)} znaków). "
-            f"Maksymalna długość to {CUSTOM_PROMPT_MAX_CHARS} znaków."
+            "Lista uczestników nie może być pusta. Spróbuj ponownie."
+            if wants_speakers
+            else "Polecenie nie może być puste. Spróbuj ponownie."
+        )
+        return True
+    max_chars = SPEAKER_HINTS_MAX_CHARS if wants_speakers else CUSTOM_PROMPT_MAX_CHARS
+    if len(prompt) > max_chars:
+        await update.message.reply_text(
+            f"Lista uczestników jest za długa ({len(prompt)} znaków). "
+            f"Maksymalna długość to {max_chars} znaków."
+            if wants_speakers
+            else f"Polecenie jest za długie ({len(prompt)} znaków). "
+            f"Maksymalna długość to {max_chars} znaków."
         )
         return True
     if not check_rate_limit(requester_id):
@@ -311,9 +345,36 @@ async def handle_pending_transcript_prompt(
         )
         return True
 
-    claude_api_key = get_config_value_for(context, "CLAUDE_API_KEY", "")
-    if not claude_api_key:
-        await update.message.reply_text(MISSING_CLAUDE_KEY_ADMIN_TEXT)
+    api_key = get_config_value_for(context, "OPENROUTER_API_KEY", "")
+    if not api_key:
+        await update.message.reply_text(MISSING_AI_KEY_ADMIN_TEXT)
+        return True
+
+    if wants_speakers:
+        status_message = await update.message.reply_text(
+            "Rozpoznaję rozmówców na podstawie Twojej listy...\n"
+            "To może potrwać do minuty."
+        )
+
+        async def edit_status(text, reply_markup):
+            await status_message.edit_text(text, reply_markup=reply_markup)
+
+        job = _run_speaker_labels(
+            context,
+            chat_id=chat_id,
+            requester_id=requester_id,
+            token=pending.transcript_token,
+            transcript_context=transcript_context,
+            hints=prompt,
+            api_key=api_key,
+            edit_status=edit_status,
+        )
+        await _schedule_job(
+            context, update, job,
+            status_message=status_message,
+            failure_text="Nie udało się uruchomić rozpoznawania rozmówców. Spróbuj ponownie.",
+            failure_markup=_prompt_keyboard(pending.transcript_token, speakers=True),
+        )
         return True
 
     try:
@@ -336,7 +397,11 @@ async def handle_pending_transcript_prompt(
         "Analizuję transkrypcję według Twojego polecenia...\n"
         "To może potrwać około minuty."
     )
-    repeat_markup = _prompt_keyboard(pending.transcript_token, repeat=True)
+    repeat_markup = _prompt_keyboard(
+        pending.transcript_token,
+        repeat=True,
+        speakers=_transcript_has_speakers(transcript_context.transcript_path),
+    )
     job = _run_custom_analysis(
         context,
         chat_id=chat_id,
@@ -344,25 +409,33 @@ async def handle_pending_transcript_prompt(
         prompt=prompt,
         transcript_context=transcript_context,
         transcript_text=transcript_text,
-        claude_api_key=claude_api_key,
+        api_key=api_key,
         status_message=status_message,
         repeat_markup=repeat_markup,
     )
+    await _schedule_job(
+        context, update, job,
+        status_message=status_message,
+        failure_text="Nie udało się uruchomić analizy. Spróbuj ponownie.",
+        failure_markup=repeat_markup,
+    )
+    return True
+
+
+async def _schedule_job(context, update, job, *, status_message, failure_text, failure_markup) -> None:
+    """Run a model job as a PTB task; report on the status message if that fails."""
+
     try:
-        # Non-blocking, like the trim job: the Claude call can take a minute and
+        # Non-blocking, like the trim job: the model call can take a minute and
         # must not hold up /stop or other chats. See bot/handlers/trim_callbacks.py.
         context.application.create_task(job, update=update)
     except Exception as exc:
-        logging.error("Could not schedule custom transcript analysis: %s", exc)
+        logging.error("Could not schedule transcript follow-up job: %s", exc)
         job.close()  # never started; closing avoids a "never awaited" warning
         try:
-            await status_message.edit_text(
-                "Nie udało się uruchomić analizy. Spróbuj ponownie.",
-                reply_markup=repeat_markup,
-            )
+            await status_message.edit_text(failure_text, reply_markup=failure_markup)
         except Exception as edit_exc:
-            logging.warning("Custom analysis status update failed: %s", edit_exc)
-    return True
+            logging.warning("Follow-up job status update failed: %s", edit_exc)
 
 
 async def _run_custom_analysis(
@@ -373,7 +446,7 @@ async def _run_custom_analysis(
     prompt: str,
     transcript_context: TranscriptContext,
     transcript_text: str,
-    claude_api_key: str,
+    api_key: str,
     status_message,
     repeat_markup: InlineKeyboardMarkup,
 ) -> None:
@@ -388,7 +461,7 @@ async def _run_custom_analysis(
             output_dir=os.path.dirname(transcript_context.transcript_path) or ".",
             executor=_executor,
             artifact_id=secrets.token_hex(4),
-            api_key=claude_api_key,
+            api_key=api_key,
         )
         if result is None:
             await status_message.edit_text(
@@ -430,3 +503,184 @@ async def _run_custom_analysis(
             "Wystąpił błąd podczas wykonywania polecenia. Spróbuj ponownie.",
             reply_markup=repeat_markup,
         )
+
+
+async def handle_speaker_callback(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE,
+    data: str,
+) -> None:
+    """Name speakers now (tr_spk_auto_), ask for participants (tr_spk_hint_) or cancel that."""
+
+    query = update.callback_query
+    chat_id = update.effective_chat.id
+    requester_id = update.effective_user.id
+
+    if data.startswith("tr_spk_cancel_"):
+        token = data.removeprefix("tr_spk_cancel_")
+        pending = _get_pending_prompt(context, chat_id)
+        if (
+            pending is not None
+            and pending.kind == SPEAKER_HINTS_KIND
+            and pending.transcript_token == token
+            and pending.requester_id == requester_id
+        ):
+            _clear_pending_prompt(context, chat_id)
+            await safe_edit_message(
+                query,
+                "Anulowano podawanie uczestników.",
+                reply_markup=_prompt_keyboard(token, speakers=True),
+            )
+            return
+        await safe_edit_message(query, "Ta prośba nie jest już aktywna.")
+        return
+
+    if data.startswith("tr_spk_hint_"):
+        token, ask_for_hints = data.removeprefix("tr_spk_hint_"), True
+    elif data.startswith("tr_spk_auto_"):
+        token, ask_for_hints = data.removeprefix("tr_spk_auto_"), False
+    else:
+        await safe_edit_message(query, "Nieobsługiwana opcja.")
+        return
+
+    transcript_context = _find_context(context, chat_id, token)
+    if transcript_context is None:
+        await safe_edit_message(query, "Kontekst transkrypcji wygasł albo plik został już usunięty.")
+        return
+    if transcript_context.requester_id != requester_id:
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text="Tylko osoba, która utworzyła tę transkrypcję, może użyć tego przycisku.",
+        )
+        return
+
+    if ask_for_hints:
+        # Only one text input may be pending per chat; see bot/handlers/trim_callbacks.py.
+        clear_session_context_value(context, chat_id, "pending_trim", legacy_key="pending_trim")
+        set_session_context_value(
+            context,
+            chat_id,
+            _PENDING_FIELD,
+            PendingTranscriptPrompt(transcript_token=token, requester_id=requester_id, kind=SPEAKER_HINTS_KIND),
+            legacy_key=_PENDING_LEGACY_KEY,
+        )
+        await safe_edit_message(
+            query,
+            "Napisz, kto bierze udział w nagraniu: imiona i najlepiej role.\n\n"
+            "Przykład: „Karolina – gość, Anna – prowadząca”.\n\n"
+            "Dopasuję osoby tylko tam, gdzie wynika to z rozmowy, a resztę opiszę neutralnie.\n\n"
+            f"Maksymalna długość: {SPEAKER_HINTS_MAX_CHARS} znaków.",
+            reply_markup=InlineKeyboardMarkup(
+                [[InlineKeyboardButton("Anuluj", callback_data=f"tr_spk_cancel_{token}")]]
+            ),
+        )
+        return
+
+    api_key = get_config_value_for(context, "OPENROUTER_API_KEY", "")
+    if not api_key:
+        await safe_edit_message(query, MISSING_AI_KEY_ADMIN_TEXT)
+        return
+
+    # A participant list still awaited from another button would otherwise
+    # swallow the user's next message (e.g. a link).
+    pending = _get_pending_prompt(context, chat_id)
+    if pending is not None and pending.kind == SPEAKER_HINTS_KIND and pending.requester_id == requester_id:
+        _clear_pending_prompt(context, chat_id)
+
+    await safe_edit_message(query, "Rozpoznaję rozmówców...\nTo może potrwać do minuty.")
+
+    async def edit_status(text, reply_markup):
+        await safe_edit_message(query, text, reply_markup=reply_markup)
+
+    # Awaited here: tr_spk_auto_ is a work callback, so the per-chat busy guard
+    # and rate limit in bot/telegram_callbacks.py already cover it.
+    await _run_speaker_labels(
+        context,
+        chat_id=chat_id,
+        requester_id=requester_id,
+        token=token,
+        transcript_context=transcript_context,
+        hints="",
+        api_key=api_key,
+        edit_status=edit_status,
+    )
+
+
+async def _run_speaker_labels(
+    context: ContextTypes.DEFAULT_TYPE,
+    *,
+    chat_id: int,
+    requester_id: int,
+    token: str,
+    transcript_context: TranscriptContext,
+    hints: str,
+    api_key: str,
+    edit_status,
+) -> None:
+    """Name speakers with Sonnet, send the result and offer prompts on the labelled file."""
+
+    retry_markup = _prompt_keyboard(token, speakers=True)
+    try:
+        parts = load_speaker_parts(transcript_context.transcript_path)
+        if not has_multiple_speakers(parts):
+            await edit_status("Brak danych o rozmówcach dla tej transkrypcji.", None)
+            return
+        if speaker_input_too_long(parts):
+            await edit_status("Transkrypcja jest zbyt długa, żeby rozpoznać rozmówców.", retry_markup)
+            return
+
+        result = await generate_speaker_labels_artifact(
+            transcript_path=transcript_context.transcript_path,
+            title=transcript_context.title,
+            sanitized_title=sanitize_filename(transcript_context.title),
+            hints=hints,
+            output_dir=os.path.dirname(transcript_context.transcript_path) or ".",
+            executor=_executor,
+            api_key=api_key,
+            artifact_id=secrets.token_hex(4),
+        )
+        if result is None:
+            await edit_status("Nie udało się rozpoznać rozmówców. Spróbuj ponownie.", retry_markup)
+            return
+
+        # Plain text: names and evidence come from the model and may contain Markdown characters.
+        await send_long_message(
+            context.bot,
+            chat_id,
+            result.summary_text,
+            header=f"Rozmówcy: {transcript_context.title}\n\n",
+            parse_mode=None,
+        )
+        with open(result.labeled_path, "rb") as file_obj:
+            await context.bot.send_document(
+                chat_id=chat_id,
+                document=file_obj,
+                filename=os.path.basename(result.labeled_path),
+                caption=f"Transkrypcja z rozmówcami: {transcript_context.title}"[:200],
+                read_timeout=60,
+                write_timeout=60,
+            )
+        record_download_for(
+            context,
+            requester_id,
+            transcript_context.title,
+            "",
+            "transcription_speakers",
+        )
+        await edit_status(
+            "Rozmówcy zostali podpisani. Jeśli coś się nie zgadza, podaj uczestników i spróbuj ponownie.",
+            retry_markup,
+        )
+        await offer_custom_transcript_prompt(
+            context,
+            chat_id=chat_id,
+            requester_id=requester_id,
+            transcript_path=result.labeled_path,
+            title=f"{transcript_context.title} (z rozmówcami)",
+        )
+    except Exception as exc:
+        logging.exception("Speaker naming delivery failed: %s", exc)
+        try:
+            await edit_status("Wystąpił błąd podczas rozpoznawania rozmówców. Spróbuj ponownie.", retry_markup)
+        except Exception as edit_exc:
+            logging.warning("Speaker naming status update failed: %s", edit_exc)

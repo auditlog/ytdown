@@ -781,7 +781,7 @@ def test_download_error_without_stop_still_records_failure(tmp_path, monkeypatch
     assert dc.record_download_for.call_args.kwargs["status"] == "failure"
 
 
-def test_missing_groq_key_message_has_no_stop_button(tmp_path, monkeypatch):
+def test_missing_api_key_message_has_no_stop_button(tmp_path, monkeypatch):
     dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
     monkeypatch.setattr(dc, "get_runtime_value", lambda key, default="": "")
     update, context = _make_update("dl_audio_mp3"), _make_context()
@@ -819,9 +819,9 @@ def _fake_keys(**values):
     return lambda key, default="": values.get(key, default)
 
 
-def test_link_transcription_checks_groq_key_before_downloading(tmp_path, monkeypatch):
+def test_link_transcription_checks_api_key_before_downloading(tmp_path, monkeypatch):
     dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
-    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys())
     prepare = mock.Mock()
     monkeypatch.setattr(dc, "prepare_download_plan", prepare)
     download = mock.AsyncMock()
@@ -841,30 +841,9 @@ def test_link_transcription_checks_groq_key_before_downloading(tmp_path, monkeyp
     assert _markup_of(last) is None
 
 
-def test_link_summary_checks_claude_key_before_downloading(tmp_path, monkeypatch):
-    dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
-    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g"))
-    download = mock.AsyncMock()
-    monkeypatch.setattr(dc, "execute_download", download)
-    update, context = _make_update("dl_audio_mp3"), _make_context()
-
-    asyncio.run(dc.download_file(
-        update, context, "audio", "mp3", "https://youtube.com/",
-        transcribe=True, summary=True, summary_type=1,
-    ))
-
-    download.assert_not_awaited()
-    last = update.callback_query.edit_message_text.await_args
-    assert last.args[0] == (
-        "Podsumowanie jest niedostępne — brak klucza API Claude. "
-        "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
-    )
-    assert _markup_of(last) is None
-
-
 def test_link_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
     dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
-    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(OPENROUTER_API_KEY="k"))
     transcript = tmp_path / "Song_transcript.md"
     transcript.write_text("# Song\n\nTekst.\n", encoding="utf-8")
     monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=str(transcript)))
@@ -890,7 +869,7 @@ def test_link_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
 
 def test_link_summary_exception_still_sends_transcript(tmp_path, monkeypatch):
     dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
-    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(OPENROUTER_API_KEY="k"))
     transcript = tmp_path / "Song_transcript.md"
     transcript.write_text("# Song\n\nTekst.\n", encoding="utf-8")
     monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=str(transcript)))
@@ -969,7 +948,7 @@ def _patch_summary_flow(monkeypatch, tmp_path, summary_fn):
     dc, _plan = _patch_single_download(monkeypatch, tmp_path, filename="song.mp3")
     registry = JobRegistry()
     monkeypatch.setattr(dc, "job_registry", registry)
-    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(dc, "get_runtime_value", _fake_keys(OPENROUTER_API_KEY="k"))
     transcript = tmp_path / "Song_transcript.md"
     transcript.write_text("# Song\n\nTekst.\n", encoding="utf-8")
     monkeypatch.setattr(dc, "run_transcription_with_progress", mock.AsyncMock(return_value=str(transcript)))

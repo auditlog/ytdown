@@ -22,6 +22,7 @@ WORK_CALLBACKS = [
     "arc_split_tok", "arc_resend_tok_0", "arc_pack_partial_tok",
     "spc_pack_mp3_50", "spc_pack_mp3_100", "spc_pack_mp3_all",
     "spc_pack_m4a_50", "spc_pack_m4a_100", "spc_pack_m4a_all",
+    "tr_spk_auto_tok",
 ]
 NAVIGATION_CALLBACKS = [
     "spc_t_3", "spc_p_0", "spc_p_2", "spc_all", "spc_clear", "spc_pack_back",
@@ -30,7 +31,8 @@ NAVIGATION_CALLBACKS = [
     "time_range_preset_first_5", "time_range_preset_last_10", "formats",
     "stop_all", "stop_dismiss", "stop_refresh", "stop_abc123",
     "trim_cancel", "trim_upload", "trim_src_tok", "tr_prompt_tok",
-    "tr_prompt_cancel_tok", "arc_cancel_tok", "arc_purge_tok",
+    "tr_prompt_cancel_tok", "tr_spk_hint_tok", "tr_spk_cancel_tok",
+    "arc_cancel_tok", "arc_purge_tok",
     "arc_purge_partial_tok", "noop",
     # Malformed pack choices are not work.
     "spc_pack_flac_50", "spc_pack_mp3_7",

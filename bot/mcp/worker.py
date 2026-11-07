@@ -60,12 +60,10 @@ def execute(request: dict, directory: Path) -> dict:
         return result
     if duration <= 0 or duration > request["max_duration_seconds"]:
         raise UserError("Film przekracza limit długości lub nie ma znanego czasu trwania.")
-    groq_key = os.environ.get("GROQ_API_KEY") or get_runtime_value("GROQ_API_KEY", "")
-    claude_key = os.environ.get("CLAUDE_API_KEY") or get_runtime_value("CLAUDE_API_KEY", "")
-    if operation in {"transcribe", "summarize"} and not groq_key:
-        raise UserError("Brak GROQ_API_KEY w konfiguracji serwera MCP.")
-    if operation == "summarize" and not claude_key:
-        raise UserError("Brak CLAUDE_API_KEY w konfiguracji serwera MCP.")
+    # Transcription and summaries share one OpenRouter key.
+    api_key = os.environ.get("OPENROUTER_API_KEY") or get_runtime_value("OPENROUTER_API_KEY", "")
+    if operation in {"transcribe", "summarize"} and not api_key:
+        raise UserError("Brak OPENROUTER_API_KEY w konfiguracji serwera MCP.")
 
     media_type = "video" if operation == "video" else "audio"
     plan = prepare_download_plan(
@@ -114,18 +112,16 @@ def execute(request: dict, directory: Path) -> dict:
         return paths
 
     def transcribe_checked(*args, **kwargs):
-        text = transcribe_audio(*args, **kwargs)
-        if not text:
+        part = transcribe_audio(*args, **kwargs)
+        if not part:
             raise UserError("Nie udało się uzyskać kompletnej transkrypcji.")
-        return text
+        return part
 
     transcript = transcribe_mp3_file(
         str(media),
         str(directory),
         language=request.get("language"),
-        get_api_key_fn=lambda: groq_key,
-        # The caller can summarize the returned transcript without a second model bill.
-        get_claude_api_key_fn=lambda: "",
+        get_api_key_fn=lambda: api_key,
         split_mp3_fn=split_checked,
         transcribe_audio_fn=transcribe_checked,
     )
@@ -137,7 +133,7 @@ def execute(request: dict, directory: Path) -> dict:
         text = transcript_path.read_text(encoding="utf-8")
         if is_text_too_long_for_summary(text):
             raise UserError("Transkrypcja przekracza limit podsumowania.")
-        summary = generate_summary(text, request["summary_type"], api_key=claude_key)
+        summary = generate_summary(text, request["summary_type"], api_key=api_key)
         if not summary:
             raise UserError("Nie udało się wygenerować podsumowania.")
         (directory / "summary.md").write_text(summary, encoding="utf-8")

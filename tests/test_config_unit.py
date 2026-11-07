@@ -13,9 +13,8 @@ def test_load_config_uses_environment_over_file(tmp_path):
         cfg,
         """
         TELEGRAM_BOT_TOKEN=file_token
-        GROQ_API_KEY=file_groq
+        OPENROUTER_API_KEY=file_openrouter
         PIN_CODE=87654321
-        CLAUDE_API_KEY=file_claude
         """.strip(),
     )
 
@@ -23,9 +22,8 @@ def test_load_config_uses_environment_over_file(tmp_path):
         str(cfg),
         env={
             "TELEGRAM_BOT_TOKEN": "env_token",
-            "GROQ_API_KEY": "env_groq",
+            "OPENROUTER_API_KEY": "env_openrouter",
             "PIN_CODE": "12341234",
-            "CLAUDE_API_KEY": "env_claude",
             "SPOTIFY_CLIENT_ID": "spotify_client",
             "SPOTIFY_CLIENT_SECRET": "spotify_secret",
             "SPOTIFY_COOKIES_FILE": "browser_cookies.txt",
@@ -36,9 +34,8 @@ def test_load_config_uses_environment_over_file(tmp_path):
     )
 
     assert loaded["TELEGRAM_BOT_TOKEN"] == "env_token"
-    assert loaded["GROQ_API_KEY"] == "env_groq"
+    assert loaded["OPENROUTER_API_KEY"] == "env_openrouter"
     assert loaded["PIN_CODE"] == "12341234"
-    assert loaded["CLAUDE_API_KEY"] == "env_claude"
     assert loaded["SPOTIFY_CLIENT_ID"] == "spotify_client"
     assert loaded["SPOTIFY_CLIENT_SECRET"] == "spotify_secret"
     assert loaded["SPOTIFY_COOKIES_FILE"] == "browser_cookies.txt"
@@ -55,7 +52,7 @@ def test_load_config_ignores_invalid_config_lines(tmp_path):
         TELEGRAM_BOT_TOKEN=file_token
         invalid-line
         PIN_CODE=11112222
-        CLAUDE_API_KEY=sk-live-abc
+        OPENROUTER_API_KEY=sk-or-live-abc
         """.strip(),
     )
 
@@ -63,8 +60,9 @@ def test_load_config_ignores_invalid_config_lines(tmp_path):
 
     assert loaded["TELEGRAM_BOT_TOKEN"] == "file_token"
     assert loaded["PIN_CODE"] == "11112222"
-    assert loaded["CLAUDE_API_KEY"] == "sk-live-abc"
-    assert loaded["GROQ_API_KEY"] == config.DEFAULT_CONFIG["GROQ_API_KEY"]
+    assert loaded["OPENROUTER_API_KEY"] == "sk-or-live-abc"
+    assert "GROQ_API_KEY" not in loaded
+    assert "CLAUDE_API_KEY" not in loaded
 
 
 def test_load_config_defaults_when_missing_file():
@@ -76,7 +74,7 @@ def test_load_config_defaults_when_missing_file():
 
     assert loaded["TELEGRAM_BOT_TOKEN"] == config.DEFAULT_CONFIG["TELEGRAM_BOT_TOKEN"]
     assert loaded["PIN_CODE"] == config.DEFAULT_CONFIG["PIN_CODE"]
-    assert loaded["GROQ_API_KEY"] == config.DEFAULT_CONFIG["GROQ_API_KEY"]
+    assert loaded["OPENROUTER_API_KEY"] == config.DEFAULT_CONFIG["OPENROUTER_API_KEY"]
 
 
 def test_load_config_optional_download_dir_creation(tmp_path, monkeypatch):
@@ -224,3 +222,12 @@ def test_save_authorized_users_refreshes_runtime_cache_in_place(tmp_path, monkey
     finally:
         original_users.clear()
         original_users.update(original_snapshot)
+
+
+def test_validate_config_warns_about_a_key_that_is_not_from_openrouter(monkeypatch):
+    warnings = []
+    monkeypatch.setattr(config.logging, "warning", lambda message, *args: warnings.append(message % args if args else message))
+
+    config.validate_config({"PIN_CODE": "13572468", "TELEGRAM_BOT_TOKEN": "", "OPENROUTER_API_KEY": "gsk_groq", "ADMIN_CHAT_ID": ""})
+
+    assert any("OPENROUTER_API_KEY" in message for message in warnings)

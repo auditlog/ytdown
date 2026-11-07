@@ -199,7 +199,7 @@ class TestPinValidation:
         from bot.config import validate_config
 
         with patch.object(logging, 'error') as mock_log:
-            validate_config({'PIN_CODE': 'abc123', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''})
+            validate_config({'PIN_CODE': 'abc123', 'TELEGRAM_BOT_TOKEN': '', 'OPENROUTER_API_KEY': '', 'ADMIN_CHAT_ID': ''})
             # Check that no log call contains the PIN value
             for call in mock_log.call_args_list:
                 log_msg = str(call)
@@ -211,7 +211,7 @@ class TestPinValidation:
         from bot.config import validate_config
 
         with patch.object(logging, 'error') as mock_log:
-            validate_config({'PIN_CODE': '1234', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''})
+            validate_config({'PIN_CODE': '1234', 'TELEGRAM_BOT_TOKEN': '', 'OPENROUTER_API_KEY': '', 'ADMIN_CHAT_ID': ''})
             error_msgs = [str(call) for call in mock_log.call_args_list]
             assert any('format invalid' in msg for msg in error_msgs)
 
@@ -221,7 +221,7 @@ class TestPinValidation:
         from bot.config import validate_config
 
         with patch.object(logging, 'error') as mock_error:
-            validate_config({'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''})
+            validate_config({'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'OPENROUTER_API_KEY': '', 'ADMIN_CHAT_ID': ''})
             error_msgs = [str(call) for call in mock_error.call_args_list]
             assert any('default' in msg.lower() or 'SECURITY' in msg for msg in error_msgs), \
                 "Default PIN should trigger error-level security log"
@@ -241,7 +241,7 @@ class TestConfigFilePermissions:
              patch('bot.config.os.chmod') as mock_chmod:
             mock_stat.return_value = Mock()
             mock_stat.return_value.st_mode = 0o100644  # 644 permissions
-            validate_config({'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''})
+            validate_config({'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'OPENROUTER_API_KEY': '', 'ADMIN_CHAT_ID': ''})
             mock_chmod.assert_called_once()
 
     def test_validate_config_uses_provided_config_path(self):
@@ -255,7 +255,7 @@ class TestConfigFilePermissions:
             mock_stat.return_value.st_mode = 0o100644
 
             validate_config(
-                {'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'GROQ_API_KEY': '', 'CLAUDE_API_KEY': '', 'ADMIN_CHAT_ID': ''},
+                {'PIN_CODE': '12345678', 'TELEGRAM_BOT_TOKEN': '', 'OPENROUTER_API_KEY': '', 'ADMIN_CHAT_ID': ''},
                 config_file_path='/tmp/custom_api_key.md',
             )
 
@@ -343,21 +343,20 @@ class TestExceptionMessageHiding:
 class TestApiLogTruncation:
     """Tests verifying API response logs are truncated."""
 
-    def test_groq_error_log_truncated(self):
-        """Verify Groq API error response is truncated in logs."""
+    def test_transcription_error_log_truncated(self):
+        """Verify transcription API error response is truncated in logs."""
         import inspect
         from bot.transcription import transcribe_audio
         source = inspect.getsource(transcribe_audio)
         assert 'response.text[:500]' in source
 
-    def test_claude_error_log_truncated(self):
-        """Verify Claude API error response is truncated in logs."""
+    def test_summary_error_log_truncated(self):
+        """Verify summary API error response is truncated in logs."""
         import inspect
-        from bot.transcription import generate_summary, post_process_transcript
-        summary_source = inspect.getsource(generate_summary)
-        postprocess_source = inspect.getsource(post_process_transcript)
-        assert 'response.text[:500]' in summary_source
-        assert 'response.text[:500]' in postprocess_source
+        from bot.transcription import generate_summary
+        from bot.transcription_providers import _post_with_retries
+        assert 'response.text[:500]' in inspect.getsource(generate_summary)
+        assert 'response.text[:500]' in inspect.getsource(_post_with_retries)
 
 
 # --- Fix 13: subprocess timeouts ---

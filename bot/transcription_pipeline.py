@@ -11,18 +11,13 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from bot.jobs import JobCancellation
 
+from bot.speakers import SpeakerPart, save_speaker_parts
 from bot.transcription_chunking import get_part_number, split_mp3
-from bot.transcription_limits import estimate_token_count, is_text_too_long_for_correction
-from bot.transcription_providers import (
-    get_api_key,
-    get_claude_api_key,
-    post_process_transcript,
-    transcribe_audio,
-)
+from bot.transcription_providers import SpeakerTurn, get_api_key, transcribe_audio
 
 
-# User-visible placeholder for a part Groq returned no text for; written both
-# into the merged transcript and into the per-part file.
+# User-visible placeholder for a part the API returned no text for; written
+# both into the merged transcript and into the per-part file.
 EMPTY_PART_MARKER = "[brak transkrypcji tego fragmentu]"
 
 
@@ -34,16 +29,16 @@ def transcribe_mp3_file(
     *,
     cancellation: "JobCancellation | None" = None,
     get_api_key_fn=get_api_key,
-    get_claude_api_key_fn=get_claude_api_key,
     split_mp3_fn=split_mp3,
     get_part_number_fn=get_part_number,
     transcribe_audio_fn=transcribe_audio,
-    post_process_transcript_fn=post_process_transcript,
-    estimate_token_count_fn=estimate_token_count,
-    is_text_too_long_for_correction_fn=is_text_too_long_for_correction,
     rmtree_fn=shutil.rmtree,
 ):
-    """Transcribe an MP3 file, splitting and post-processing when needed.
+    """Transcribe an MP3 file part by part and save the merged transcript.
+
+    Speaker turns of every part go to a data file next to the transcript
+    (bot/speakers.py) for the optional speaker naming step. There is no AI
+    correction: Scribe's text is used as returned, minus sound tags.
 
     When ``cancellation.event`` becomes set between chunks, processing
     stops and the function returns None (no transcription text).
@@ -51,7 +46,7 @@ def transcribe_mp3_file(
 
     api_key = get_api_key_fn()
     if not api_key:
-        logging.error("Cannot read API key from api_key.md.")
+        logging.error("Cannot read OPENROUTER_API_KEY from configuration.")
         return None
 
     temp_dir = os.path.join(output_dir, "temp_parts")
@@ -69,11 +64,11 @@ def transcribe_mp3_file(
         return None
 
     transcriptions = []
+    speaker_parts = []
     total_parts = len(part_files)
     failed_parts = 0
     total_characters = 0
     start_time = time.time()
-    previous_text = ""
     base_name = os.path.splitext(os.path.basename(file_path))[0]
 
     logging.info("Found %s part files to transcribe.", total_parts)
@@ -104,20 +99,27 @@ def transcribe_mp3_file(
                 f"Pozostały czas: ~{eta_str}"
             )
 
-        chunk_prompt = previous_text[-500:] if previous_text else None
-        transcription = transcribe_audio_fn(part_path, api_key, language=language, prompt=chunk_prompt)
+        # No context from the previous part: OpenRouter ignores a prompt.
+        result = transcribe_audio_fn(part_path, api_key, language=language)
+        transcription = result.text.strip() if result else ""
+        output_part_num = get_part_number_fn(os.path.basename(part_path)) or (index + 1)
 
         if transcription:
             logging.info("Part %s: transcription has %s characters", index + 1, len(transcription))
             transcriptions.append(transcription)
             total_characters += len(transcription)
-            previous_text = transcription
+            # A part without speaker numbers keeps its text as one unnamed turn.
+            turns = tuple(result.turns) or (SpeakerTurn(None, 0.0, 0.0, transcription),)
+            speaker_parts.append(SpeakerPart(part=output_part_num, turns=turns))
         else:
             logging.warning("Part %s: transcription is empty!", index + 1)
             transcriptions.append(EMPTY_PART_MARKER)
             failed_parts += 1
+            # The labelled transcript shows the same gap as the plain one.
+            speaker_parts.append(SpeakerPart(
+                part=output_part_num, turns=(SpeakerTurn(None, 0.0, 0.0, EMPTY_PART_MARKER),),
+            ))
 
-        output_part_num = get_part_number_fn(os.path.basename(part_path)) or (index + 1)
         transcript_path = os.path.join(output_dir, f"{base_name}_part{output_part_num}_transcript.txt")
         with open(transcript_path, "w", encoding="utf-8") as file_obj:
             file_obj.write(transcription if transcription else EMPTY_PART_MARKER)
@@ -149,37 +151,15 @@ def transcribe_mp3_file(
     logging.info("Final text length: %s characters", len(combined_text))
 
     if not any(text != EMPTY_PART_MARKER for text in valid_transcriptions):
-        # Nothing was transcribed (e.g. every Groq call failed). Returning a file
+        # Nothing was transcribed (e.g. every API call failed). Returning a file
         # of placeholders would be shown as a finished transcript and could be
-        # sent on to paid correction and summaries; callers report
-        # TRANSCRIPTION_FAILED_TEXT instead (bot/services/transcription_service.py).
+        # sent on to paid summaries; callers report TRANSCRIPTION_FAILED_TEXT
+        # instead (bot/services/transcription_service.py).
         logging.error(
             "No transcription content to save: %s of %s parts failed", failed_parts, total_parts
         )
         _remove_temp_dir(rmtree_fn, temp_dir)
         return None
-
-    if get_claude_api_key_fn():
-        if is_text_too_long_for_correction_fn(combined_text):
-            logging.info(
-                "Skipping post-processing: text too long (%s chars, ~%s tokens)",
-                f"{len(combined_text):,}",
-                f"{estimate_token_count_fn(combined_text):,}",
-            )
-            if progress_callback:
-                progress_callback(
-                    "Korekta AI pominięta — tekst zbyt długi.\n"
-                    "Transkrypcja zostanie wysłana bez korekty."
-                )
-        else:
-            if progress_callback:
-                progress_callback("Korekta transkrypcji przez AI...")
-            corrected = post_process_transcript_fn(combined_text, api_key=get_claude_api_key_fn())
-            if corrected:
-                combined_text = corrected
-                logging.info("Post-processed transcript: %s characters", len(combined_text))
-    else:
-        logging.info("Skipping post-processing: no Claude API key configured")
 
     transcript_md_path = os.path.join(output_dir, f"{base_name}_transcript.md")
     with open(transcript_md_path, "w", encoding="utf-8") as file_obj:
@@ -187,6 +167,12 @@ def transcribe_mp3_file(
         file_obj.write(combined_text)
 
     logging.info("All transcriptions combined and saved to %s", transcript_md_path)
+
+    try:
+        save_speaker_parts(transcript_md_path, speaker_parts)
+    except OSError as exc:
+        # Speaker naming is optional; the transcript itself is complete.
+        logging.error("Could not save speaker data: %s", exc)
 
     _remove_temp_dir(rmtree_fn, temp_dir)
     return transcript_md_path

@@ -32,6 +32,23 @@ def test_handle_callback_audio_transcribe_starts_directly(monkeypatch):
     assert called.get("invoked") is True
 
 
+def test_handle_callback_routes_speaker_buttons_without_active_url(monkeypatch):
+    tc.user_urls.pop(123, None)
+    update = _make_update("tr_spk_hint_token", chat_id=123)
+    context = _make_context()
+    called = {}
+
+    async def fake_handle(update_arg, context_arg, data):
+        called["data"] = data
+
+    monkeypatch.setattr(tc, "handle_speaker_callback", fake_handle)
+
+    asyncio.run(tc.handle_callback(update, context))
+
+    assert called["data"] == "tr_spk_hint_token"
+    update.callback_query.edit_message_text.assert_not_awaited()
+
+
 def test_handle_callback_custom_prompt_does_not_require_active_url(monkeypatch):
     tc.user_urls.pop(123, None)
     update = _make_update("tr_prompt_token", chat_id=123)
@@ -205,7 +222,7 @@ def test_transcribe_audio_file_reports_missing_file():
     )
 
 
-def test_transcribe_audio_file_requires_groq_api_key(tmp_path, monkeypatch):
+def test_transcribe_audio_file_requires_openrouter_api_key(tmp_path, monkeypatch):
     audio_file = tmp_path / "audio.mp3"
     audio_file.write_bytes(b"fake mp3 content")
 
@@ -214,7 +231,7 @@ def test_transcribe_audio_file_requires_groq_api_key(tmp_path, monkeypatch):
     context.user_data["audio_file_path"] = str(audio_file)
     context.user_data["audio_file_title"] = "Recording"
 
-    monkeypatch.setattr(tc, "get_runtime_value", lambda key, default=None: "" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(tc, "get_runtime_value", lambda key, default=None: "" if key == "OPENROUTER_API_KEY" else default)
     asyncio.run(tc.transcribe_audio_file(update, context))
 
     messages = [call.args[0] for call in update.callback_query.edit_message_text.await_args_list]
@@ -340,7 +357,7 @@ def test_handle_callback_spotify_expired_session():
 # --- Spotify transcription routing (Task 12) --------------------------------
 #
 # transcribe / summary_option_* must prefer a native spotify_video session
-# (subtitles or, failing that, native audio + Groq) over the legacy
+# (subtitles or, failing that, native audio + Scribe) over the legacy
 # spotify_resolved fallback, and only fall through to the expired-session
 # message when neither survived. Each of the four cases below asserts not
 # just which handler ran, but that the others did NOT -- a routing bug that
@@ -821,7 +838,7 @@ def test_download_spotify_video_reports_mtproto_send_failure(monkeypatch, tmp_pa
 
 
 def test_transcribe_spotify_video_uses_subtitles_without_downloading_audio(monkeypatch, tmp_path):
-    """When the episode ships subtitles, no audio may be downloaded and Groq
+    """When the episode ships subtitles, no audio may be downloaded and Scribe
     must never run -- the whole point of this path is skipping both."""
 
     transcript_file = tmp_path / "transcript.md"
@@ -834,7 +851,7 @@ def test_transcribe_spotify_video_uses_subtitles_without_downloading_audio(monke
         raise AssertionError("download_episode_media must not run when subtitles are used")
 
     async def must_not_transcribe(*a, **kw):
-        raise AssertionError("run_transcription_with_progress (Groq) must not run when subtitles are used")
+        raise AssertionError("run_transcription_with_progress (Scribe) must not run when subtitles are used")
 
     monkeypatch.setattr(sc, "transcript_from_subtitles", fake_transcript_from_subtitles)
     monkeypatch.setattr(sc, "download_episode_media", must_not_download)
@@ -858,12 +875,12 @@ def test_transcribe_spotify_video_uses_subtitles_without_downloading_audio(monke
 
 def test_transcribe_spotify_video_falls_back_to_audio_when_no_subtitles(monkeypatch, tmp_path):
     """No subtitle languages at all -- transcript_from_subtitles must not
-    even be attempted, and the native audio + Groq pipeline must run."""
+    even be attempted, and the native audio + Scribe pipeline must run."""
 
     audio_file = tmp_path / "episode.m4a"
     audio_file.write_bytes(b"fake-audio-bytes")
     transcript_file = tmp_path / "episode_transcript.md"
-    transcript_file.write_text("# Test Episode\n\nZ Groq.\n", encoding="utf-8")
+    transcript_file.write_text("# Test Episode\n\nZ Scribe.\n", encoding="utf-8")
 
     def must_not_use_subtitles(*a, **kw):
         # transcript_from_subtitles is a plain sync function, dispatched
@@ -887,7 +904,7 @@ def test_transcribe_spotify_video_falls_back_to_audio_when_no_subtitles(monkeypa
     monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
     monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
     monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
-    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-openrouter-key" if key == "OPENROUTER_API_KEY" else default)
 
     session = _spotify_video_session()
     session["subtitle_languages"] = []
@@ -905,12 +922,12 @@ def test_transcribe_spotify_video_falls_back_to_audio_when_no_subtitles(monkeypa
 def test_transcribe_spotify_video_falls_back_when_subtitle_fetch_fails(monkeypatch, tmp_path):
     """subtitle_languages claims a track exists, but fetching it fails
     (returns None, per its documented contract) -- must fall back to the
-    audio + Groq pipeline rather than erroring out."""
+    audio + Scribe pipeline rather than erroring out."""
 
     audio_file = tmp_path / "episode.m4a"
     audio_file.write_bytes(b"fake-audio-bytes")
     transcript_file = tmp_path / "episode_transcript.md"
-    transcript_file.write_text("# Test Episode\n\nZ Groq.\n", encoding="utf-8")
+    transcript_file.write_text("# Test Episode\n\nZ Scribe.\n", encoding="utf-8")
 
     download_called = {}
 
@@ -929,7 +946,7 @@ def test_transcribe_spotify_video_falls_back_when_subtitle_fetch_fails(monkeypat
     monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
     monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
     monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
-    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-openrouter-key" if key == "OPENROUTER_API_KEY" else default)
 
     session = _spotify_video_session()
     session["subtitle_languages"] = ["pl-pl"]
@@ -943,13 +960,13 @@ def test_transcribe_spotify_video_falls_back_when_subtitle_fetch_fails(monkeypat
     context.bot.send_document.assert_awaited_once()
 
 
-def test_transcribe_spotify_video_reports_missing_groq_key_without_downloading(monkeypatch):
+def test_transcribe_spotify_video_reports_missing_api_key_without_downloading(monkeypatch):
     async def must_not_download(*a, **kw):
-        raise AssertionError("must not download audio before confirming a Groq key is configured")
+        raise AssertionError("must not download audio before confirming an API key is configured")
 
     monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **kw: None)
     monkeypatch.setattr(sc, "download_episode_media", must_not_download)
-    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "" if key == "OPENROUTER_API_KEY" else default)
 
     session = _spotify_video_session()
     session["subtitle_languages"] = []
@@ -1000,12 +1017,12 @@ def test_transcribe_spotify_video_reports_api_changed_for_drifted_manifest(monke
     construction the same way, in the function immediately above it."""
 
     # Without this stub the test reaches download_episode_media only when a
-    # real GROQ_API_KEY happens to be configured, so it passed locally off a
+    # real OPENROUTER_API_KEY happens to be configured, so it passed locally off a
     # live api_key.md and would have gone red on a fresh checkout -- silently
     # ceasing to exercise api_changed rather than failing for a real reason.
     monkeypatch.setattr(
         sc, "get_runtime_value",
-        lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default,
+        lambda key, default=None: "fake-openrouter-key" if key == "OPENROUTER_API_KEY" else default,
     )
 
     session = _spotify_video_session()
@@ -1057,7 +1074,7 @@ def test_transcribe_spotify_video_sanitizes_empty_title_like_download_episode_me
     monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
     monkeypatch.setattr(sc, "cleanup_transcription_artifacts", fake_cleanup)
     monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
-    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-openrouter-key" if key == "OPENROUTER_API_KEY" else default)
 
     session = _spotify_video_session()
     session["title"] = ""
@@ -1081,7 +1098,7 @@ def test_transcribe_spotify_video_reports_progress_during_audio_fallback(monkeyp
     audio_file = tmp_path / "episode.m4a"
     audio_file.write_bytes(b"fake-audio-bytes")
     transcript_file = tmp_path / "episode_transcript.md"
-    transcript_file.write_text("# Test Episode\n\nZ Groq.\n", encoding="utf-8")
+    transcript_file.write_text("# Test Episode\n\nZ Scribe.\n", encoding="utf-8")
 
     async def fake_download_episode_media(*, episode, height, output_dir, executor, progress_cb=None, **kw):
         loop = asyncio.get_event_loop()
@@ -1103,7 +1120,7 @@ def test_transcribe_spotify_video_reports_progress_during_audio_fallback(monkeyp
     monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
     monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
     monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
-    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-openrouter-key" if key == "OPENROUTER_API_KEY" else default)
     monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
 
     session = _spotify_video_session()
@@ -1132,7 +1149,7 @@ def test_transcribe_spotify_video_waits_for_pending_progress_edit_before_next_me
     audio_file = tmp_path / "episode.m4a"
     audio_file.write_bytes(b"fake-audio-bytes")
     transcript_file = tmp_path / "episode_transcript.md"
-    transcript_file.write_text("# Test Episode\n\nZ Groq.\n", encoding="utf-8")
+    transcript_file.write_text("# Test Episode\n\nZ Scribe.\n", encoding="utf-8")
 
     log = []
 
@@ -1163,7 +1180,7 @@ def test_transcribe_spotify_video_waits_for_pending_progress_edit_before_next_me
     monkeypatch.setattr(sc, "download_episode_media", fake_download_episode_media)
     monkeypatch.setattr(sc, "run_transcription_with_progress", fake_run_transcription)
     monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
-    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-openrouter-key" if key == "OPENROUTER_API_KEY" else default)
     monkeypatch.setattr(sc, "_PROGRESS_EDIT_MIN_INTERVAL_SEC", 0)
 
     session = _spotify_video_session()
@@ -1806,24 +1823,7 @@ def _upload_context(tmp_path, chat_id=700):
     return context, audio
 
 
-def test_upload_summary_checks_claude_key_before_transcribing(tmp_path, monkeypatch):
-    context, _audio = _upload_context(tmp_path)
-    monkeypatch.setattr(_trc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
-    transcribe = AsyncMock()
-    monkeypatch.setattr(_trc, "run_transcription_with_progress", transcribe)
-    update = _make_update("audio_summary_option_1", chat_id=700)
-
-    asyncio.run(_trc.transcribe_audio_file(update, context, summary=True, summary_type=1))
-
-    transcribe.assert_not_awaited()
-    messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
-    assert messages == [
-        "Podsumowanie jest niedostępne — brak klucza API Claude. "
-        "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
-    ]
-
-
-def test_upload_missing_groq_key_blocks_before_transcribing(tmp_path, monkeypatch):
+def test_upload_missing_api_key_blocks_before_transcribing(tmp_path, monkeypatch):
     context, _audio = _upload_context(tmp_path)
     monkeypatch.setattr(_trc, "get_runtime_value", _keys())
     transcribe = AsyncMock()
@@ -1844,7 +1844,7 @@ def test_upload_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
     transcript = tmp_path / "talk_transcript.md"
     transcript.write_text("# Talk\n\nTekst.\n", encoding="utf-8")
     monkeypatch.setattr(_trc, "DOWNLOAD_PATH", str(tmp_path))
-    monkeypatch.setattr(_trc, "get_runtime_value", _keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(_trc, "get_runtime_value", _keys(OPENROUTER_API_KEY="k"))
     monkeypatch.setattr(_trc, "run_transcription_with_progress", AsyncMock(return_value=str(transcript)))
     monkeypatch.setattr(_trc, "generate_summary_artifact", AsyncMock(return_value=None))
     offer = AsyncMock()
@@ -1884,15 +1884,6 @@ def test_spotify_transcription_checks_keys_before_downloading(tmp_path, monkeypa
     assert result is False
     assert update.callback_query.edit_message_text.await_args.args[0].startswith("Funkcja niedostępna")
 
-    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
-    result = asyncio.run(sc.download_spotify_resolved(
-        update, _make_context(), _spotify_resolved(), "mp3",
-        transcribe=True, summary=True, summary_type=1,
-    ))
-    assert result is False
-    assert update.callback_query.edit_message_text.await_args.args[0].startswith(
-        "Podsumowanie jest niedostępne"
-    )
     download.assert_not_awaited()
 
 
@@ -1900,7 +1891,7 @@ def test_spotify_transcription_failure_is_not_overwritten_by_done(tmp_path, monk
     produced = tmp_path / "Host - Episode.mp3"
     produced.write_bytes(b"X" * 1024)
     monkeypatch.setattr(sc, "DOWNLOAD_PATH", str(tmp_path))
-    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(OPENROUTER_API_KEY="k"))
     monkeypatch.setattr(sc, "download_resolved_audio", AsyncMock(return_value=str(produced)))
     monkeypatch.setattr(sc, "run_transcription_with_progress", AsyncMock(return_value=None))
     update = _make_update("transcribe", chat_id=123)
@@ -1921,7 +1912,7 @@ def test_spotify_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
     transcript = tmp_path / "Host - Episode_transcript.md"
     transcript.write_text("# Episode\n\nTekst.\n", encoding="utf-8")
     monkeypatch.setattr(sc, "DOWNLOAD_PATH", str(tmp_path))
-    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(OPENROUTER_API_KEY="k"))
     monkeypatch.setattr(sc, "download_resolved_audio", AsyncMock(return_value=str(produced)))
     monkeypatch.setattr(sc, "run_transcription_with_progress", AsyncMock(return_value=str(transcript)))
     monkeypatch.setattr(sc, "generate_summary_artifact", AsyncMock(return_value=None))
@@ -1951,7 +1942,7 @@ def test_spotify_video_summary_failure_keeps_notice_in_final_status(tmp_path, mo
     transcript = tmp_path / "t.md"
     transcript.write_text("# Test Episode\n\nTekst.\n", encoding="utf-8")
     monkeypatch.setattr(sc, "transcript_from_subtitles", lambda **kw: str(transcript))
-    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g", CLAUDE_API_KEY="c"))
+    monkeypatch.setattr(sc, "get_runtime_value", _keys(OPENROUTER_API_KEY="k"))
     monkeypatch.setattr(sc, "generate_summary_artifact", AsyncMock(return_value=None))
     monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
     monkeypatch.setattr(sc, "offer_custom_transcript_prompt", AsyncMock())
@@ -1968,16 +1959,16 @@ def test_spotify_video_summary_failure_keeps_notice_in_final_status(tmp_path, mo
     assert "nie udało się wygenerować podsumowania" in last
 
 
-def test_spotify_video_transcription_checks_claude_key_before_any_download(monkeypatch):
+def test_spotify_video_transcription_checks_the_key_before_any_download(monkeypatch):
     async def must_not_download(*a, **kw):
-        raise AssertionError("must not download before confirming the Claude key")
+        raise AssertionError("must not download before confirming the API key")
 
     def must_not_fetch_subtitles(**kw):
-        raise AssertionError("must not fetch subtitles before confirming the Claude key")
+        raise AssertionError("must not fetch subtitles before confirming the API key")
 
     monkeypatch.setattr(sc, "transcript_from_subtitles", must_not_fetch_subtitles)
     monkeypatch.setattr(sc, "download_episode_media", must_not_download)
-    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
+    monkeypatch.setattr(sc, "get_runtime_value", _keys())
     session = _spotify_video_session()
     update = _make_update("transcribe", chat_id=123)
     context = _make_context()
@@ -2005,7 +1996,7 @@ def _subtitle_setup(tmp_path, monkeypatch, *, keys):
     return download, offer
 
 
-def test_subtitle_summary_checks_claude_key_before_downloading(tmp_path, monkeypatch):
+def test_subtitle_summary_checks_api_key_before_downloading(tmp_path, monkeypatch):
     download, _offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys())
     update = _make_update("sub_sum_1", chat_id=701)
     update.effective_user.id = 1
@@ -2018,13 +2009,13 @@ def test_subtitle_summary_checks_claude_key_before_downloading(tmp_path, monkeyp
     download.assert_not_called()
     messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
     assert messages == [
-        "Podsumowanie jest niedostępne — brak klucza API Claude. "
+        "Podsumowanie jest niedostępne — brak klucza API OpenRouter. "
         "Wybierz samą transkrypcję albo skontaktuj się z administratorem."
     ]
 
 
 def test_subtitle_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
-    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
+    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(OPENROUTER_API_KEY="k"))
     monkeypatch.setattr(_trc, "generate_summary_artifact", AsyncMock(return_value=None))
     update = _make_update("sub_sum_1", chat_id=701)
     update.effective_user.id = 1
@@ -2045,7 +2036,7 @@ def test_subtitle_summary_failure_still_sends_transcript(tmp_path, monkeypatch):
 
 
 def test_subtitle_too_long_for_summary_keeps_notice_in_final_status(tmp_path, monkeypatch):
-    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
+    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(OPENROUTER_API_KEY="k"))
     monkeypatch.setattr(_trc, "transcript_too_long_for_summary", lambda text: True)
     summarize = AsyncMock()
     monkeypatch.setattr(_trc, "generate_summary_artifact", summarize)
@@ -2070,7 +2061,7 @@ def test_subtitle_too_long_for_summary_keeps_notice_in_final_status(tmp_path, mo
 
 
 def test_subtitle_summary_exception_still_sends_transcript(tmp_path, monkeypatch):
-    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(CLAUDE_API_KEY="c"))
+    _download, offer = _subtitle_setup(tmp_path, monkeypatch, keys=_keys(OPENROUTER_API_KEY="k"))
     monkeypatch.setattr(_trc, "generate_summary_artifact", AsyncMock(side_effect=RuntimeError("boom")))
     update = _make_update("sub_sum_1", chat_id=701)
     update.effective_user.id = 1
@@ -2085,8 +2076,8 @@ def test_subtitle_summary_exception_still_sends_transcript(tmp_path, monkeypatch
     offer.assert_awaited_once()
 
 
-def test_spotify_summary_without_claude_key_names_no_variable(monkeypatch):
-    monkeypatch.setattr(sc, "get_runtime_value", _keys(GROQ_API_KEY="g"))
+def test_spotify_summary_without_api_key_names_no_variable(monkeypatch):
+    monkeypatch.setattr(sc, "get_runtime_value", _keys())
     statuses = []
 
     async def update_status(text):
@@ -2097,11 +2088,11 @@ def test_spotify_summary_without_claude_key_names_no_variable(monkeypatch):
     ))
 
     assert notice == (
-        "Transkrypcja gotowa, ale podsumowanie jest niedostępne — brak klucza API Claude. "
+        "Transkrypcja gotowa, ale podsumowanie jest niedostępne — brak klucza API OpenRouter. "
         "Wysyłam samą transkrypcję."
     )
     assert statuses == [notice]
-    assert "CLAUDE_API_KEY" not in notice
+    assert "OPENROUTER_API_KEY" not in notice
 
 
 def test_upload_transcription_failure_shows_the_concrete_failure_text(tmp_path, monkeypatch):
@@ -2135,7 +2126,7 @@ def test_spotify_video_transcription_failure_shows_the_concrete_failure_text(mon
     # The pipeline returns None when no part could be transcribed.
     monkeypatch.setattr(sc, "run_transcription_with_progress", AsyncMock(return_value=None))
     monkeypatch.setattr(sc, "record_download_for", lambda *a, **k: None)
-    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-groq-key" if key == "GROQ_API_KEY" else default)
+    monkeypatch.setattr(sc, "get_runtime_value", lambda key, default=None: "fake-openrouter-key" if key == "OPENROUTER_API_KEY" else default)
     session = _spotify_video_session()
     update = _make_update("transcribe", chat_id=123)
     context = _make_context()

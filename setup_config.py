@@ -44,13 +44,10 @@ def setup_config():
             continue
         break
     
-    # Groq API Key
-    groq_key = getpass.getpass("GROQ_API_KEY (ukryty, Enter aby pominąć): ").strip()
-    
-    # Claude API Key
-    claude_key = getpass.getpass("CLAUDE_API_KEY (ukryty, Enter aby pominąć): ").strip()
-    if claude_key and not claude_key.startswith("sk-"):
-        print("⚠️  Uwaga: Claude API key zazwyczaj zaczyna się od 'sk-'")
+    # OpenRouter API Key (transcription, summaries and speaker naming)
+    openrouter_key = getpass.getpass("OPENROUTER_API_KEY (ukryty, Enter aby pominąć): ").strip()
+    if openrouter_key and not openrouter_key.startswith("sk-or-"):
+        print("⚠️  Uwaga: klucz OpenRouter zazwyczaj zaczyna się od 'sk-or-'")
     
     # PIN Code
     while True:
@@ -71,8 +68,7 @@ def setup_config():
     try:
         with open(config_file, 'w') as f:
             f.write(f"TELEGRAM_BOT_TOKEN={telegram_token}\n")
-            f.write(f"GROQ_API_KEY={groq_key}\n")
-            f.write(f"CLAUDE_API_KEY={claude_key}\n")
+            f.write(f"OPENROUTER_API_KEY={openrouter_key}\n")
             f.write(f"PIN_CODE={pin}\n")
         
         # Ustaw bezpieczne uprawnienia (tylko Unix)

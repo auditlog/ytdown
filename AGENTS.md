@@ -6,8 +6,10 @@ This file provides guidance to Codex and compatible coding agents when working i
 
 This project is a modular Python Telegram bot for:
 - downloading YouTube video/audio,
-- transcribing audio with Groq Whisper,
-- generating summaries with Claude.
+- transcribing audio with ElevenLabs Scribe v2 (with speaker labels),
+- generating summaries with Claude Haiku and naming speakers with Claude Sonnet.
+
+Every model goes through OpenRouter with one key (`OPENROUTER_API_KEY`).
 
 The app runs in two modes:
 - Telegram bot (`python main.py`)
@@ -70,8 +72,7 @@ Note: async tests require `pytest-asyncio` in the active environment.
 
 Required keys (env vars or `api_key.md`):
 - `TELEGRAM_BOT_TOKEN`
-- `GROQ_API_KEY`
-- `CLAUDE_API_KEY`
+- `OPENROUTER_API_KEY`
 - `PIN_CODE` (8 digits)
 
 Load priority:

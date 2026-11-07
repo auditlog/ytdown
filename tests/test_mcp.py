@@ -325,8 +325,7 @@ def test_worker_transcript_and_summary_outputs(tmp_path, monkeypatch, operation)
     ydl.__exit__ = Mock(return_value=False)
     ydl.extract_info.return_value = {"title": "Video", "duration": 30}
     monkeypatch.setattr(yt_dlp, "YoutubeDL", lambda options: ydl)
-    monkeypatch.setenv("GROQ_API_KEY", "test-groq")
-    monkeypatch.setenv("CLAUDE_API_KEY", "test-claude")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test-openrouter")
 
     def download(plan):
         path = tmp_path / "media.mp3"
@@ -334,8 +333,7 @@ def test_worker_transcript_and_summary_outputs(tmp_path, monkeypatch, operation)
         return download_service.DownloadResult(str(path), 0.1)
 
     def transcribe(source, output, **kwargs):
-        assert kwargs["get_api_key_fn"]() == "test-groq"
-        assert kwargs["get_claude_api_key_fn"]() == ""
+        assert kwargs["get_api_key_fn"]() == "test-openrouter"
         assert kwargs["language"] == "pl"
         path = tmp_path / "media_transcript.md"
         path.write_text("Transcript", encoding="utf-8")
@@ -362,7 +360,7 @@ def test_worker_transcript_and_summary_outputs(tmp_path, monkeypatch, operation)
     assert "media_transcript.md" in result["artifacts"]
     if operation == "summarize":
         assert "summary.md" in result["artifacts"]
-        summary.assert_called_once_with("Transcript", 2, api_key="test-claude")
+        summary.assert_called_once_with("Transcript", 2, api_key="test-openrouter")
     else:
         summary.assert_not_called()
 

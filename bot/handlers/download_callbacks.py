@@ -61,7 +61,7 @@ from bot.services.archive_service import (
     register_pending_archive_job,
     send_volumes,
 )
-from bot.transcription_limits import CORRECTION_DURATION_LIMIT_MIN, SUMMARY_DURATION_LIMIT_MIN
+from bot.transcription_limits import SUMMARY_DURATION_LIMIT_MIN
 from bot.downloader_media import COOKIES_FILE, download_photo, download_thumbnail
 from bot.downloader_metadata import get_video_info
 from bot.downloader_subtitles import get_available_subtitles
@@ -389,7 +389,7 @@ async def download_file(
 
         if transcribe:
             # Fail fast: check API keys before spending time on the download.
-            missing_key_text = missing_transcription_key_message(get_runtime_value, summary=summary)
+            missing_key_text = missing_transcription_key_message(get_runtime_value)
             if missing_key_text:
                 await finish_status(missing_key_text)
                 return

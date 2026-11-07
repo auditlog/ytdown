@@ -46,8 +46,7 @@ class TestConfigIntegration:
             str(config_file),
             env={
                 "TELEGRAM_BOT_TOKEN": "env_token",
-                "GROQ_API_KEY": "",
-                "CLAUDE_API_KEY": "",
+                "OPENROUTER_API_KEY": "",
                 "PIN_CODE": "",
             },
             load_env_file=False,
@@ -200,7 +199,7 @@ class TestTranscriptionIntegration:
 
     @pytest.mark.requires_api
     def test_transcription_workflow(
-        self, sample_mp3_file, mock_groq_api, mock_claude_api, mock_requests_post, temp_dir
+        self, sample_mp3_file, mock_openrouter_key, mock_requests_post, temp_dir
     ):
         """Test complete transcription and summarization workflow."""
         from bot.transcription import transcribe_mp3_file, generate_summary

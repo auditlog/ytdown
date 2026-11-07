@@ -29,9 +29,9 @@ CONFIG_FILE_PATH = "api_key.md"
 # Default configuration values
 DEFAULT_CONFIG = {
     "TELEGRAM_BOT_TOKEN": "",
-    "GROQ_API_KEY": "",
+    # One key for every model: Scribe transcription and Claude text models via OpenRouter.
+    "OPENROUTER_API_KEY": "",
     "PIN_CODE": "12345678",
-    "CLAUDE_API_KEY": "",
     "ADMIN_CHAT_ID": "",
     "SPOTIFY_CLIENT_ID": "",
     "SPOTIFY_CLIENT_SECRET": "",
@@ -159,8 +159,7 @@ def load_config(
     # Override with environment variables
     overrides = {
         "TELEGRAM_BOT_TOKEN": environment.get("TELEGRAM_BOT_TOKEN"),
-        "GROQ_API_KEY": environment.get("GROQ_API_KEY"),
-        "CLAUDE_API_KEY": environment.get("CLAUDE_API_KEY"),
+        "OPENROUTER_API_KEY": environment.get("OPENROUTER_API_KEY"),
         "PIN_CODE": environment.get("PIN_CODE"),
         "ADMIN_CHAT_ID": environment.get("ADMIN_CHAT_ID"),
         "TELEGRAM_API_ID": environment.get("TELEGRAM_API_ID"),
@@ -225,15 +224,10 @@ def validate_config(config, *, config_file_path: str = CONFIG_FILE_PATH):
         if not re.match(r'^\d{8,10}:[A-Za-z0-9_-]{35}$', telegram_token):
             logging.warning("WARNING: TELEGRAM_BOT_TOKEN format may be invalid!")
 
-    # Check Groq key
-    groq_key = config.get("GROQ_API_KEY", "")
-    if groq_key and len(groq_key) < 20:
-        logging.warning("WARNING: GROQ_API_KEY seems too short!")
-
-    # Check Claude key
-    claude_key = config.get("CLAUDE_API_KEY", "")
-    if claude_key and not claude_key.startswith("sk-"):
-        logging.warning("WARNING: CLAUDE_API_KEY should start with 'sk-'!")
+    # Check OpenRouter key (a leftover Groq or Anthropic key is the usual mistake)
+    openrouter_key = config.get("OPENROUTER_API_KEY", "")
+    if openrouter_key and not openrouter_key.startswith("sk-or-"):
+        logging.warning("WARNING: OPENROUTER_API_KEY should start with 'sk-or-'!")
 
     # Check config file permissions (Unix only) and auto-fix if possible
     if os.path.exists(config_file_path) and hasattr(os, 'stat'):

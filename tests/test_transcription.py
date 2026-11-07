@@ -7,16 +7,18 @@ from types import SimpleNamespace
 from pathlib import Path
 
 from bot import transcription as tr
+from bot.transcription_providers import TranscribedPart
 
 
 def test_get_api_key_reads_from_config(monkeypatch):
     monkeypatch.setattr(
         tr,
         "get_runtime_value",
-        lambda key, default=None: {"GROQ_API_KEY": "groq", "CLAUDE_API_KEY": "claude"}.get(key, default),
+        lambda key, default=None: {"OPENROUTER_API_KEY": "sk-or-key"}.get(key, default),
     )
-    assert tr.get_api_key() == "groq"
-    assert tr.get_claude_api_key() == "claude"
+    assert tr.get_api_key() == "sk-or-key"
+    assert not hasattr(tr, "get_claude_api_key")
+    assert not hasattr(tr, "post_process_transcript")
 
 
 def test_get_api_keys_from_config():
@@ -76,10 +78,10 @@ def test_split_mp3_large_file_uses_ffmpeg(monkeypatch, tmp_path):
     assert outputs, "ffmpeg subprocess mock was not used"
 
 
-def test_transcribe_audio_returns_empty_for_large_file(tmp_path):
+def test_transcribe_audio_returns_none_for_large_file(tmp_path):
     file_path = tmp_path / "audio.mp3"
     file_path.write_bytes(b"x" * (26 * 1024 * 1024))
-    assert tr.transcribe_audio(str(file_path), "test-key") == ""
+    assert tr.transcribe_audio(str(file_path), "test-key") is None
 
 
 def test_transcribe_audio_success(monkeypatch, tmp_path):
@@ -91,11 +93,11 @@ def test_transcribe_audio_success(monkeypatch, tmp_path):
         text = "transcribed text"
 
         def json(self):
-            return {"text": self.text}
+            return {"text": self.text, "words": []}
 
     monkeypatch.setattr(tr.requests, "post", lambda *args, **kwargs: Resp())
 
-    assert tr.transcribe_audio(str(file_path), "test-key") == "transcribed text"
+    assert tr.transcribe_audio(str(file_path), "test-key").text == "transcribed text"
 
 
 def test_transcribe_audio_non_200_error(monkeypatch, tmp_path):
@@ -110,7 +112,7 @@ def test_transcribe_audio_non_200_error(monkeypatch, tmp_path):
 
     monkeypatch.setattr(tr.requests, "post", lambda *args, **kwargs: Resp())
 
-    assert tr.transcribe_audio(str(file_path), "test-key") == ""
+    assert tr.transcribe_audio(str(file_path), "test-key") is None
 
 
 def test_transcribe_audio_exception(monkeypatch, tmp_path):
@@ -121,7 +123,7 @@ def test_transcribe_audio_exception(monkeypatch, tmp_path):
         raise RuntimeError("boom")
 
     monkeypatch.setattr(tr.requests, "post", raise_error)
-    assert tr.transcribe_audio(str(file_path), "test-key") == ""
+    assert tr.transcribe_audio(str(file_path), "test-key") is None
 
 
 def test_get_part_number():
@@ -136,7 +138,7 @@ def test_transcribe_mp3_file_empty_when_no_api_key(tmp_path, monkeypatch):
     assert tr.transcribe_mp3_file(str(file_path), str(tmp_path)) is None
 
 
-def test_transcribe_mp3_file_success_with_postprocessing(monkeypatch, tmp_path):
+def test_transcribe_mp3_file_success_without_ai_correction(monkeypatch, tmp_path):
     source = tmp_path / "audio.mp3"
     source.write_bytes(b"x" * 1024)
 
@@ -147,18 +149,15 @@ def test_transcribe_mp3_file_success_with_postprocessing(monkeypatch, tmp_path):
 
     calls = []
 
-    monkeypatch.setattr(tr, "get_api_key", lambda: "groq-key")
+    monkeypatch.setattr(tr, "get_api_key", lambda: "or-key")
     monkeypatch.setattr(tr, "split_mp3", lambda *args, **kwargs: [str(part1), str(part2)])
 
-    def fake_transcribe_audio(path, key, language=None, prompt=None):
-        calls.append((os.path.basename(path), language, prompt))
-        if "part1" in path:
-            return "first chunk"
-        return "second chunk"
+    def fake_transcribe_audio(path, key, language=None):
+        calls.append((os.path.basename(path), language))
+        text = "first chunk" if "part1" in path else "second chunk"
+        return TranscribedPart(text=text, turns=())
 
     monkeypatch.setattr(tr, "transcribe_audio", fake_transcribe_audio)
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "claude-key")
-    monkeypatch.setattr(tr, "post_process_transcript", lambda text, api_key=None: f"CLEANED:{text}")
 
     statuses = []
 
@@ -169,7 +168,7 @@ def test_transcribe_mp3_file_success_with_postprocessing(monkeypatch, tmp_path):
     assert Path(result).name == "audio_transcript.md"
     assert os.path.exists(result)
     content = Path(result).read_text(encoding="utf-8")
-    assert "CLEANED:" in content
+    assert "first chunk\n\nsecond chunk" in content
     assert any("Cz" in status for status in statuses)
     assert not (tmp_path / "temp_parts").exists()
     assert len(calls) == 2
@@ -183,10 +182,9 @@ def test_transcribe_mp3_file_returns_none_when_nothing_was_transcribed(monkeypat
     part1 = tmp_path / "audio_part1.mp3"
     part1.write_bytes(b"a" * 128)
 
-    monkeypatch.setattr(tr, "get_api_key", lambda: "groq-key")
+    monkeypatch.setattr(tr, "get_api_key", lambda: "or-key")
     monkeypatch.setattr(tr, "split_mp3", lambda *args, **kwargs: [str(part1)])
-    monkeypatch.setattr(tr, "transcribe_audio", lambda *args, **kwargs: "")
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "")
+    monkeypatch.setattr(tr, "transcribe_audio", lambda *args, **kwargs: None)
 
     result = tr.transcribe_mp3_file(str(source), str(tmp_path))
 
@@ -194,31 +192,14 @@ def test_transcribe_mp3_file_returns_none_when_nothing_was_transcribed(monkeypat
     assert result is None
 
 
-def test_post_process_transcript(monkeypatch):
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
-
-    class Resp:
-        status_code = 200
-        def json(self):
-            return {"content": [{"type": "text", "text": "fixed text"}]}
-
-    monkeypatch.setattr(tr.requests, "post", lambda *args, **kwargs: Resp())
-    assert tr.post_process_transcript("typo") == "fixed text"
-
-
-def test_post_process_transcript_returns_none_without_api_key(monkeypatch):
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "")
-    assert tr.post_process_transcript("text") is None
-
-
 def test_generate_summary(monkeypatch):
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
+    monkeypatch.setattr(tr, "get_api_key", lambda: "key")
     captured = {}
 
     class Resp:
         status_code = 200
         def json(self):
-            return {"content": [{"type": "text", "text": "summary"}]}
+            return {"choices": [{"message": {"content": "summary"}, "finish_reason": "stop"}]}
 
     def fake_post(url, headers, json, timeout):
         captured["url"] = url
@@ -232,7 +213,7 @@ def test_generate_summary(monkeypatch):
 
 
 def test_generate_summary_error(monkeypatch):
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
+    monkeypatch.setattr(tr, "get_api_key", lambda: "key")
     monkeypatch.setattr(tr.time, "sleep", lambda _seconds: None)
 
     class Resp:
@@ -263,21 +244,6 @@ def test_estimate_token_count_long_text():
     assert tr.estimate_token_count(text) == 50_000
 
 
-def test_is_text_too_long_for_correction_short():
-    assert tr.is_text_too_long_for_correction("Hello world") is False
-
-
-def test_is_text_too_long_for_correction_at_limit():
-    # POST_PROCESS_MAX_INPUT_TOKENS = 50_000 → 200k chars
-    text = "x" * (50_000 * 4)
-    assert tr.is_text_too_long_for_correction(text) is False
-
-
-def test_is_text_too_long_for_correction_over_limit():
-    text = "x" * (50_001 * 4 + 4)
-    assert tr.is_text_too_long_for_correction(text) is True
-
-
 def test_is_text_too_long_for_summary_short():
     assert tr.is_text_too_long_for_summary("Short text") is False
 
@@ -288,42 +254,9 @@ def test_is_text_too_long_for_summary_over_limit():
     assert tr.is_text_too_long_for_summary(text) is True
 
 
-def test_post_process_skips_long_text(monkeypatch):
-    """post_process_transcript returns None for text exceeding token limit."""
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
-
-    long_text = "word " * 60_000  # ~300k chars → ~75k tokens > 50k limit
-    result = tr.post_process_transcript(long_text)
-    assert result is None
-
-
-def test_post_process_dynamic_max_tokens(monkeypatch):
-    """post_process_transcript uses dynamic max_tokens based on input length."""
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
-
-    captured = {}
-
-    class Resp:
-        status_code = 200
-        def json(self):
-            return {"content": [{"type": "text", "text": "corrected"}]}
-
-    def mock_post(url, *args, **kwargs):
-        captured["json"] = kwargs.get("json", {})
-        return Resp()
-
-    monkeypatch.setattr(tr.requests, "post", mock_post)
-
-    text = "a" * 4000  # ~1000 tokens
-    tr.post_process_transcript(text)
-
-    # max_tokens should be ~input_tokens + 2000, capped at 64000
-    assert captured["json"]["max_tokens"] == 1000 + 2000
-
-
 def test_generate_summary_skips_too_long_text(monkeypatch):
     """generate_summary returns None for text exceeding context window."""
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
+    monkeypatch.setattr(tr, "get_api_key", lambda: "key")
 
     long_text = "word " * 200_000  # ~1M chars → ~250k tokens > 175k limit
     result = tr.generate_summary(long_text, 1)
@@ -332,14 +265,14 @@ def test_generate_summary_skips_too_long_text(monkeypatch):
 
 def test_generate_summary_dynamic_max_tokens_by_type(monkeypatch):
     """generate_summary uses different max_tokens per summary type."""
-    monkeypatch.setattr(tr, "get_claude_api_key", lambda: "key")
+    monkeypatch.setattr(tr, "get_api_key", lambda: "key")
 
     captured = {}
 
     class Resp:
         status_code = 200
         def json(self):
-            return {"content": [{"type": "text", "text": "summary"}]}
+            return {"choices": [{"message": {"content": "summary"}, "finish_reason": "stop"}]}
 
     def mock_post(url, *args, **kwargs):
         captured["json"] = kwargs.get("json", {})

@@ -56,7 +56,7 @@ def test_run_transcription_with_progress_returns_transcript_path(monkeypatch, tm
 
 def test_generate_summary_artifact_creates_markdown_file(monkeypatch, tmp_path):
     monkeypatch.setattr(ts, "generate_summary", lambda text, summary_type, api_key=None: "summary body")
-    monkeypatch.setattr(ts, "get_claude_api_key", lambda: "test-key")
+    monkeypatch.setattr(ts, "get_api_key", lambda: "test-key")
 
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
@@ -85,7 +85,7 @@ def test_generate_custom_analysis_artifact_creates_markdown_file(monkeypatch, tm
         "generate_custom_analysis",
         lambda text, prompt, api_key=None: f"result for {prompt}",
     )
-    monkeypatch.setattr(ts, "get_claude_api_key", lambda: "test-key")
+    monkeypatch.setattr(ts, "get_api_key", lambda: "test-key")
 
     import asyncio
     from concurrent.futures import ThreadPoolExecutor
@@ -153,3 +153,64 @@ def test_run_transcription_with_progress_survives_a_failed_status_edit(monkeypat
     ))
 
     assert result == str(tmp_path / "audio_transcript.md")
+
+
+def test_generate_speaker_labels_artifact_writes_named_transcript(monkeypatch, tmp_path):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    from bot import speakers
+    from bot.transcription_providers import SpeakerTurn
+
+    transcript = tmp_path / "talk_transcript.md"
+    transcript.write_text("# Talk\n\nPytanie? Odpowiedź.", encoding="utf-8")
+    speakers.save_speaker_parts(str(transcript), [speakers.SpeakerPart(part=1, turns=(
+        SpeakerTurn(0, 0.0, 1.0, "Jak się czujesz, Karolino?"),
+        SpeakerTurn(1, 1.0, 2.0, "Dobrze."),
+    ))])
+    identification = speakers.SpeakerIdentification(people=(
+        speakers.IdentifiedPerson(("P1:S0",), None, "prowadząca", "medium", "Zadaje pytania."),
+        speakers.IdentifiedPerson(("P1:S1",), "Karolina", None, "high", "Ktoś mówi do niej po imieniu."),
+    ), unmatched_hints=())
+    calls = {}
+
+    def fake_identify(parts, hints, *, api_key):
+        calls.update(parts=parts, hints=hints, api_key=api_key)
+        return identification
+
+    monkeypatch.setattr(ts, "identify_speakers", fake_identify)
+
+    result = asyncio.run(ts.generate_speaker_labels_artifact(
+        transcript_path=str(transcript),
+        title="Talk",
+        sanitized_title="Talk",
+        hints="Karolina",
+        output_dir=str(tmp_path),
+        executor=ThreadPoolExecutor(max_workers=1),
+        api_key="test-key",
+        artifact_id="ab12",
+    ))
+
+    assert calls["hints"] == "Karolina"
+    assert calls["api_key"] == "test-key"
+    assert result.labeled_path == str(tmp_path / "Talk_speakers_ab12.md")
+    content = Path(result.labeled_path).read_text(encoding="utf-8")
+    assert content.startswith("# Talk – transkrypcja z rozmówcami\n")
+    assert "Prowadząca: Jak się czujesz, Karolino?\n\nKarolina: Dobrze." in content
+    assert "• Karolina (pewność: wysoka)" in result.summary_text
+
+
+def test_generate_speaker_labels_artifact_returns_none_without_speaker_data(monkeypatch, tmp_path):
+    import asyncio
+    from concurrent.futures import ThreadPoolExecutor
+
+    transcript = tmp_path / "talk_transcript.md"
+    transcript.write_text("# Talk\n\nTekst.", encoding="utf-8")
+    monkeypatch.setattr(ts, "identify_speakers", lambda *a, **k: (_ for _ in ()).throw(AssertionError("no call")))
+
+    result = asyncio.run(ts.generate_speaker_labels_artifact(
+        transcript_path=str(transcript), title="Talk", sanitized_title="Talk", hints="",
+        output_dir=str(tmp_path), executor=ThreadPoolExecutor(max_workers=1), api_key="test-key",
+    ))
+
+    assert result is None
