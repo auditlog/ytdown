@@ -95,6 +95,7 @@ folders, retaining files only when handed to the pending archive workflow.
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
 | X (Twitter) | x.com, twitter.com, mobile.twitter.com | Video z tweetów. Treści oznaczone jako Sensitive wymagają cookies.txt |
 | Spotify | open.spotify.com | Odcinki podcastów oraz linki do utworów, albumów i playlist. Muzyka jest dopasowywana do oficjalnych publikacji YT Music/YouTube; natywne wideo podcastów wymaga cookies Spotify |
+| TOK FM | audycje.tokfm.pl | Odcinki audycji (link audycje.tokfm.pl/podcast/…). Płatne odcinki wymagają cookies konta premium w cookies.txt; linki do całych audycji nie są obsługiwane |
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik
@@ -278,6 +279,9 @@ Plik `cookies.txt` jest potrzebny gdy:
 - Instagram wymaga logowania do treści
 - LinkedIn wymaga logowania do postów video
 - TikTok blokuje pobieranie bez sesji
+- TOK FM: odcinki premium (wystarczy ciasteczko PHPSESSID z domeny .tokfm.pl)
+
+Przy podmianie `cookies.txt` (np. po odświeżeniu cookies YouTube) zachowaj linie z domeny `.tokfm.pl`. Bez nich bot przestanie pobierać płatne odcinki TOK FM i zgłosi wygaśnięcie sesji.
 
 Dodatkowo:
 - zdjęcia i karuzele z Instagrama wymagają zainstalowanego `instaloader`
