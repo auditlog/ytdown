@@ -21,7 +21,7 @@ from bot.session_context import (
     set_session_context_value as _set_session_context_value,
 )
 from bot.transcription_limits import SUMMARY_DURATION_LIMIT_MIN
-from bot.downloader_metadata import get_video_info
+from bot.downloader_metadata import explain_info_failure, get_video_info
 from bot.downloader_subtitles import (
     download_subtitles,
     get_available_subtitles,
@@ -58,9 +58,7 @@ async def show_summary_options(update: Update, context: ContextTypes.DEFAULT_TYP
         media_name = get_media_label(
             _get_session_context_value(context, chat_id, "platform", legacy_key="platform")
         )
-        await query.edit_message_text(
-            f"Wystąpił błąd podczas pobierania informacji o {media_name}."
-        )
+        await query.edit_message_text(explain_info_failure(url, media_name))
         return
 
     title = info.get("title", "Nieznany tytuł")
@@ -316,7 +314,7 @@ async def show_subtitle_source_menu(update: Update, context: ContextTypes.DEFAUL
     info = get_video_info(url)
     if not info:
         media_name = get_media_label(_get_session_context_value(context, chat_id, "platform", legacy_key="platform"))
-        await query.edit_message_text(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
+        await query.edit_message_text(explain_info_failure(url, media_name))
         return
 
     title = info.get("title", "Nieznany tytuł")

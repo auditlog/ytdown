@@ -64,3 +64,18 @@ def test_get_video_info_still_returns_none_on_failure(monkeypatch):
     _install_fake_ytdl(monkeypatch, error=AGE_ERROR)
 
     assert get_video_info("https://youtube.com/watch?v=test") is None
+
+
+def test_explain_info_failure_reports_the_classified_reason(monkeypatch):
+    import bot.downloader_metadata as metadata
+
+    expired = (
+    "ERROR: [tokfm] 200878: TOK FM premium session missing or expired; "
+    "refresh TOK FM cookies (access check returned HTTP 200)"
+    )
+    monkeypatch.setattr(metadata, "get_video_info_with_error", lambda url: (None, expired))
+
+    message = metadata.explain_info_failure("https://audycje.tokfm.pl/podcast/200878", "odcinku")
+
+    assert message.startswith("Nie udało się pobrać informacji o odcinku.")
+    assert "Sesja TOK FM wygasła" in message

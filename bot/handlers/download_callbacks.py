@@ -63,7 +63,7 @@ from bot.services.archive_service import (
 )
 from bot.transcription_limits import SUMMARY_DURATION_LIMIT_MIN
 from bot.downloader_media import COOKIES_FILE, download_photo, download_thumbnail
-from bot.downloader_metadata import get_video_info
+from bot.downloader_metadata import explain_info_failure, get_video_info
 from bot.downloader_subtitles import get_available_subtitles
 from bot.downloader_validation import sanitize_filename
 from bot.services.download_service import (
@@ -427,7 +427,10 @@ async def download_file(
             return
 
         if not plan:
-            await finish_status(f"Wystąpił błąd podczas pobierania informacji o {media_name}.")
+            message = await asyncio.get_event_loop().run_in_executor(
+                _executor, explain_info_failure, url, media_name
+            )
+            await finish_status(message)
             return
 
         info = plan.info

@@ -2136,3 +2136,40 @@ def test_spotify_video_transcription_failure_shows_the_concrete_failure_text(mon
     messages = [c.args[0] for c in update.callback_query.edit_message_text.await_args_list]
     assert messages[-1] == TRANSCRIPTION_FAILED_TEXT
     context.bot.send_document.assert_not_awaited()
+
+
+def _run_menu_with_expired_tokfm_session(monkeypatch, handler_name):
+    # Metadata fetch fails because the TOK FM session expired after the menu was shown.
+    from bot import downloader_metadata
+    from bot.handlers import transcription_callbacks as trc
+
+    expired = (
+    "ERROR: [tokfm] 200878: TOK FM premium session missing or expired; "
+    "refresh TOK FM cookies (access check returned HTTP 200)"
+    )
+    # telegram_callbacks re-syncs its own get_video_info into transcription_callbacks
+    # on every wrapped call, so both modules are patched.
+    monkeypatch.setattr(tc, "get_video_info", lambda url, **kwargs: None)
+    monkeypatch.setattr(trc, "get_video_info", lambda url, **kwargs: None)
+    monkeypatch.setattr(
+        downloader_metadata, "get_video_info_with_error", lambda url, **kwargs: (None, expired)
+    )
+    update, context = _make_update("transcribe", chat_id=92), _make_context()
+    context.user_data["platform"] = "tokfm"
+
+    asyncio.run(getattr(trc, handler_name)(update, context, "https://audycje.tokfm.pl/podcast/200878"))
+
+    final_call = update.callback_query.edit_message_text.await_args_list[-1]
+    return final_call.args[0] if final_call.args else final_call.kwargs["text"]
+
+
+def test_subtitle_menu_explains_why_media_info_failed(monkeypatch):
+    text = _run_menu_with_expired_tokfm_session(monkeypatch, "show_subtitle_source_menu")
+
+    assert "Sesja TOK FM wygasła" in text
+
+
+def test_summary_options_explain_why_media_info_failed(monkeypatch):
+    text = _run_menu_with_expired_tokfm_session(monkeypatch, "show_summary_options")
+
+    assert "Sesja TOK FM wygasła" in text
