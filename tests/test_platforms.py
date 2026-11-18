@@ -77,7 +77,7 @@ import bot.platforms as platforms_pkg
 
 def test_platforms_registry_is_non_empty_tuple():
     assert isinstance(platforms_pkg.PLATFORMS, tuple)
-    assert len(platforms_pkg.PLATFORMS) == 8
+    assert len(platforms_pkg.PLATFORMS) == 9
 
 
 def test_all_platforms_have_unique_names():
@@ -123,6 +123,7 @@ def test_no_overlapping_domains_across_platforms():
         ("castbox.fm", "castbox"),
         ("www.castbox.fm", "castbox"),
         ("open.spotify.com", "spotify"),
+        ("audycje.tokfm.pl", "tokfm"),
     ],
 )
 def test_detect_by_domain_matches_known_hosts(host, expected_name):
@@ -169,17 +170,41 @@ def test_x_platform_has_tiktok_style_menu_flags():
     assert x_config.is_podcast is False
 
 
-def test_cookies_hint_set_for_platforms_requiring_cookies_except_podcasts():
+def test_cookies_hint_set_for_every_platform_requiring_cookies():
     for p in platforms_pkg.PLATFORMS:
-        if p.is_podcast:
-            assert p.cookies_hint is None, (
-                f"Podcast platform {p.name!r} should not have cookies_hint"
-            )
-            continue
         if p.requires_cookies:
-            assert p.cookies_hint is not None, (
+            assert p.cookies_hint, (
                 f"Platform {p.name!r} marked requires_cookies but has no hint"
             )
+
+
+def test_podcast_platforms_without_cookies_have_no_hint():
+    for p in platforms_pkg.PLATFORMS:
+        if p.is_podcast and not p.requires_cookies:
+            assert p.cookies_hint is None, (
+                f"Podcast platform {p.name!r} needs no cookies, so it should have no hint"
+            )
+
+
+def test_tokfm_is_a_cookie_podcast_platform():
+    from bot.handlers.common_ui import build_main_keyboard
+    from bot.security_policy import detect_platform, get_media_label, validate_url
+
+    url = "https://audycje.tokfm.pl/podcast/200878,Slug"
+    assert validate_url(url)
+    assert detect_platform(url) == "tokfm"
+    assert get_media_label("tokfm") == "odcinku"
+    config = platforms_pkg.get_platform("tokfm")
+    assert (config.display_name, config.is_podcast, config.requires_cookies) == (
+        "TOK FM",
+        True,
+        True,
+    )
+    callbacks = [b.callback_data for row in build_main_keyboard("tokfm") for b in row]
+    assert "dl_audio_mp3" in callbacks
+    assert "transcribe" in callbacks
+    assert "dl_audio_flac" not in callbacks
+    assert "time_range" not in callbacks
 
 
 def test_build_main_keyboard_reads_flags_from_registry():

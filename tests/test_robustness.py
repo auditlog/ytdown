@@ -15,7 +15,7 @@ import main as app_main
 from bot import telegram_callbacks as tc
 from bot.handlers import media_extras_callbacks as mec
 from bot.handlers.common_ui import build_main_keyboard, send_long_message
-from bot.platforms import PLATFORMS
+from bot.platforms import PLATFORMS, get_platform
 from tests.telegram_callbacks_support import _make_context, _make_update
 
 # Handler entry points handle_callback may delegate to for main-keyboard buttons.
@@ -41,7 +41,8 @@ ROUTED_HANDLERS = [
 def test_every_main_keyboard_button_is_handled(monkeypatch, platform, large_file):
     keyboard = build_main_keyboard(platform, large_file=large_file)
     callbacks = [button.callback_data for row in keyboard for button in row]
-    assert "thumbnail" in callbacks or platform in {"spotify", "castbox"}
+    # Podcast menus (Castbox, Spotify, TOK FM) have no thumbnail button by design.
+    assert "thumbnail" in callbacks or get_platform(platform).is_podcast
 
     monkeypatch.setattr(tc, "check_rate_limit", lambda _user_id: True)
     for data in callbacks:

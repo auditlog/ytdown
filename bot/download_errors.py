@@ -15,6 +15,19 @@ from __future__ import annotations
 # NOTE: "sign in to confirm ..." covers two distinct causes (age gate vs bot check),
 # so both variants are matched explicitly rather than on the shared prefix.
 _ERROR_PATTERNS: list[tuple[tuple[str, ...], str]] = [
+    # TOK FM phrases come from yt_dlp_plugins/extractor/tokfm.py (SESSION_ERROR and
+    # NON_EPISODE_ERROR); test_tokfm_messages_match_plugin_phrases keeps them in sync.
+    (
+        ("tok fm premium session missing or expired",),
+        "Sesja TOK FM wygasła albo na serwerze brakuje cookies TOK FM. Zaloguj się "
+        "na audycje.tokfm.pl w przeglądarce, wyeksportuj cookies i dopisz linie "
+        "z domeny .tokfm.pl do cookies.txt na serwerze.",
+    ),
+    (
+        ("tok fm: only episode links are supported",),
+        "TOK FM: wyślij link do konkretnego odcinka (audycje.tokfm.pl/podcast/…). "
+        "Linki do całych audycji i innych stron TOK FM nie są obsługiwane.",
+    ),
     (
         ("sign in to confirm your age", "age-restricted", "inappropriate for some users"),
         "Materiał jest objęty ograniczeniem wiekowym. YouTube wymaga zalogowanego "

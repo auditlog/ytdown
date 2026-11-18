@@ -504,6 +504,9 @@ def test_download_file_registers_and_unregisters_job(tmp_path, monkeypatch):
     monkeypatch.setattr(
         download_callbacks, "prepare_download_plan", lambda **kw: None,
     )
+    # The failure path re-fetches metadata to explain the error; keep it offline.
+    from bot import downloader_metadata
+    monkeypatch.setattr(downloader_metadata, "get_video_info_with_error", lambda url: (None, None))
 
     update = mock.MagicMock()
     update.callback_query = mock.MagicMock()
@@ -991,3 +994,28 @@ def test_summary_progress_message_keeps_the_stop_button(tmp_path, monkeypatch):
     calls = update.callback_query.edit_message_text.await_args_list
     summarising = [c for c in calls if "Generuję podsumowanie AI" in c.args[0]]
     assert summarising and _markup_of(summarising[0]) is not None
+
+
+def test_download_file_explains_why_media_info_failed(tmp_path, monkeypatch):
+    # The format menu was built while the TOK FM session was valid; by the time the
+    # button is pressed it has expired, so the plan step gets no metadata.
+    from bot import downloader_metadata
+    from bot.handlers import download_callbacks as dc
+
+    expired = (
+    "ERROR: [tokfm] 200878: TOK FM premium session missing or expired; "
+    "refresh TOK FM cookies (access check returned HTTP 200)"
+    )
+    monkeypatch.setattr(dc, "DOWNLOAD_PATH", str(tmp_path))
+    monkeypatch.setattr(dc, "prepare_download_plan", lambda **kw: None)
+    monkeypatch.setattr(
+        downloader_metadata, "get_video_info_with_error", lambda url, **kwargs: (None, expired)
+    )
+    update, context = _make_update("dl_audio_mp3", chat_id=91), _make_context()
+    context.user_data["platform"] = "tokfm"
+
+    asyncio.run(dc.download_file(update, context, "audio", "mp3", "https://audycje.tokfm.pl/podcast/200878"))
+
+    final_call = update.callback_query.edit_message_text.await_args_list[-1]
+    final_text = final_call.args[0] if final_call.args else final_call.kwargs["text"]
+    assert "Sesja TOK FM wygasła" in final_text

@@ -19,6 +19,7 @@ from bot.platforms import (
     linkedin,
     spotify,
     tiktok,
+    tokfm,
     vimeo,
     x,
     youtube,
@@ -42,6 +43,7 @@ PLATFORMS: tuple[PlatformConfig, ...] = (
     instagram.CONFIG,
     castbox.CONFIG,
     spotify.CONFIG,
+    tokfm.CONFIG,
 )
 
 

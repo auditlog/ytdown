@@ -22,6 +22,14 @@ PRIVATE_VIDEO = "ERROR: [youtube] abc: Private video. Sign in if you've been gra
 REMOVED_VIDEO = "ERROR: [youtube] abc: Video unavailable. This video has been removed by the uploader"
 GEO_BLOCKED = "ERROR: [youtube] abc: The uploader has not made this video available in your country"
 NETWORK_FAILURE = "ERROR: Unable to download webpage: <urlopen error [Errno -3] Temporary failure in name resolution>"
+TOKFM_SESSION = (
+    "ERROR: [tokfm] 200878: TOK FM premium session missing or expired; "
+    "refresh TOK FM cookies (access check returned HTTP 200)"
+)
+TOKFM_NON_EPISODE = (
+    "ERROR: [tokfm:non-episode] TOK FM: only episode links are supported "
+    "(audycje.tokfm.pl/podcast/...)"
+)
 
 
 def test_classifies_age_restriction():
@@ -98,3 +106,35 @@ def test_message_falls_back_to_generic_text_when_error_is_missing():
     message = build_media_error_message("utworze", None)
 
     assert message == "Wystąpił błąd podczas pobierania informacji o utworze."
+
+
+def test_classifies_tokfm_expired_session():
+    reason = classify_download_error(TOKFM_SESSION)
+
+    assert reason is not None
+    assert "TOK FM" in reason
+    assert "cookies" in reason
+
+
+def test_classifies_tokfm_non_episode_link():
+    reason = classify_download_error(TOKFM_NON_EPISODE)
+
+    assert reason is not None
+    assert "/podcast/" in reason
+
+
+def test_tokfm_messages_match_plugin_phrases():
+    # The plugin owns the English phrases; this pins that bot/download_errors.py
+    # still recognises them if either side is reworded.
+    from yt_dlp_plugins.extractor.tokfm import NON_EPISODE_ERROR, SESSION_ERROR
+
+    assert classify_download_error(SESSION_ERROR) is not None
+    assert classify_download_error(SESSION_ERROR) == classify_download_error(TOKFM_SESSION)
+    assert classify_download_error(NON_EPISODE_ERROR) is not None
+    assert classify_download_error(NON_EPISODE_ERROR) == classify_download_error(TOKFM_NON_EPISODE)
+
+
+def test_tokfm_media_error_message_uses_episode_label():
+    message = build_media_error_message("odcinku", TOKFM_SESSION)
+
+    assert message.startswith("Nie udało się pobrać informacji o odcinku.")
