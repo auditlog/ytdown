@@ -17,6 +17,7 @@ from bot.security_limits import FFMPEG_TIMEOUT
 from bot.security_throttling import RATE_LIMIT_MESSAGE, check_rate_limit
 from bot.services.auth_service import store_pending_action
 from bot.session_context import (
+    clear_session_context_value as _clear_session_context_value,
     get_auth_state as _get_auth_state,
     set_session_context_value as _set_session_context_value,
 )
@@ -113,6 +114,7 @@ async def extracted_process_audio_file(
     if not audio_info:
         await message.reply_text("Nie rozpoznano pliku audio.")
         return
+    _clear_session_context_value(context, chat_id, "video_file_path", legacy_key="video_file_path")
 
     file_size = audio_info.get("file_size") or 0
     file_size_mb = file_size / (1024 * 1024) if file_size else 0

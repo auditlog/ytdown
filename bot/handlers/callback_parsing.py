@@ -117,6 +117,7 @@ def parse_spotify_video_callback(data):
 # later, the per-chat concurrency guard. Navigation (menus, paging, back,
 # cancel, stop_*, time_range*, formats, noop, ...) must never be blocked.
 _WORK_CALLBACK_PREFIXES = (
+    "media_import_", "media_upload_", "media_analyze_", "media_delete_",
     "dl_",
     "spv_",
     "thumbnail",

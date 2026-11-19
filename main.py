@@ -46,6 +46,10 @@ from bot.handlers.inbound_media import (
 from bot.telegram_callbacks import handle_callback
 from bot.telegram_commands import stop_command
 from bot.spotify_oauth import start_spotify_oauth_callback_server
+from bot.handlers.media_studio import (
+    studio_command, materials_command, save_command, montage_command,
+    analyze_command, clips_command, radar_command, run_radar_tick,
+)
 
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
@@ -64,6 +68,13 @@ def configure_logging() -> None:
 
 
 USER_COMMANDS = [
+    BotCommand("studio", "Montaż, analiza obrazu, klipy i radar tematów"),
+    BotCommand("materialy", "Wybierz zapisane nagrania"),
+    BotCommand("zapisz", "Zapisz nagranie do montażu lub klipów"),
+    BotCommand("montaz", "Zmontuj wypowiedzi na wybrany temat"),
+    BotCommand("analizuj", "Przeanalizuj galerię lub obraz z filmu"),
+    BotCommand("klipy", "Przygotuj krótkie filmy z napisami"),
+    BotCommand("radar", "Obserwuj nowe treści na wybrany temat"),
     BotCommand("start", "Rozpocznij korzystanie z bota"),
     BotCommand("help", "Pomoc i instrukcje"),
     BotCommand("stop", "Zatrzymaj trwające operacje"),
@@ -139,6 +150,8 @@ def build_application(runtime=None):
         attach_runtime(application, runtime)
 
     application.job_queue.run_once(lambda context: set_bot_commands(application), when=1)
+    application.job_queue.run_repeating(run_radar_tick, interval=4 * 3600, first=60,
+                                         name="media-topic-radar")
     return application
 
 
@@ -184,6 +197,12 @@ def register_handlers(application) -> None:
     NEW_MESSAGES = filters.UpdateType.MESSAGE
 
     application.add_handler(CommandHandler("start", start, filters=NEW_MESSAGES))
+    for command, handler in (
+        ("studio", studio_command), ("materialy", materials_command), ("zapisz", save_command),
+        ("montaz", montage_command), ("analizuj", analyze_command), ("klipy", clips_command),
+        ("radar", radar_command),
+    ):
+        application.add_handler(CommandHandler(command, handler, filters=NEW_MESSAGES))
     application.add_handler(CommandHandler("help", help_command, filters=NEW_MESSAGES))
     application.add_handler(CommandHandler("status", status_command, filters=NEW_MESSAGES))
     application.add_handler(CommandHandler("history", history_command, filters=NEW_MESSAGES))

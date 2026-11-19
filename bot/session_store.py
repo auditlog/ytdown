@@ -107,6 +107,8 @@ class SessionState:
     tiktok_gallery: dict[str, Any] | None = None
     audio_file_path: str | None = None
     audio_file_title: str | None = None
+    video_file_path: str | None = None
+    media_selection: list[str] | None = None
     subtitle_pending: dict[str, Any] | None = None
     transcript_contexts: dict[str, TranscriptContext] | None = None
     pending_transcript_prompt: PendingTranscriptPrompt | None = None
@@ -250,6 +252,8 @@ class SessionStore:
             and session.tiktok_gallery is None
             and session.audio_file_path is None
             and session.audio_file_title is None
+            and session.video_file_path is None
+            and session.media_selection is None
             and session.subtitle_pending is None
             and session.transcript_contexts is None
             and session.pending_transcript_prompt is None

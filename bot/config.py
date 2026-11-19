@@ -31,6 +31,7 @@ DEFAULT_CONFIG = {
     "TELEGRAM_BOT_TOKEN": "",
     # One key for every model: Scribe transcription and Claude text models via OpenRouter.
     "OPENROUTER_API_KEY": "",
+    "MEDIA_VISION_MODEL": "anthropic/claude-haiku-4.5",
     "PIN_CODE": "12345678",
     "ADMIN_CHAT_ID": "",
     "SPOTIFY_CLIENT_ID": "",

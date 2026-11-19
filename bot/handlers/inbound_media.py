@@ -52,6 +52,7 @@ from bot.services.spotify_video_service import (
 )
 from bot.spotify_video import SpotifyVideoError
 from bot.tiktok import TikTokError, get_tiktok_gallery, resolve_tiktok_url
+from bot.handlers.media_studio import source_tag
 from bot.handlers.common_ui import (
     build_instagram_photo_keyboard as _build_instagram_photo_keyboard,
     build_main_keyboard as _build_main_keyboard,
@@ -373,6 +374,8 @@ async def extracted_process_playlist_link(update: Update, context: ContextTypes.
 
     _set_session_value(context, chat_id, "playlist_data", playlist_info, user_playlist_data)
     _set_session_value(context, chat_id, "current_url", url, user_urls)
+    _clear_session_context_value(context, chat_id, "video_file_path", legacy_key="video_file_path")
+    _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
     msg, reply_markup = _build_playlist_message(playlist_info, context=context)
     await progress_message.edit_text(msg, reply_markup=reply_markup, parse_mode="Markdown")
 
@@ -627,6 +630,8 @@ async def extracted_process_spotify_collection(
 async def extracted_process_youtube_link(update: Update, context: ContextTypes.DEFAULT_TYPE, url):
     """Processes a media link after PIN authorization."""
     chat_id = update.effective_chat.id
+    _clear_session_context_value(context, chat_id, "video_file_path", legacy_key="video_file_path")
+    _clear_session_context_value(context, chat_id, "audio_file_path", legacy_key="audio_file_path")
 
     if "castbox.fm" in url:
         with ThreadPoolExecutor(max_workers=1) as executor:
@@ -665,7 +670,7 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
                 f"{gallery['title'][:800]}\n\nZdjęcia: {count}. Wybierz opcję:",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton(
                     label, callback_data=f"dl_tiktok_photos_{gallery['id']}",
-                )]]),
+                )], [InlineKeyboardButton("Analizuj zdjęcia", callback_data=f"media_analyze_{source_tag(url)}")]]),
             )
             return
         await progress_message.delete()
@@ -719,6 +724,7 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
                     )
                     reply_markup = InlineKeyboardMarkup(
                         _build_instagram_photo_keyboard(photos, videos)
+                        + [[InlineKeyboardButton("Analizuj zdjęcia", callback_data=f"media_analyze_{source_tag(url)}")]]
                     )
                     title = escape_md(ig_info.get("title", "Instagram post"))
                     parts = []
@@ -747,7 +753,8 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
                     legacy_key="ig_carousel",
                 )
                 reply_markup = InlineKeyboardMarkup(
-                    [[InlineKeyboardButton("Pobierz zdjęcie", callback_data="dl_ig_photos")]]
+                    [[InlineKeyboardButton("Pobierz zdjęcie", callback_data="dl_ig_photos")],
+                     [InlineKeyboardButton("Analizuj zdjęcia", callback_data=f"media_analyze_{source_tag(url)}")]]
                 )
                 title = escape_md(ig_info.get("title", "Instagram photo"))
                 await progress_message.edit_text(
@@ -807,6 +814,10 @@ async def extracted_process_youtube_link(update: Update, context: ContextTypes.D
         keyboard = _build_main_keyboard(platform)
 
     time_range = _get_session_value(context, chat_id, "time_range", user_time_ranges)
+    keyboard.append([
+        InlineKeyboardButton("Zapisz audio do montażu", callback_data=f"media_import_audio_{source_tag(url)}"),
+        InlineKeyboardButton("Zapisz wideo do klipów", callback_data=f"media_import_video_{source_tag(url)}"),
+    ])
     time_range_info = f"\n✂️ Zakres: {time_range['start']} - {time_range['end']}" if time_range else ""
 
     # Explain source quality in both the regular and large-file menus.

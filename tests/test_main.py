@@ -15,7 +15,8 @@ from bot.runtime import AppRuntime
 from bot.session_store import SecurityStore, SessionStore
 
 
-USER_COMMANDS = ["start", "help", "stop", "history", "logout"]
+USER_COMMANDS = ["studio", "materialy", "zapisz", "montaz", "analizuj", "klipy", "radar",
+                 "start", "help", "stop", "history", "logout"]
 ADMIN_ONLY_COMMANDS = ["status", "cleanup", "users", "spotify_login", "spotify_logout"]
 
 
