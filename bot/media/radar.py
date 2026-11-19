@@ -11,6 +11,7 @@ import secrets
 import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
+from xml.parsers import expat
 from urllib.parse import urlparse
 
 import yt_dlp
@@ -23,6 +24,29 @@ from bot.security_policy import detect_platform, validate_url
 
 MAX_WATCHES = 5
 DAILY_ANALYSES = 6
+
+
+def _refuse_entity_declarations(raw: bytes) -> None:
+    """Raise MediaError if a feed declares any XML entity, whatever its encoding.
+
+    Feeds come from arbitrary sites. ElementTree never fetches external entities,
+    but internal entity declarations can still blow a small document up in memory.
+    Real RSS/Atom feeds never declare entities, so a pre-pass with expat refuses
+    them; the declaration handler fires before any entity is expanded. A byte
+    search would miss UTF-16 documents, which expat decodes on its own.
+    """
+
+    def refuse(*_args):
+        raise MediaError("Ten kanał zawiera deklaracje encji XML, których radar nie obsługuje.")
+
+    checker = expat.ParserCreate()
+    checker.EntityDeclHandler = refuse
+    checker.UnparsedEntityDeclHandler = refuse
+    try:
+        checker.Parse(raw, True)
+    except expat.ExpatError:
+        # Malformed documents are reported by the real parse in feed_entries().
+        pass
 
 
 def feed_entries(url: str) -> list[dict]:
@@ -54,6 +78,7 @@ def feed_entries(url: str) -> list[dict]:
                 )
         return result[:10]
     raw, _ = fetch_public(url)
+    _refuse_entity_declarations(raw)
     try:
         root = ET.fromstring(raw)
     except ET.ParseError:

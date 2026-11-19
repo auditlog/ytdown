@@ -347,6 +347,35 @@ def test_feed_parser_keeps_public_podcast_transcript(monkeypatch):
     assert result[0]["audio"] == "https://example.test/audio.mp3"
 
 
+def test_feed_parser_rejects_xml_entity_declarations(monkeypatch):
+    # Entity-expansion payload; real feeds never declare XML entities.
+    xml = b"""<?xml version="1.0"?>
+<!DOCTYPE rss [<!ENTITY a "aaaaaaaaaa"><!ENTITY b "&a;&a;&a;&a;&a;&a;&a;&a;&a;&a;">]>
+<rss><channel><item><guid>x</guid><title>&b;</title></item></channel></rss>"""
+    monkeypatch.setattr(radar, "fetch_public", lambda url: (xml, url))
+    with pytest.raises(MediaError):
+        radar.feed_entries("https://example.test/feed")
+
+
+def test_feed_parser_rejects_entity_declarations_in_utf16(monkeypatch):
+    # A byte-level search for "<!ENTITY" misses UTF-16, which the XML parser still reads.
+    xml = (
+        '<?xml version="1.0" encoding="UTF-16"?>'
+        '<!DOCTYPE rss [<!ENTITY a "aaaaaaaaaa">]>'
+        "<rss><channel><item><guid>x</guid><title>&a;</title></item></channel></rss>"
+    ).encode("utf-16")
+    monkeypatch.setattr(radar, "fetch_public", lambda url: (xml, url))
+    with pytest.raises(MediaError):
+        radar.feed_entries("https://example.test/feed")
+
+def test_feed_parser_accepts_rss_091_doctype_without_entities(monkeypatch):
+    xml = b"""<?xml version="1.0"?>
+<!DOCTYPE rss PUBLIC "-//Netscape Communications//DTD RSS 0.91//EN" "http://my.netscape.com/publish/formats/rss-0.91.dtd">
+<rss version="0.91"><channel><item><title>Episode</title><link>https://example.test/one</link></item></channel></rss>"""
+    monkeypatch.setattr(radar, "fetch_public", lambda url: (xml, url))
+    assert radar.feed_entries("https://example.test/feed")[0]["title"] == "Episode"
+
+
 def test_watch_starts_after_existing_entries_and_daily_quota_is_durable(library, monkeypatch):
     monkeypatch.setattr(
         radar,
