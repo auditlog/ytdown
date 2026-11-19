@@ -90,12 +90,18 @@ folders, retaining files only when handed to the pending archive workflow.
 |-----------|--------|-------|
 | YouTube | youtube.com, youtu.be, music.youtube.com | Pełne wsparcie (video, audio, napisy, zakres czasowy) |
 | Vimeo | vimeo.com, player.vimeo.com | Video, audio, transkrypcja |
-| TikTok | tiktok.com, vm.tiktok.com, m.tiktok.com | Uproszczone menu (krótkie video) |
+| TikTok | tiktok.com, vm.tiktok.com, vt.tiktok.com, m.tiktok.com | Videos and photo galleries, including short share links |
 | Instagram | instagram.com | Reels i posty video przez yt-dlp. Zdjęcia i karuzele wymagają dodatkowo `instaloader` oraz `cookies.txt` |
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
 | X (Twitter) | x.com, twitter.com, mobile.twitter.com | Video z tweetów. Treści oznaczone jako Sensitive wymagają cookies.txt |
 | Spotify | open.spotify.com | Odcinki podcastów oraz linki do utworów, albumów i playlist. Muzyka jest dopasowywana do oficjalnych publikacji YT Music/YouTube; natywne wideo podcastów wymaga cookies Spotify |
 | TOK FM | audycje.tokfm.pl | Odcinki audycji (link audycje.tokfm.pl/podcast/…). Płatne odcinki wymagają cookies konta premium w cookies.txt; linki do całych audycji nie są obsługiwane |
+
+TikTok photo posts show a **Pobierz zdjęcia** button. Photos are sent in their
+original order as Telegram albums of up to 10 images; a single remaining image
+is sent separately. Images are converted to JPEG for Telegram, with bounded
+downloads and temporary-file cleanup. Existing TikTok cookies in `cookies.txt`
+are used when available. No additional package or online downloader is required.
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik

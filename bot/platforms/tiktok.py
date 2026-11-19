@@ -5,7 +5,7 @@ from bot.platforms.base import PlatformConfig
 CONFIG = PlatformConfig(
     name="tiktok",
     display_name="TikTok",
-    domains=("tiktok.com", "m.tiktok.com", "vm.tiktok.com"),
+    domains=("tiktok.com", "m.tiktok.com", "vm.tiktok.com", "vt.tiktok.com"),
     hide_flac=True,
     hide_time_range=True,
     is_podcast=False,

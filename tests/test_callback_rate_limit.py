@@ -13,6 +13,7 @@ from bot.security_throttling import RATE_LIMIT_TOAST
 WORK_CALLBACKS = [
     "dl_video_best", "dl_video_720p", "dl_video_137", "dl_audio_mp3",
     "dl_audio_flac", "dl_audio_format_140", "dl_ig_all", "dl_ig_photos",
+    "dl_tiktok_photos_7706467733575060769",
     "spv_video_720p", "spv_audio_m4a", "trim_dl", "thumbnail",
     "transcribe", "transcribe_summary", "summary_option_1",
     "audio_transcribe", "audio_transcribe_summary", "audio_summary_option_3",

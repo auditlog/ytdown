@@ -43,6 +43,7 @@ from bot.handlers.download_callbacks import (
     show_time_range_options as _extracted_show_time_range_options,
 )
 from bot.handlers.media_extras_callbacks import (
+    handle_tiktok_photo_download,
     _handle_instagram_download as _extracted_handle_instagram_download,
     _show_spotify_summary_options as _extracted_show_spotify_summary_options,
     handle_formats_list as _extracted_handle_formats_list,
@@ -231,6 +232,10 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, da
 
     if data.startswith("dl_ig_"):
         await _handle_instagram_download(update, context, url, data)
+        return
+
+    if data.startswith("dl_tiktok_photos_"):
+        await handle_tiktok_photo_download(update, context, url, data)
         return
 
     if data.startswith("dl_"):
