@@ -67,6 +67,79 @@ their partial output; completed results expire after 24 hours. The rpi5a service
 allows one active MCP job. Standard Telegram downloads use separate temporary
 folders, retaining files only when handed to the pending archive workflow.
 
+## Media studio (Telegram)
+
+The studio adds topic-based audio montages, visual analysis, captioned portrait
+clips and an opt-in topic radar. Start with `/studio` in Telegram.
+
+| Command | Behavior |
+| --- | --- |
+| `/zapisz [URL]` | Retain audio and timed source cues from the last link/upload or an explicit URL. |
+| `/zapisz video [URL]` | Retain video for visual analysis and clip rendering. |
+| `/materialy` | Select up to three recordings, mark reviewed material, retrieve gallery analysis IDs or delete sources. |
+| `/montaz 20 topic` | Select relevant original statements and assemble an MP3 of **at most** 20 minutes, with a source map. The duration is a ceiling, not a padding target. |
+| `/klipy topic` | Produce up to three 30–90 second 720 × 1280 clips with Polish captions and a source map. |
+| `/analizuj request` | Analyze the last TikTok/Instagram gallery, or 12 evenly spaced frames from a selected saved video. |
+| `/analizuj ID request` | Analyze a specific saved video; a gallery ID retrieves its existing analysis. IDs appear in `/materialy`. |
+| `/radar` | Show watch settings, source limitations and configuration instructions. |
+| `/stop` | Stop a queued/running studio operation. A provider request already in flight may finish before cancellation is observed. |
+
+AI selects existing cue IDs; the server derives and validates cut times against
+the retained source. Montages contain the original audio. Clip captions are
+translated to Polish while retaining cue timing. Clips currently use a fixed
+center crop, without face tracking or manual reframing. Visual analysis handles
+all images in a gallery, up to 20; video analysis explicitly covers 12 sampled
+frames and can miss short events. Findings cite gallery pages or frame times.
+
+Sources are isolated by chat in `media_library/` (gitignored), survive restarts
+and expire after seven days. Limits: 16 sources per chat, 512 MiB/two hours per
+source, a 5 GiB shared library and a 2 GiB disk reserve. Generated outputs stay
+under 49 MiB for the Bot API. Temporary render files are removed after delivery;
+abandoned workspaces expire after 24 hours. At most two studio operations run
+at once, and each chat has one active operation. Existing downloader limits are
+unchanged.
+
+Source captions take precedence over paid speech recognition. Transcription
+retains word timing and real chunk offsets in a `.timeline.json` sidecar; the
+studio stores validated sentence/cue timing in its manifest. Incomplete or
+untimed transcripts cannot be used for editing. Analysis, clip selection,
+translation and optional transcription use the existing OpenRouter key.
+`MEDIA_VISION_MODEL` optionally overrides the image model (default:
+`anthropic/claude-haiku-4.5`). No additional API key is needed.
+
+### Configure the topic radar
+
+The radar remains inactive until a user adds a watch. It supports YouTube
+channels/playlists and public HTTPS RSS/Atom feeds. For example:
+
+```text
+/radar dodaj https://www.youtube.com/@CHANNEL/videos | practical agent evaluation
+/radar dodaj https://example.org/podcast/feed.xml | battery recycling
+/radar sprawdz
+/radar pauza ID
+/radar wznow ID
+/radar usun ID
+```
+
+Replace the example addresses with actual sources. A new watch marks the current
+feed entries as seen and checks **future** entries every four hours. Limits are
+five watches and six paid novelty analyses per rolling 24 hours per chat. The
+radar compares new transcripts with previous source quotes and reviewed material
+(up to 100,000 characters of baseline). Notifications require a relevant new
+argument/evidence and a verbatim quote validated against the source. Novelty is
+an AI judgment relative to that bounded memory. Delivery failures are retried
+from a durable outbox without repeating the analysis.
+
+By default, sources without YouTube captions or RSS VTT transcripts are skipped
+and the reason appears in `/radar status`. To permit speech recognition for a
+particular watch, use `/radar ai ID on`; disable it with `/radar ai ID off`.
+Opt-in speech recognition is limited to **one recording of at most one hour per
+rolling 24 hours per chat** and uses paid OpenRouter transcription. Retries
+consume quota conservatively. Disabling a watch or losing authorization stops
+future analysis and notification delivery. Feed/media fetches reject private,
+loopback, link-local and Tailscale destinations, pin the resolved public address
+for TLS, revalidate redirects and enforce download limits.
+
 ## Funkcje
 
 ### Podstawowe
@@ -90,12 +163,18 @@ folders, retaining files only when handed to the pending archive workflow.
 |-----------|--------|-------|
 | YouTube | youtube.com, youtu.be, music.youtube.com | Pełne wsparcie (video, audio, napisy, zakres czasowy) |
 | Vimeo | vimeo.com, player.vimeo.com | Video, audio, transkrypcja |
-| TikTok | tiktok.com, vm.tiktok.com, m.tiktok.com | Uproszczone menu (krótkie video) |
+| TikTok | tiktok.com, vm.tiktok.com, vt.tiktok.com, m.tiktok.com | Videos and photo galleries, including short share links |
 | Instagram | instagram.com | Reels i posty video przez yt-dlp. Zdjęcia i karuzele wymagają dodatkowo `instaloader` oraz `cookies.txt` |
 | LinkedIn | linkedin.com | Posty video. Wymaga cookies.txt |
 | X (Twitter) | x.com, twitter.com, mobile.twitter.com | Video z tweetów. Treści oznaczone jako Sensitive wymagają cookies.txt |
 | Spotify | open.spotify.com | Odcinki podcastów oraz linki do utworów, albumów i playlist. Muzyka jest dopasowywana do oficjalnych publikacji YT Music/YouTube; natywne wideo podcastów wymaga cookies Spotify |
 | TOK FM | audycje.tokfm.pl | Odcinki audycji (link audycje.tokfm.pl/podcast/…). Płatne odcinki wymagają cookies konta premium w cookies.txt; linki do całych audycji nie są obsługiwane |
+
+TikTok photo posts show a **Pobierz zdjęcia** button. Photos are sent in their
+original order as Telegram albums of up to 10 images; a single remaining image
+is sent separately. Images are converted to JPEG for Telegram, with bounded
+downloads and temporary-file cleanup. Existing TikTok cookies in `cookies.txt`
+are used when available. No additional package or online downloader is required.
 
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik

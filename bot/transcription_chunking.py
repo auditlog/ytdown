@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import math
 import os
 import re
@@ -12,6 +13,11 @@ import subprocess
 from mutagen.mp3 import MP3
 
 from bot.security_limits import FFMPEG_TIMEOUT, FFMPEG_TRANSCODE_TIMEOUT, MAX_MP3_PART_SIZE_MB
+
+
+def _save_chunk_offsets(output_dir, offsets, *, accurate=True):
+    with open(os.path.join(output_dir, "chunk_offsets.json"), "w", encoding="utf-8") as file_obj:
+        json.dump({"accurate": accurate, "offsets": offsets}, file_obj)
 
 
 def find_silence_points(file_path, num_parts, min_duration=0.5, *, subprocess_module=subprocess):
@@ -94,6 +100,7 @@ def split_mp3(
         logging.info("%s is already smaller than %sMB. No splitting required.", file_path, max_size_mb)
         output_path = os.path.join(output_dir, os.path.basename(file_path))
         shutil.copy(file_path, output_path)
+        _save_chunk_offsets(output_dir, {os.path.basename(output_path): 0.0})
         return [output_path]
 
     if not file_path.lower().endswith(".mp3"):
@@ -110,15 +117,18 @@ def split_mp3(
             return []
         file_size = os.path.getsize(file_path) / (1024 * 1024)
         if file_size <= max_size_mb:
+            _save_chunk_offsets(output_dir, {os.path.basename(file_path): 0.0})
             return [file_path]
 
     num_parts = math.ceil(file_size / max_size_mb)
     logging.info("File size: %.2fMB. Splitting into %s parts...", file_size, num_parts)
 
+    accurate = True
     try:
         audio = mp3_factory(file_path)
         total_duration = audio.info.length
     except Exception as e:
+        accurate = False
         logging.error("Error getting duration from mutagen: %s", e)
         total_duration = (file_size * 8 * 1024) / 128
         logging.info("Using estimated duration: %.2f seconds", total_duration)
@@ -147,6 +157,7 @@ def split_mp3(
     all_points = [0] + split_points + [total_duration]
     base_name = os.path.splitext(os.path.basename(file_path))[0]
     output_files = []
+    offsets = {}
 
     for index in range(len(all_points) - 1):
         start_time = all_points[index]
@@ -155,6 +166,7 @@ def split_mp3(
 
         output_path = os.path.join(output_dir, f"{base_name}_part{index + 1}.mp3")
         output_files.append(output_path)
+        offsets[os.path.basename(output_path)] = start_time
 
         try:
             cmd = [
@@ -171,4 +183,5 @@ def split_mp3(
         except subprocess.SubprocessError as e:
             logging.error("Error creating part %s: %s", index + 1, e)
 
+    _save_chunk_offsets(output_dir, offsets, accurate=accurate)
     return [path for path in output_files if os.path.exists(path) and os.path.getsize(path) > 0]

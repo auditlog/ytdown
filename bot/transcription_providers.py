@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -54,11 +55,20 @@ class SpeakerTurn:
 
 
 @dataclass(frozen=True)
+class TimedWord:
+    start: float
+    end: float
+    text: str
+    speaker: int | None = None
+
+
+@dataclass(frozen=True)
 class TranscribedPart:
     """Clean text of one audio part plus its speaker turns."""
 
     text: str
     turns: tuple[SpeakerTurn, ...]
+    words: tuple[TimedWord, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -239,7 +249,18 @@ def transcribe_audio(
         logging.warning("API returned empty transcription")
         return None
     logging.debug("Transcription received: %s characters", len(text))
-    return TranscribedPart(text=text, turns=_build_turns(payload.get("words")))
+    words = []
+    for item in payload.get("words") or []:
+        if not isinstance(item, dict) or item.get("type") == "audio_event":
+            continue
+        try:
+            word = TimedWord(float(item["start"]), float(item["end"]),
+                             clean_transcript_text(str(item.get("word") or "")), item.get("speaker"))
+            if word.text and math.isfinite(word.start) and math.isfinite(word.end) and 0 <= word.start < word.end:
+                words.append(word)
+        except (KeyError, TypeError, ValueError):
+            continue
+    return TranscribedPart(text=text, turns=_build_turns(payload.get("words")), words=tuple(words))
 
 
 def chat_completion(

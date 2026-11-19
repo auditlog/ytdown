@@ -43,6 +43,7 @@ from bot.handlers.download_callbacks import (
     show_time_range_options as _extracted_show_time_range_options,
 )
 from bot.handlers.media_extras_callbacks import (
+    handle_tiktok_photo_download,
     _handle_instagram_download as _extracted_handle_instagram_download,
     _show_spotify_summary_options as _extracted_show_spotify_summary_options,
     handle_formats_list as _extracted_handle_formats_list,
@@ -56,6 +57,7 @@ from bot.handlers.spotify_callbacks import download_spotify_video, transcribe_sp
 from bot.handlers.spotify_collection_callbacks import handle_spotify_collection_callback
 from bot.handlers.transcript_prompt_handlers import handle_speaker_callback, handle_transcript_prompt_callback
 from bot.handlers.trim_callbacks import NO_ROOM_TEXT, ensure_trim_authorized, handle_trim_callback
+from bot.handlers.media_studio import handle_media_callback
 from bot.jobs import busy_chats, is_chat_busy, job_registry
 from bot.services.trim_store import has_room_for_sources
 from bot.handlers.transcription_callbacks import (
@@ -158,6 +160,10 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, da
     query = update.callback_query
     chat_id = update.effective_chat.id
 
+    if data.startswith("media_"):
+        await handle_media_callback(update, context, data)
+        return
+
     if data.startswith("arc_"):
         await _extracted_handle_archive_callback(update, context, data)
         return
@@ -231,6 +237,10 @@ async def _route_callback(update: Update, context: ContextTypes.DEFAULT_TYPE, da
 
     if data.startswith("dl_ig_"):
         await _handle_instagram_download(update, context, url, data)
+        return
+
+    if data.startswith("dl_tiktok_photos_"):
+        await handle_tiktok_photo_download(update, context, url, data)
         return
 
     if data.startswith("dl_"):

@@ -26,6 +26,7 @@ cookies_insta.txt
 downloads/
 download_history.json
 mcp_data/
+media_library/
 
 # Node
 node_modules/

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import json
 import os
 import shutil
 import time
@@ -14,6 +15,8 @@ if TYPE_CHECKING:
 from bot.speakers import SpeakerPart, save_speaker_parts
 from bot.transcription_chunking import get_part_number, split_mp3
 from bot.transcription_providers import SpeakerTurn, get_api_key, transcribe_audio
+from bot.transcription_providers import TimedWord
+from bot.media.timeline import save_timeline
 
 
 # User-visible placeholder for a part the API returned no text for; written
@@ -65,6 +68,15 @@ def transcribe_mp3_file(
 
     transcriptions = []
     speaker_parts = []
+    timed_words = []
+    timed_parts = 0
+    try:
+        with open(os.path.join(temp_dir, "chunk_offsets.json"), encoding="utf-8") as file_obj:
+            chunk_manifest = json.load(file_obj)
+        offsets = chunk_manifest["offsets"] if chunk_manifest["accurate"] else {}
+    except (OSError, ValueError, KeyError, TypeError):
+        offsets = {os.path.basename(part_files[0]): 0.0} if len(part_files) == 1 else {}
+    all_chunks_present = set(offsets) == {os.path.basename(path) for path in part_files}
     total_parts = len(part_files)
     failed_parts = 0
     total_characters = 0
@@ -111,6 +123,14 @@ def transcribe_mp3_file(
             # A part without speaker numbers keeps its text as one unnamed turn.
             turns = tuple(result.turns) or (SpeakerTurn(None, 0.0, 0.0, transcription),)
             speaker_parts.append(SpeakerPart(part=output_part_num, turns=turns))
+            offset = offsets.get(os.path.basename(part_path))
+            if offset is not None:
+                before = len(timed_words)
+                for word in getattr(result, "words", ()):
+                    if isinstance(word, TimedWord):
+                        timed_words.append(TimedWord(word.start + offset, word.end + offset,
+                                                     word.text, word.speaker))
+                timed_parts += len(timed_words) > before
         else:
             logging.warning("Part %s: transcription is empty!", index + 1)
             transcriptions.append(EMPTY_PART_MARKER)
@@ -170,6 +190,9 @@ def transcribe_mp3_file(
 
     try:
         save_speaker_parts(transcript_md_path, speaker_parts)
+        save_timeline(transcript_md_path, timed_words,
+                      complete=all_chunks_present and failed_parts == 0
+                      and timed_parts == len(part_files))
     except OSError as exc:
         # Speaker naming is optional; the transcript itself is complete.
         logging.error("Could not save speaker data: %s", exc)

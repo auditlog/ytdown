@@ -20,6 +20,7 @@ from bot.session_context import (
     get_auth_state as _get_auth_state,
     set_session_context_value as _set_session_context_value,
 )
+from bot.handlers.media_studio import source_tag
 
 
 TELEGRAM_DOWNLOAD_LIMIT_MB = 20
@@ -184,10 +185,9 @@ async def extracted_process_video_file(
             await progress_msg.edit_text("Błąd ekstrakcji audio z pliku video.")
             return
 
-        try:
-            os.remove(video_path)
-        except OSError:
-            pass
+        # Retain the original alongside audio for opt-in editing/visual analysis.
+        # Existing downloads cleanup removes both after the usual retention time.
+        _set_session_context_value(context, chat_id, "video_file_path", video_path, legacy_key="video_file_path")
         mp3_size_mb = os.path.getsize(mp3_path) / (1024 * 1024)
         _set_session_context_value(context, chat_id, "audio_file_path", mp3_path, legacy_key="audio_file_path")
         _set_session_context_value(context, chat_id, "audio_file_title", title, legacy_key="audio_file_title")
@@ -202,6 +202,8 @@ async def extracted_process_video_file(
             [
                 [InlineKeyboardButton("Transkrypcja", callback_data="audio_transcribe")],
                 [InlineKeyboardButton("Transkrypcja + Podsumowanie", callback_data="audio_transcribe_summary")],
+                [InlineKeyboardButton("Zapisz wideo do klipów", callback_data=f"media_upload_video_{source_tag(video_path)}")],
+                [InlineKeyboardButton("Zapisz audio do montażu", callback_data=f"media_upload_audio_{source_tag(mp3_path)}")],
             ]
         )
         await progress_msg.edit_text(

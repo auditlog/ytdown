@@ -5,8 +5,11 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import shutil
+from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+from tempfile import TemporaryDirectory
 
 import yt_dlp
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputMediaPhoto, Update
@@ -25,6 +28,8 @@ from bot.session_context import (
     get_session_value as _get_session_value,
 )
 from bot.session_store import user_urls
+from bot.security_pin import is_user_blocked
+from bot.tiktok import download_tiktok_photo
 
 
 _executor = ThreadPoolExecutor(max_workers=2)
@@ -104,94 +109,98 @@ async def _download_and_send_ig_photos(
     url: str = "",
     carousel=None,
 ):
+    return await _download_and_send_photos(
+        update, context, photo_entries, title, download_path, url=url,
+        gallery=carousel, state_field="instagram_carousel", legacy_key="ig_carousel",
+        photo_downloader=download_photo,
+    )
+
+
+async def handle_tiktok_photo_download(update, context, url: str, callback_data: str):
+    """Keep gallery buttons bound to the current post and authorized user."""
+    from bot.handlers.command_access import _is_authorized
+
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    if is_user_blocked(user_id) or not _is_authorized(context, user_id):
+        await context.bot.send_message(chat_id=chat_id, text="Wymagane uwierzytelnienie — wyślij kod PIN.")
+        return
+    gallery = _get_session_context_value(context, chat_id, "tiktok_gallery", legacy_key="tiktok_gallery")
+    if (not gallery or gallery.get("url") != url
+            or callback_data != f"dl_tiktok_photos_{gallery.get('id')}"):
+        await safe_edit_message(update.callback_query, "Sesja wygasła. Wyślij link ponownie.")
+        return
+    download_path = os.path.join(DOWNLOAD_PATH, str(chat_id))
+    os.makedirs(download_path, exist_ok=True)
+    await _download_and_send_photos(
+        update, context, gallery["photos"], gallery["title"], download_path, url=url,
+        gallery=gallery, state_field="tiktok_gallery", legacy_key="tiktok_gallery",
+        photo_downloader=download_tiktok_photo,
+    )
+
+
+async def _download_and_send_photos(
+    update, context, photo_entries, title, download_path, *, url, gallery,
+    state_field, legacy_key, photo_downloader,
+):
+    """Deliver ordered photos in albums of 2–10, with isolated temporary files."""
     query = update.callback_query
     chat_id = update.effective_chat.id
     count = len(photo_entries)
-
     await safe_edit_message(query, f"Pobieranie {'zdjęcia' if count == 1 else f'{count} zdjęć'}...")
-
-    downloaded_paths = []
     loop = asyncio.get_event_loop()
-    current_date = datetime.now().strftime("%Y-%m-%d")
-
-    for i, entry in enumerate(photo_entries):
-        photo_url = entry.get("url", "")
-        if not photo_url:
-            thumbs = entry.get("thumbnails", [])
-            if thumbs:
-                photo_url = thumbs[-1].get("url", "")
-        if not photo_url:
-            logging.warning("No URL for Instagram photo entry %d", i)
-            continue
-
-        safe_title = sanitize_filename(f"{title}_{i + 1}")
-        output = os.path.join(download_path, f"{current_date} {safe_title}")
-        path = await loop.run_in_executor(_executor, download_photo, photo_url, output)
-        if path:
-            downloaded_paths.append(path)
-
-    if not downloaded_paths:
-        await safe_edit_message(query, "Nie udało się pobrać zdjęć.")
-        return
-
     try:
-        if len(downloaded_paths) == 1:
-            with open(downloaded_paths[0], "rb") as file_obj:
-                await context.bot.send_photo(
-                    chat_id=chat_id,
-                    photo=file_obj,
-                    caption=title[:200],
-                    read_timeout=60,
-                    write_timeout=60,
-                )
-        else:
+        with TemporaryDirectory(prefix="photos_", dir=download_path) as workspace:
+            downloaded_paths = []
+            for i, entry in enumerate(photo_entries):
+                photo_url = entry.get("url", "")
+                if not photo_url:
+                    thumbs = entry.get("thumbnails", [])
+                    if thumbs:
+                        photo_url = thumbs[-1].get("url", "")
+                if not photo_url:
+                    continue
+                if shutil.disk_usage(workspace).free < 64 * 1024 * 1024:
+                    await safe_edit_message(query, "Za mało miejsca na serwerze. Spróbuj ponownie później.")
+                    return
+                output = os.path.join(workspace, f"photo_{i + 1:03d}")
+                path = await loop.run_in_executor(_executor, photo_downloader, photo_url, output)
+                if path:
+                    downloaded_paths.append(path)
+            if not downloaded_paths:
+                await safe_edit_message(query, "Nie udało się pobrać zdjęć. Wyślij link ponownie, żeby spróbować jeszcze raz.")
+                return
             for batch_start in range(0, len(downloaded_paths), 10):
                 batch = downloaded_paths[batch_start:batch_start + 10]
-                file_handles = []
-                media_group = []
-
-                for j, path in enumerate(batch):
-                    file_handle = open(path, "rb")
-                    file_handles.append(file_handle)
-                    caption = title[:200] if (batch_start + j) == 0 else None
-                    media_group.append(InputMediaPhoto(media=file_handle, caption=caption))
-
-                try:
-                    await context.bot.send_media_group(
-                        chat_id=chat_id,
-                        media=media_group,
-                        read_timeout=120,
-                        write_timeout=120,
-                    )
-                finally:
-                    for file_handle in file_handles:
-                        file_handle.close()
-
+                with ExitStack() as stack:
+                    files = [stack.enter_context(open(path, "rb")) for path in batch]
+                    if len(files) == 1:
+                        await context.bot.send_photo(
+                            chat_id=chat_id, photo=files[0],
+                            caption=title[:200] if batch_start == 0 else None,
+                            read_timeout=60, write_timeout=60,
+                        )
+                    else:
+                        media = [InputMediaPhoto(
+                            media=file_obj, caption=title[:200] if batch_start + j == 0 else None,
+                        ) for j, file_obj in enumerate(files)]
+                        await context.bot.send_media_group(
+                            chat_id=chat_id, media=media, read_timeout=120, write_timeout=120,
+                        )
                 if batch_start + 10 < len(downloaded_paths):
                     await asyncio.sleep(1)
-
-        total_size = sum(os.path.getsize(path) for path in downloaded_paths) / (1024 * 1024)
-        record_download_for(
-            context,
-            chat_id,
-            title,
-            url,  # captured at job start; the session URL may change meanwhile
-            "photo",
-            total_size,
-        )
-        await safe_edit_message(query, f"Wysłano {len(downloaded_paths)} zdjęć!")
+            total_size = sum(os.path.getsize(path) for path in downloaded_paths) / (1024 * 1024)
+            record_download_for(context, chat_id, title, url, "photo", total_size)
+            sent = len(downloaded_paths)
+            result = f"Wysłano {sent} zdjęć!" if sent == count else (
+                f"Wysłano {sent} z {count} zdjęć. Nie udało się pobrać wszystkich. "
+                "Wyślij link ponownie, żeby spróbować jeszcze raz."
+            )
+            await safe_edit_message(query, result)
+            _clear_session_context_value_if(context, chat_id, state_field, gallery, legacy_key=legacy_key)
     except Exception as exc:
-        logging.error("Error sending Instagram photos: %s", exc)
+        logging.error("Error sending photos: %s", exc)
         await safe_edit_message(query, "Błąd podczas wysyłania zdjęć.")
-    finally:
-        _clear_session_context_value_if(
-            context, chat_id, "instagram_carousel", carousel, legacy_key="ig_carousel"
-        )
-        for path in downloaded_paths:
-            try:
-                os.remove(path)
-            except OSError:
-                pass
 
 
 async def _download_and_send_ig_videos(
