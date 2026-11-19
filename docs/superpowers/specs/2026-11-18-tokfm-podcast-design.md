@@ -33,9 +33,8 @@ streszczenie). To nasze założenie, nie decyzja właściciela.
   katalogu głównego repo, więc nie zobaczy wtyczki. Można to zrobić później.
 
 **Anty-cele (porażka, nawet jeśli „działa”)**
-- Pobieranie płatnego odcinka bez ważnej sesji premium. Dziś `/gets` oddaje
-  pełny plik bez logowania (sprawdzone na odcinku 200878). Nie wolno z tego
-  korzystać: przy braku sesji bot ma odmówić, a nie pobrać „bo się da”.
+- Pobieranie płatnego odcinka bez ważnej sesji premium. Przy braku sesji bot
+  ma odmówić, zanim poprosi serwer o plik.
 - Hasło lub cookies w repo, w logach albo w komunikatach bota.
 
 ## 3. Ograniczenia (ustalone podczas rozpoznania)
@@ -64,7 +63,7 @@ streszczenie). To nasze założenie, nie decyzja właściciela.
 | **A. Wtyczka yt-dlp w repo** (wybrane przez właściciela) | Cały istniejący przepływ (menu, transkrypcja, historia, limity) działa bez zmian. Ładuje się automatycznie we wszystkich 17 miejscach, które tworzą `YoutubeDL`. | Zależy od mechanizmu wtyczek yt-dlp (namespace `yt_dlp_plugins` w `sys.path`; tak działają wtyczki z pip). |
 | B. Osobna ścieżka jak Spotify | Pełna kontrola, bez zależności od wtyczek yt-dlp. | Dużo więcej kodu: osobne gałęzie w `inbound_media.py` i callbackach, ręczne podpinanie transkrypcji i historii. |
 | Logowanie hasłem w bocie (odrzucone) | Brak ręcznego eksportu cookies. | reCAPTCHA odrzuca automat, a Chromium na Raspberry Pi to ciężka zależność. |
-| Bez sesji (odrzucone) | Zero konfiguracji. | Opiera się na luce, którą TOK FM może zamknąć. Patrz anty-cele. |
+| Bez sesji (odrzucone) | Zero konfiguracji. | Płatne odcinki są przeznaczone dla kont premium. Patrz anty-cele. |
 
 ## 5. Projekt
 

@@ -1,6 +1,6 @@
 # Media Downloader Telegram Bot
 
-Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram, LinkedIn i X z funkcjami transkrypcji i podsumowań AI.
+Bot Telegram do pobierania video/audio z YouTube, Vimeo, TikTok, Instagram, LinkedIn, X oraz podcastów (Spotify, Castbox, TOK FM) z funkcjami transkrypcji i podsumowań AI.
 
 ## MCP on rpi5a
 
@@ -70,7 +70,7 @@ folders, retaining files only when handed to the pending archive workflow.
 ## Funkcje
 
 ### Podstawowe
-- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn (via yt-dlp), podcastów Spotify oraz utworów dopasowanych w YT Music
+- **Multi-platform**: pobieranie z YouTube, Vimeo, TikTok, Instagram, LinkedIn, X (via yt-dlp), podcastów Spotify i Castbox, audycji TOK FM (własna wtyczka yt-dlp) oraz utworów dopasowanych w YT Music
 - Video at the highest available source resolution, including 4K/8K, plus lower-quality presets
 - Ekstrakcja ścieżek audio (MP3, M4A, FLAC, WAV, Opus)
 - Automatyczna transkrypcja audio (ElevenLabs Scribe v2 przez OpenRouter), z rozróżnianiem mówców
@@ -100,7 +100,7 @@ folders, retaining files only when handed to the pending archive workflow.
 ### Bezpieczeństwo
 - Rate limiting - max 10 requestów/minutę per użytkownik
 - Media downloads up to 10 GiB with archive support; see [large-file limits](#large-files-and-7z-archives)
-- Walidacja URL - whitelist domen (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Spotify), wymagany HTTPS
+- Walidacja URL - whitelist domen (YouTube, Vimeo, TikTok, Instagram, LinkedIn, X, Spotify, Castbox, TOK FM), wymagany HTTPS
 - Blokada po 3 nieudanych próbach PIN (15 minut)
 - Logowanie nieudanych prób PIN + powiadomienia Telegram do admina
 - Walidacja format_id przed przekazaniem do yt-dlp
@@ -281,7 +281,7 @@ Plik `cookies.txt` jest potrzebny gdy:
 - TikTok blokuje pobieranie bez sesji
 - TOK FM: odcinki premium (wystarczy ciasteczko PHPSESSID z domeny .tokfm.pl)
 
-Przy podmianie `cookies.txt` (np. po odświeżeniu cookies YouTube) zachowaj linie z domeny `.tokfm.pl`. Bez nich bot przestanie pobierać płatne odcinki TOK FM i zgłosi wygaśnięcie sesji.
+Przy podmianie `cookies.txt` (np. po odświeżeniu cookies YouTube) zachowaj linie z domeny `.tokfm.pl`. Bez nich bot przestanie pobierać płatne odcinki TOK FM i zgłosi wygaśnięcie sesji. Dotyczy to też `scripts/filter_cookies.py`, który zostawia tylko cookies YouTube i Google — po jego użyciu dopisz linię TOK FM ponownie.
 
 Dodatkowo:
 - zdjęcia i karuzele z Instagrama wymagają zainstalowanego `instaloader`
@@ -289,7 +289,7 @@ Dodatkowo:
 
 Jak uzyskać cookies:
 1. Zainstaluj rozszerzenie **"Get cookies.txt LOCALLY"** w przeglądarce (Chrome/Firefox)
-2. Zaloguj się na daną platformę (YouTube, Instagram, LinkedIn, TikTok)
+2. Zaloguj się na daną platformę (YouTube, Instagram, LinkedIn, TikTok, TOK FM)
 3. Wyeksportuj cookies do pliku `cookies.txt`
 4. Umieść plik w głównym katalogu projektu (`ytdown/cookies.txt`)
 
@@ -442,10 +442,16 @@ python -m pytest tests/test_subtitles.py -v
 1. Znajdź swojego bota na Telegramie
 2. Wyślij `/start`
 3. Wprowadź kod PIN
-4. Wyślij link z obsługiwanej platformy (YouTube, Vimeo, TikTok, Instagram, LinkedIn, Spotify)
+4. Wyślij link z obsługiwanej platformy (YouTube, Vimeo, TikTok, Instagram, LinkedIn, X, Spotify, Castbox, TOK FM)
 5. Wybierz format i jakość
 6. Opcjonalnie: wybierz transkrypcję lub streszczenie
    - Jeśli film ma napisy YouTube — możesz wybrać gotowe napisy (natychmiastowo, 0 tokenów) lub transkrypcję AI (minuty, płatne modele przez OpenRouter)
+
+### Audycje TOK FM
+1. Wyślij link do odcinka (`audycje.tokfm.pl/podcast/<id>,...`). Link do całej audycji (`audycje.tokfm.pl/audycja/...`) dostanie prośbę o link do konkretnego odcinka
+2. Bot pokazuje tytuł i czas trwania oraz menu podcastu: `Audio (MP3)`, `Audio (M4A)`, **✂️ Pobierz i przytnij**, transkrypcja i streszczenie
+3. Odcinki premium wymagają w `cookies.txt` ciasteczka `PHPSESSID` z domeny `.tokfm.pl` z konta z dostępem premium (patrz [Cookies](#cookies-opcjonalne-dla-platform-wymagających-logowania)). Bez ważnej sesji bot odmawia pobrania i prosi o odświeżenie cookies
+4. Źródłem jest MP3 64 kb/s (ok. 20 MB na 42 minuty), dlatego bot nie oferuje FLAC ani zakresu czasowego przed pobraniem
 
 ### Podcasty Spotify
 1. Wyślij link do odcinka podcastu ze Spotify (`open.spotify.com/episode/...`)
@@ -506,7 +512,7 @@ Bot wycina fragmenty audio bez utraty jakości (MP3 i M4A bez ponownego kodowani
 
 - **Pod wysłanym plikiem audio** jest przycisk **✂️ Przytnij** — działa przez 24 h od wysłania
   (plik czeka na serwerze; przy wolnym miejscu < 5 GB bot go nie zatrzymuje i przycisku nie ma).
-- **Podcasty (Spotify, Castbox) i utwory Spotify:** **✂️ Pobierz i przytnij** pobiera całość
+- **Podcasty (Spotify, Castbox, TOK FM) i utwory Spotify:** **✂️ Pobierz i przytnij** pobiera całość
   bez wysyłania i od razu pyta o zakres.
 - **Własny plik:** wyślij MP3 lub wiadomość głosową i wybierz **✂️ Przytnij**.
 - **YouTube, Vimeo, Instagram, LinkedIn:** **✂️ Zakres czasowy** przed pobraniem ustawia jeden
@@ -604,6 +610,7 @@ ytdown/
 │       ├── spotify_archive_service.py # Grupowe archiwa 50/100/całość dla Spotify
 │       ├── spotify_video_service.py # Natywne audio/wideo i napisy Spotify
 │       └── transcription_service.py # Artefakty transkrypcji i podsumowań
+├── yt_dlp_plugins/                 # Wtyczki yt-dlp (extractor/tokfm.py: odcinki TOK FM)
 ├── deploy/                         # rpi5a MCP systemd service
 ├── docs/mcp.md                     # MCP setup, tools and security options
 ├── docs/mcp-rpi5a.md                # Remote deployment and client configuration
@@ -635,6 +642,7 @@ ytdown/
 │   ├── test_spotify_oauth.py       # Testy OAuth, callbacku i odświeżania tokenu
 │   ├── test_spotify_tracks.py      # Testy utworów, albumów, playlist i YT Music
 │   ├── test_spotify_archive_service.py # Testy grupowania i archiwów Spotify
+│   ├── test_tokfm_plugin.py        # Testy wtyczki TOK FM (sesja premium, linki, rozmiar)
 │   ├── test_downloader.py          # Testy downloadera, walidacji czasu
 │   ├── test_download_history.py    # Testy historii pobrań
 │   ├── test_cli.py                 # Testy CLI
@@ -651,7 +659,7 @@ ytdown/
 │   ├── test_concurrency.py         # Testy współbieżności (SessionStore, rate limit, PIN)
 │   └── ...                         # Pozostałe testy
 ├── api_key.md                      # Konfiguracja (ignorowany przez git)
-├── cookies.txt                     # Cookies YouTube (ignorowany przez git)
+├── cookies.txt                     # Cookies YouTube, TOK FM i innych platform (ignorowany przez git)
 ├── authorized_users.json           # Lista autoryzowanych użytkowników (ignorowany)
 ├── README.md                       # Ten plik
 └── downloads/                      # Pobrane pliki (ignorowany)
@@ -677,6 +685,7 @@ ytdown/
 - Podsumowanie AI: do ~14h materiału audio (powyżej automatycznie pomijane)
 - Telegram Scribe/subtitle transcription has no fixed duration cap; MCP processing accepts known durations up to two hours by default.
 - Instagram, LinkedIn, TikTok mogą wymagać cookies.txt do pobierania
+- TOK FM: odcinki premium wymagają ważnej sesji konta premium (`PHPSESSID` w cookies.txt); gdy wygaśnie po stronie TOK FM, trzeba ją wyeksportować ponownie
 - Instagram zdjęcia/karuzele wymagają instaloader z ważną sesją w cookies.txt
 - YouTube wymaga deno jako JS runtime — bez niego część filmów zwróci "This video is not available"
 
@@ -721,7 +730,7 @@ Ten projekt jest dostępny na licencji MIT.
 
 ## Podziękowania
 
-- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - pobieranie mediów z platform (YouTube, Vimeo, TikTok, Instagram, LinkedIn)
+- [yt-dlp](https://github.com/yt-dlp/yt-dlp) - pobieranie mediów z platform (YouTube, Vimeo, TikTok, Instagram, LinkedIn, X, Castbox; TOK FM przez własną wtyczkę)
 - [instaloader](https://github.com/instaloader/instaloader) - pobieranie zdjęć i karuzel z Instagrama
 - [python-telegram-bot](https://github.com/python-telegram-bot/python-telegram-bot) - API Telegram
 - [OpenRouter](https://openrouter.ai/) - dostęp do wszystkich modeli AI jednym kluczem
