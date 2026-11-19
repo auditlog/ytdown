@@ -90,9 +90,8 @@ class TokFMIE(InfoExtractor):
         raise ExtractorError('TOK FM episode page has no player data', video_id=video_id)
 
     def _check_premium_access(self, video_id):
-        # /gets currently returns premium audio without checking the session. The
-        # paywall is therefore enforced here, before /gets is ever asked: without a
-        # live premium session the extractor refuses (anti-goal in the design spec).
+        # The premium check runs before /gets is ever asked: without a live premium
+        # session the extractor refuses (anti-goal in the design spec).
         # /premium/blokada answers 204 when the session may play the episode and 200
         # with a paywall page when it may not; anything but 204 is treated as no access.
         urlh = self._request_webpage(
